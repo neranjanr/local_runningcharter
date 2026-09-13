@@ -241,7 +241,10 @@ export function getDuplicateKey(trip: Partial<Trip>): string {
 }
 
 export function getOdoKey(trip: Partial<Trip>): string {
-  return `${trip.date}|${trip.start_km}|${trip.end_km}`;
+  const d = String(trip.date ?? '').trim();
+  const s = trip.start_km !== undefined && trip.start_km !== null ? Math.round(Number(trip.start_km)) : '';
+  const e = trip.end_km !== undefined && trip.end_km !== null ? Math.round(Number(trip.end_km)) : '';
+  return `${d}|${s}|${e}`;
 }
 
 export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<ImportParseResult> {

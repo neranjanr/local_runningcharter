@@ -194,8 +194,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       }
 
       // Overlap/pagination should ignore rows that are upserts (same date+odo) – they update in place
-      const odoExisting = new Set(trips.map(t => `${t.date}|${t.start_km}|${t.end_km}`));
-      const newOnlyTrips = parseResult.trips.filter(t => !odoExisting.has(`${t.date}|${t.start_km}|${t.end_km}`));
+      const isExactOdoMatch = (t: Partial<Trip>) => trips.some(e => e.date === t.date && Math.round(e.start_km) === Math.round(Number(t.start_km ?? NaN)) && Math.round(e.end_km) === Math.round(Number(t.end_km ?? NaN)));
+      const newOnlyTrips = parseResult.trips.filter(t => !isExactOdoMatch(t));
       const overlapErrors = validateNoOverlap(trips, newOnlyTrips);
       if (overlapErrors.length > 0) {
         setImportMsg(`Overlap detected: ${overlapErrors.map((e) => e.message).join('; ')}`);
@@ -518,7 +518,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 >
                   <td className="py-2 px-3 whitespace-nowrap border-r border-rule-line">
                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-label-caps text-[10px] font-bold uppercase tracking-tight ${isAltDay ? 'bg-surface-container-high text-secondary' : 'bg-surface-container-low text-secondary'}`}>
-                      {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', weekday: 'short' })}
+                      {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
                     </span>
                   </td>
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
