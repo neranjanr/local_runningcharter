@@ -131,6 +131,7 @@ export interface ImportResult {
   success: boolean;
   appendedCount: number;
   skippedDuplicates: number;
+  updatedCount: number;
   errors: ImportError[];
   pages: BookPage[];
   trips: Trip[];
@@ -237,6 +238,10 @@ export function validateHeaders(rowValues: string[]): boolean {
  */
 export function getDuplicateKey(trip: Partial<Trip>): string {
   return `${trip.date}|${trip.start_km}|${trip.end_km}|${trip.end_time}`;
+}
+
+export function getOdoKey(trip: Partial<Trip>): string {
+  return `${trip.date}|${trip.start_km}|${trip.end_km}`;
 }
 
 export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<ImportParseResult> {
@@ -516,20 +521,55 @@ export function importTripsFromWorkbook(params: {
 }): ImportResult {
   const { existingTrips, existingPages, parsedTrips, vehicleId, opening, economy = 10.5, inTanksByPage } = params;
 
-  // Build duplicate lookup from existing trips
-  const existingKeys = new Set(existingTrips.map(getDuplicateKey));
-
-  // Filter out duplicates and sort chronologically
-  const uniqueTrips: Partial<Trip>[] = [];
+  // Odo-based upsert: re-importing same date+odo updates times/fuel/order instead of being rejected
+  const odoMap = new Map<string, number>();
+  existingTrips.forEach((t, idx) => odoMap.set(getOdoKey(t), idx));
+  // Work on mutable clones so updates are visible in result
+  let currentTripsForUpdate = [...existingTrips];
+  let updatedCount = 0;
   let skippedDuplicates = 0;
+  const existingKeys = new Set(existingTrips.map(getDuplicateKey));
+  const uniqueTrips: Partial<Trip>[] = [];
 
   for (const trip of parsedTrips) {
+    const odoKey = getOdoKey(trip);
+    const existingIdx = odoMap.get(odoKey);
+    if (existingIdx !== undefined) {
+      const existing = currentTripsForUpdate[existingIdx];
+      const incomingFuel = trip.fuel_pumped_amount;
+      const incomingOrderNo = trip.fuel_order_no;
+      // Only fields present in import can trigger an update; empty cells keep existing value
+      const sameFuel = incomingFuel === undefined || (existing.fuel_pumped_amount ?? 0) === incomingFuel;
+      const sameOrder = incomingOrderNo === undefined || (existing.fuel_order_no ?? '') === incomingOrderNo;
+      const sameStart = trip.start_time === undefined || (existing.start_time ?? '') === trip.start_time;
+      const sameEnd = trip.end_time === undefined || (existing.end_time ?? '') === trip.end_time;
+      const sameType = trip.trip_type === undefined || (existing.trip_type ?? 'Official') === trip.trip_type;
+      const samePlaces = trip.places_visited === undefined || (existing.places_visited ?? '') === trip.places_visited;
+      if (sameFuel && sameOrder && sameStart && sameEnd && sameType && samePlaces) {
+        skippedDuplicates++;
+        continue;
+      }
+      // Upsert in place – keep id/page_id/day_index/trip_index, update mutable fields
+      currentTripsForUpdate[existingIdx] = {
+        ...existing,
+        start_time: trip.start_time ?? existing.start_time,
+        end_time: trip.end_time ?? existing.end_time,
+        trip_type: trip.trip_type ?? existing.trip_type,
+        places_visited: trip.places_visited ?? existing.places_visited,
+        fuel_pumped_amount: incomingFuel !== undefined ? incomingFuel : existing.fuel_pumped_amount,
+        fuel_order_no: incomingOrderNo !== undefined ? incomingOrderNo : existing.fuel_order_no,
+      };
+      updatedCount++;
+      // Also keep duplicate set in sync so a second imported row with same odo doesn't create a new trip
+      existingKeys.add(getDuplicateKey(trip));
+      continue;
+    }
     const key = getDuplicateKey(trip);
     if (existingKeys.has(key)) {
       skippedDuplicates++;
       continue;
     }
-    existingKeys.add(key); // Also prevent duplicates within the import batch
+    existingKeys.add(key);
     uniqueTrips.push(trip);
   }
 
@@ -538,9 +578,10 @@ export function importTripsFromWorkbook(params: {
       success: true,
       appendedCount: 0,
       skippedDuplicates,
+      updatedCount,
       errors: [],
       pages: existingPages,
-      trips: existingTrips,
+      trips: currentTripsForUpdate,
     };
   }
 
@@ -549,8 +590,8 @@ export function importTripsFromWorkbook(params: {
     (a.date ?? '').localeCompare(b.date ?? '') || (a.start_km ?? 0) - (b.start_km ?? 0)
   );
 
-  // Append trips one by one, paginating via assignPageForNewTrip
-  let currentTrips = [...existingTrips];
+  // Append new trips one by one, paginating via assignPageForNewTrip (updates already applied to currentTripsForUpdate)
+  let currentTrips = [...currentTripsForUpdate];
   let currentPages = [...existingPages];
   const newTrips: Trip[] = [];
 
@@ -580,8 +621,8 @@ export function importTripsFromWorkbook(params: {
     }
   }
 
-  // Check if backdated insertion occurred
-  const backdated = isBackdatedInsertion(currentPages, currentTrips, sorted[0].date!);
+  // Check if backdated insertion occurred (only if there are new trips)
+  const backdated = sorted.length > 0 && isBackdatedInsertion(currentPages, currentTrips, sorted[0].date!);
 
   // If backdated, renumber pages and recalculate balances
   if (backdated) {
@@ -603,6 +644,7 @@ export function importTripsFromWorkbook(params: {
     success: true,
     appendedCount: newTrips.length,
     skippedDuplicates,
+    updatedCount,
     errors: [],
     pages: currentPages,
     trips: currentTrips,

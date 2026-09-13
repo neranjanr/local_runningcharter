@@ -193,18 +193,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         return;
       }
 
-      // Overlap validation
-      const overlapErrors = validateNoOverlap(trips, parseResult.trips);
+      // Overlap/pagination should ignore rows that are upserts (same date+odo) – they update in place
+      const odoExisting = new Set(trips.map(t => `${t.date}|${t.start_km}|${t.end_km}`));
+      const newOnlyTrips = parseResult.trips.filter(t => !odoExisting.has(`${t.date}|${t.start_km}|${t.end_km}`));
+      const overlapErrors = validateNoOverlap(trips, newOnlyTrips);
       if (overlapErrors.length > 0) {
         setImportMsg(`Overlap detected: ${overlapErrors.map((e) => e.message).join('; ')}`);
         setImporting(false);
         return;
       }
 
-      // Pagination validation
+      // Pagination validation – only new trips affect pagination
       const vehicle = await getVehicleProfile();
       const allPages = await getPages();
-      const paginationErrors = validatePaginationForImport(trips, allPages, parseResult.trips);
+      const paginationErrors = validatePaginationForImport(trips, allPages, newOnlyTrips);
       if (paginationErrors.length > 0) {
         setImportMsg(`Pagination error: ${paginationErrors.map((e) => e.message).join('; ')}`);
         setImporting(false);
@@ -231,8 +233,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             body: JSON.stringify({ pages: result.pages, trips: result.trips }),
           });
           if (bulkRes.ok) {
-            const j = await bulkRes.json();
-            persisted = j.trips ?? result.appendedCount;
+            await bulkRes.json().catch(() => ({}));
+            persisted = result.appendedCount + result.updatedCount;
           } else {
             const j = await bulkRes.json().catch(() => ({}));
             throw new Error(j.error || `Bulk import HTTP ${bulkRes.status}`);
@@ -253,13 +255,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           }
           const existingTripIds = new Set(trips.map((t) => t.id));
           const newTrips = result.trips.filter((t) => !existingTripIds.has(t.id));
+          const updatedTrips = result.updatedCount > 0 ? result.trips.filter((t) => {
+            if (!existingTripIds.has(t.id)) return false;
+            const orig = trips.find(o => o.id === t.id);
+            return !!orig && (orig.start_time !== t.start_time || orig.end_time !== t.end_time || orig.fuel_pumped_amount !== t.fuel_pumped_amount || (orig.fuel_order_no ?? '') !== (t.fuel_order_no ?? '') || orig.places_visited !== t.places_visited || orig.trip_type !== t.trip_type);
+          }) : [];
           persisted = 0;
           let authWarning = bulkError && bulkError.includes('Unauthorized') ? ' (session expired – saved locally)' : '';
-          for (const tr of newTrips) {
+          // Persist new trips via POST and updated trips via PUT (upsert in localStorage as fallback)
+          for (const tr of [...newTrips, ...updatedTrips]) {
+            const isUpdate = existingTripIds.has(tr.id);
             let apiOk = false;
             try {
               const res = await fetch('/api/trips', {
-                method: 'POST',
+                method: isUpdate ? 'PUT' : 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(tr),
               });
@@ -274,27 +283,35 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               try {
                 const raw = localStorage.getItem('fleetledger_trips');
                 const arr = raw ? (JSON.parse(raw) as typeof result.trips) : [];
-                if (!arr.find((x) => x.id === tr.id)) {
-                  arr.push(tr);
-                  localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
-                }
-                // Also ensure pages are in localStorage even if API failed
-                const rawPages = localStorage.getItem('fleetledger_book_pages');
-                const pagesArr = rawPages ? JSON.parse(rawPages) : [];
+                const idx = arr.findIndex((x: any) => x.id === tr.id);
+                if (idx >= 0) arr[idx] = tr;
+                else arr.push(tr);
+                localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
                 persisted++;
               } catch { /* ignore */ }
             }
           }
-          // Preserve auth info for message but don't abort
+          // If bulk succeeded there was no catch, set persisted to appended+updated for message consistency
+          if (!bulkError) persisted = result.appendedCount + result.updatedCount;
+          else if (persisted === 0 && result.updatedCount > 0) {
+            // bulk failed but we wrote to localStorage above – ensure updated trips are also written even if newTrips empty
+            try {
+              localStorage.setItem('fleetledger_trips', JSON.stringify(result.trips));
+              localStorage.setItem('fleetledger_book_pages', JSON.stringify(result.pages));
+              persisted = result.appendedCount + result.updatedCount;
+            } catch { /* ignore */ }
+          }
           if (authWarning) bulkError = bulkError ? bulkError + authWarning : authWarning;
         }
 
         if (bulkError && persisted === 0) {
           setImportMsg(`Import computed ${result.appendedCount} trips but failed to persist: ${bulkError}`);
         } else {
-          const failed = result.appendedCount - persisted;
-          if (result.appendedCount === 0 && result.skippedDuplicates > 0) {
+          const failed = (result.appendedCount + result.updatedCount) - persisted;
+          if (result.appendedCount === 0 && result.updatedCount === 0 && result.skippedDuplicates > 0) {
             setImportMsg(`Imported 0 new trips (${result.skippedDuplicates} duplicate records skipped from workbook).`);
+          } else if (result.updatedCount > 0) {
+            setImportMsg(`Imported ${result.appendedCount} new, updated ${result.updatedCount} existing (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}${bulkError && bulkError.includes('saved locally') ? bulkError : ''}`);
           } else {
             setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`);
           }
