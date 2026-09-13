@@ -185,61 +185,86 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       });
 
       if (result.success) {
-        // Persist pages and trips to SQLite via API + localStorage fallback
-        // importTripsFromWorkbook is pure — without persisting, trips appear to import but vanish on refresh (issue reported for 200+ rows)
-        const existingPageIds = new Set(allPages.map((p) => p.id));
-        for (const pg of result.pages) {
-          if (!existingPageIds.has(pg.id)) {
-            try { await savePage(pg); } catch { /* fallback inside savePage writes localStorage */ }
-          } else {
-            const orig = allPages.find((p) => p.id === pg.id);
-            if (orig && (orig.page_number !== pg.page_number || orig.start_km !== pg.start_km || orig.end_km !== pg.end_km || orig.start_fuel_balance !== pg.start_fuel_balance || orig.end_fuel_balance !== pg.end_fuel_balance || orig.month !== pg.month)) {
-              try { await savePage(pg); } catch { /* ignore */ }
-            }
-          }
-        }
-
-        const existingTripIds = new Set(trips.map((t) => t.id));
-        const newTrips = result.trips.filter((t) => !existingTripIds.has(t.id));
+        // Bulk persist via /api/import (transactional, single round-trip for 200+ rows)
+        // Fallback to per-trip/per-page if bulk endpoint unavailable (e.g. older build)
         let persisted = 0;
-        let persistError: string | null = null;
-        for (const tr of newTrips) {
-          try {
-            const res = await fetch('/api/trips', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(tr),
-            });
-            if (!res.ok) throw new Error(`API ${res.status}`);
-            persisted++;
-          } catch (err) {
-            // Fallback to localStorage so import is not silently lost when API/Session fails
-            try {
-              const raw = localStorage.getItem('fleetledger_trips');
-              const arr = raw ? (JSON.parse(raw) as typeof result.trips) : [];
-              if (!arr.find((x) => x.id === tr.id)) {
-                arr.push(tr);
-                localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
-                persisted++;
+        let bulkError: string | null = null;
+        try {
+          const bulkRes = await fetch('/api/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pages: result.pages, trips: result.trips }),
+          });
+          if (bulkRes.ok) {
+            const j = await bulkRes.json();
+            persisted = j.trips ?? result.appendedCount;
+          } else {
+            const j = await bulkRes.json().catch(() => ({}));
+            throw new Error(j.error || `Bulk import HTTP ${bulkRes.status}`);
+          }
+        } catch (err: any) {
+          bulkError = err?.message || String(err);
+          // Per-page/per-trip fallback (handles 401 auth case with explicit message)
+          if (bulkError && bulkError.includes('Unauthorized')) {
+            setImportMsg(`Import failed to save — session expired. Please log in again and re-import. (${bulkError})`);
+            setImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+          }
+          // Try per-entity fallback
+          const existingPageIds = new Set(allPages.map((p) => p.id));
+          for (const pg of result.pages) {
+            if (!existingPageIds.has(pg.id)) {
+              try { await savePage(pg); } catch { /* fallback inside savePage writes localStorage */ }
+            } else {
+              const orig = allPages.find((p) => p.id === pg.id);
+              if (orig && (orig.page_number !== pg.page_number || orig.start_km !== pg.start_km || orig.end_km !== pg.end_km || orig.start_fuel_balance !== pg.start_fuel_balance || orig.end_fuel_balance !== pg.end_fuel_balance || orig.month !== pg.month)) {
+                try { await savePage(pg); } catch { /* ignore */ }
               }
-            } catch {
-              persistError = String(err);
             }
+          }
+          const existingTripIds = new Set(trips.map((t) => t.id));
+          const newTrips = result.trips.filter((t) => !existingTripIds.has(t.id));
+          persisted = 0;
+          for (const tr of newTrips) {
+            try {
+              const res = await fetch('/api/trips', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(tr),
+              });
+              if (res.status === 401) throw new Error('Unauthorized — please re-login');
+              if (!res.ok) throw new Error(`API ${res.status}`);
+              persisted++;
+            } catch (e: any) {
+              if (String(e?.message || e).includes('Unauthorized')) {
+                bulkError = e.message;
+                break;
+              }
+              try {
+                const raw = localStorage.getItem('fleetledger_trips');
+                const arr = raw ? (JSON.parse(raw) as typeof result.trips) : [];
+                if (!arr.find((x) => x.id === tr.id)) {
+                  arr.push(tr);
+                  localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
+                  persisted++;
+                }
+              } catch { /* ignore */ }
+            }
+          }
+          if (bulkError && bulkError.includes('Unauthorized')) {
+            setImportMsg(`Import failed to save — session expired. Please log in again and re-import.`);
+            setImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
           }
         }
 
-        // Also handle backdated renumber: existing trips may have changed page_id
-        if (newTrips.length === 0 && result.trips.length !== trips.length) {
-          try {
-            localStorage.setItem('fleetledger_trips', JSON.stringify(result.trips));
-            localStorage.setItem('fleetledger_book_pages', JSON.stringify(result.pages));
-          } catch { /* ignore */ }
-        }
-
-        if (persistError && persisted === 0) {
-          setImportMsg(`Import computed ${result.appendedCount} trips but failed to persist: ${persistError}`);
+        if (bulkError && persisted === 0) {
+          setImportMsg(`Import computed ${result.appendedCount} trips but failed to persist: ${bulkError}`);
         } else {
-          setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${persisted !== result.appendedCount ? ` — ${result.appendedCount - persisted} failed to save` : ''}`);
+          const failed = result.appendedCount - persisted;
+          setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`);
         }
         onDataChanged?.();
       } else {

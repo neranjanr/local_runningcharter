@@ -202,10 +202,36 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     if (rowIdx <= headerRowIndex) return;
 
     const getVal = (colIdx: number) => {
-      const v = row.getCell(colIdx).value;
+      const cell = row.getCell(colIdx);
+      const v: any = cell.value;
       if (v === null || v === undefined) return '';
+      // ExcelJS Date object (real Excel date cell)
+      if (v instanceof Date) {
+        const yyyy = v.getFullYear();
+        const mm = String(v.getMonth() + 1).padStart(2, '0');
+        const dd = String(v.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+      }
+      // Excel serial number date (e.g. 44927) — detect for date column
+      if (colIdx === 1 && typeof v === 'number' && v > 30000 && v < 60000) {
+        const excelEpoch = new Date(1899, 11, 30);
+        const d = new Date(excelEpoch.getTime() + v * 86400000);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+      }
       if (typeof v === 'object' && 'text' in v) return String((v as any).text).trim();
-      if (typeof v === 'object' && 'result' in v) return String((v as any).result ?? '').trim();
+      if (typeof v === 'object' && 'result' in v) {
+        const r: any = (v as any).result;
+        if (r instanceof Date) {
+          const yyyy = r.getFullYear();
+          const mm = String(r.getMonth() + 1).padStart(2, '0');
+          const dd = String(r.getDate()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd}`;
+        }
+        return String(r ?? '').trim();
+      }
       return String(v).trim();
     };
 
