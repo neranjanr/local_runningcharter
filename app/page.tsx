@@ -10,7 +10,6 @@ import { computeThisMonthMetrics, computeMonthlyBreakdown, computePageWiseDistan
 import { MetricCards } from '@/components/dashboard/MetricCards';
 import { MonthlyBreakdownChart } from '@/components/dashboard/MonthlyBreakdownChart';
 import { PageWiseChart } from '@/components/dashboard/PageWiseChart';
-import { AllTripsMasterTable } from '@/components/dashboard/AllTripsMasterTable';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ContinuityAlertBanner } from '@/components/ContinuityAlertBanner';
 
@@ -19,14 +18,11 @@ export default function DashboardPage() {
   const [pages, setPages] = useState<BookPage[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
-
   const refresh = useCallback(() => {
     Promise.all([getVehicleProfile(), getPages(), getTrips()]).then(([v, p, t]) => {
       setVehicle(v);
       setPages(p);
       setTrips(t);
-      setRefreshKey((k) => k + 1);
     });
   }, []);
 
@@ -92,20 +88,16 @@ export default function DashboardPage() {
         <div className="bg-paper-sheet rounded-xl border border-rule-line p-12 text-center flex flex-col items-center gap-3">
           <span className="text-4xl">📊</span>
           <h2 className="text-lg font-bold text-on-surface">No trip data yet</h2>
-          <p className="text-sm text-on-surface-variant max-w-md">Add your first trip to populate dashboard analytics, monthly charts, and the master table. Ledger pages are generated automatically.</p>
+          <p className="text-sm text-on-surface-variant max-w-md">Add your first trip to populate dashboard analytics and monthly charts. Ledger pages are generated automatically.</p>
           <Link href="/trips/new" className="mt-2 px-5 py-2 bg-slate-surface text-on-primary rounded-lg text-sm font-semibold hover:bg-primary">
             Enter First Trip
           </Link>
         </div>
       ) : (
-        <>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <MonthlyBreakdownChart data={monthly} />
-            <PageWiseChart data={pageWise} />
-          </div>
-
-          <AllTripsMasterTable key={refreshKey} trips={trips} pages={pages} onDataChanged={refresh} />
-        </>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <MonthlyBreakdownChart data={monthly} />
+          <PageWiseChart data={pageWise} />
+        </div>
       )}
       </div>
     </ProtectedRoute>

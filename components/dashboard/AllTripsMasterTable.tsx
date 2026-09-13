@@ -417,7 +417,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     return (
       <span
         className="cursor-pointer hover:bg-surface-container-low rounded px-1 -mx-1 py-0.5"
-        onClick={() => startEdit(trip.id, field, String(trip[field] ?? ''))}
+        onClick={() => {
+          const raw = (trip as unknown as Record<string, unknown>)[field];
+          const v = raw !== undefined && raw !== null && String(raw) !== '' ? String(raw) : (displayValue !== '-' ? String(displayValue).replace('L','').trim() : '');
+          startEdit(trip.id, field, v);
+        }}
         title="Click to edit"
       >
         {displayValue}

@@ -19,9 +19,11 @@ export function MonthlyBreakdownChart({ data }: Props) {
     );
   }
 
-  const displayed = data.length > 12 ? getLast12MonthlyBreakdown(data) : data;
+  // Latest 6 months, latest on top
+  const latest6 = data.length > 6 ? data.slice(-6).reverse() : [...data].reverse();
+  const displayed = latest6;
   const maxTotal = Math.max(...displayed.map((d) => d.totalKm), 1);
-  const hasMore = data.length > 12;
+  const hasMore = data.length > 6;
 
   return (
     <div className="bg-paper-sheet rounded-xl border border-rule-line shadow-sm p-4 flex flex-col gap-4">
@@ -71,9 +73,9 @@ export function MonthlyBreakdownChart({ data }: Props) {
         <button
           data-testid="more-monthly-button"
           onClick={() => setShowAll(true)}
-          className="self-center px-4 py-1.5 border border-rule-line rounded-lg text-xs font-semibold hover:bg-paper-gutter"
+          className="self-center px-4 py-1.5 bg-amber-500 text-white border border-amber-500 rounded-lg text-xs font-semibold hover:bg-amber-600 shadow-sm"
         >
-          More ({data.length} months)
+          More ({data.length} months) →
         </button>
       )}
 

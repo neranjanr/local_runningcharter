@@ -54,6 +54,8 @@ describe('Dashboard components', () => {
           fuelLevel: 48.3,
           tankCapacity: 80,
           fuelLevelPercent: 60.4,
+          lastOdo: 123456,
+          lastOdoDate: '2024-10-21',
         }}
       />
     );
@@ -66,6 +68,8 @@ describe('Dashboard components', () => {
     expect(screen.getByTestId('metric-total')).toHaveTextContent('Total (This Month)');
     expect(screen.getByTestId('metric-fuel')).toHaveTextContent('48.3 L');
     expect(screen.getByTestId('metric-fuel')).toHaveTextContent('60.4%');
+    expect(screen.getByTestId('metric-odo')).toHaveTextContent('123,456 KM');
+    expect(screen.getByTestId('metric-odo')).toHaveTextContent('2024-10-21');
   });
 
   it('MonthlyBreakdownChart renders monthly rows', () => {
@@ -172,7 +176,7 @@ describe('Dashboard components', () => {
     expect(row.textContent).toMatch(/10[^0-9]/);
   });
 
-  it('MonthlyBreakdownChart shows last 12 by default with More button and modal', async () => {
+  it('MonthlyBreakdownChart shows last 6 by default with More button and modal', async () => {
     const data = Array.from({ length: 15 }, (_, i) => ({
       monthKey: `2024-${String(i + 1).padStart(2, '0')}`,
       monthLabel: `M${i + 1} 2024`,
@@ -184,9 +188,10 @@ describe('Dashboard components', () => {
       pageCount: 1,
     }));
     render(<MonthlyBreakdownChart data={data} />);
-    // Should show only last 12 rows (months 04-15)
-    expect(screen.getByTestId('monthly-row-2024-04')).toBeInTheDocument();
-    expect(screen.queryByTestId('monthly-row-2024-01')).not.toBeInTheDocument();
+    // Should show only last 6 rows (months 10-15) latest on top
+    expect(screen.getByTestId('monthly-row-2024-10')).toBeInTheDocument();
+    expect(screen.getByTestId('monthly-row-2024-15')).toBeInTheDocument();
+    expect(screen.queryByTestId('monthly-row-2024-09')).not.toBeInTheDocument();
     expect(screen.getByTestId('more-monthly-button')).toBeInTheDocument();
     expect(screen.getByTestId('more-monthly-button')).toHaveTextContent('15 months');
 
@@ -200,7 +205,7 @@ describe('Dashboard components', () => {
     expect(screen.queryByTestId('monthly-more-modal')).not.toBeInTheDocument();
   });
 
-  it('PageWiseChart shows last 12 by default with More button and modal', () => {
+  it('PageWiseChart shows last 6 by default with More button and modal', () => {
     const data = Array.from({ length: 20 }, (_, i) => ({
       pageNumber: i + 1,
       month: '2024-10',
@@ -211,9 +216,10 @@ describe('Dashboard components', () => {
       tripCount: 1,
     }));
     render(<PageWiseChart data={data} />);
-    // Last 12: pages 9-20
-    expect(screen.getByTestId('page-bar-9')).toBeInTheDocument();
-    expect(screen.queryByTestId('page-bar-1')).not.toBeInTheDocument();
+    // Last 6: pages 15-20, latest on top
+    expect(screen.getByTestId('page-bar-15')).toBeInTheDocument();
+    expect(screen.getByTestId('page-bar-20')).toBeInTheDocument();
+    expect(screen.queryByTestId('page-bar-14')).not.toBeInTheDocument();
     expect(screen.getByTestId('more-pagewise-button')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('more-pagewise-button'));
@@ -222,7 +228,7 @@ describe('Dashboard components', () => {
     expect(screen.getByTestId('pagewise-modal-row-20')).toBeInTheDocument();
   });
 
-  it('MonthlyBreakdownChart integers monospace table when <=12 shows no More button', () => {
+  it('MonthlyBreakdownChart integers monospace table when <=6 shows no More button', () => {
     render(
       <MonthlyBreakdownChart
         data={[

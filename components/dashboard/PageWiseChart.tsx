@@ -19,9 +19,10 @@ export function PageWiseChart({ data }: Props) {
     );
   }
 
-  const displayed = data.length > 12 ? getLast12PageDistances(data) : data;
+  // Latest 6 pages, latest on top for consistency (colorful More button)
+  const displayed = data.length > 6 ? [...data.slice(-6)].reverse() : [...data].reverse();
   const maxDistance = Math.max(...displayed.map((d) => d.distance), 1);
-  const hasMore = data.length > 12;
+  const hasMore = data.length > 6;
 
   return (
     <div className="bg-paper-sheet rounded-xl border border-rule-line shadow-sm p-4 flex flex-col gap-4">
@@ -70,9 +71,9 @@ export function PageWiseChart({ data }: Props) {
         <button
           data-testid="more-pagewise-button"
           onClick={() => setShowAll(true)}
-          className="self-center px-4 py-1.5 border border-rule-line rounded-lg text-xs font-semibold hover:bg-paper-gutter"
+          className="self-center px-4 py-1.5 bg-amber-500 text-white border border-amber-500 rounded-lg text-xs font-semibold hover:bg-amber-600 shadow-sm"
         >
-          More ({data.length} pages)
+          More ({data.length} pages) →
         </button>
       )}
 

@@ -18,6 +18,8 @@ export interface DashboardMetrics {
   fuelLevel: number; // 1 decimal
   tankCapacity: number; // 1 decimal
   fuelLevelPercent: number; // 1 decimal
+  lastOdo: number; // Integer KM
+  lastOdoDate: string | null; // YYYY-MM-DD
 }
 
 export interface MonthlyBreakdown {
@@ -114,7 +116,20 @@ export function computeDashboardMetrics(params: {
   const tankCapacity = vehicle ? roundToOneDecimal(vehicle.tank_capacity ?? 0) : 0;
   const fuelLevelPercent = tankCapacity > 0 ? roundToOneDecimal(Math.min(100, Math.max(0, (fuelLevel / tankCapacity) * 100))) : 0;
 
-  return { officialKm, privateKm, totalKm, tripCount, fuelLevel, tankCapacity, fuelLevelPercent };
+  // Last ODO: max end_km among trips, with its date; fallback to vehicle odometer
+  let lastOdo = 0;
+  let lastOdoDate: string | null = null;
+  if (trips.length > 0) {
+    const sorted = [...trips].sort((a, b) => a.date.localeCompare(b.date) || a.end_km - b.end_km);
+    const lastTrip = sorted[sorted.length - 1];
+    lastOdo = roundToIntegerKm(lastTrip.end_km);
+    lastOdoDate = lastTrip.date;
+  } else if (vehicle) {
+    lastOdo = roundToIntegerKm(vehicle.current_odometer ?? 0);
+    lastOdoDate = null;
+  }
+
+  return { officialKm, privateKm, totalKm, tripCount, fuelLevel, tankCapacity, fuelLevelPercent, lastOdo, lastOdoDate };
 }
 
 export function getCurrentMonthKey(now: Date = new Date()): string {
