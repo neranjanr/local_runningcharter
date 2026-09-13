@@ -106,8 +106,14 @@ const adminCount = db.prepare('SELECT COUNT(*) as count FROM super_admin WHERE u
 if (adminCount.count === 0) {
   db.prepare(`
     INSERT INTO super_admin (id, username, password_hash, must_change_password, totp_enabled)
-    VALUES (?, 'Neranjan', '$2b$12$bootstrap_placeholder_will_be_rehashed_on_first_login', 1, 0)
+    VALUES (?, 'Neranjan', '3eec12103e18ed4b583491fd33733ab1e0c94a20aaf6c45b9515996066f7bd69', 1, 0)
   `).run(crypto.randomUUID ? crypto.randomUUID() : 'super-admin-id-1');
+} else {
+  // Update legacy placeholder hash if present
+  db.prepare(`
+    UPDATE super_admin SET password_hash = '3eec12103e18ed4b583491fd33733ab1e0c94a20aaf6c45b9515996066f7bd69'
+    WHERE username = 'Neranjan' AND password_hash = '$2b$12$bootstrap_placeholder_will_be_rehashed_on_first_login'
+  `).run();
 }
 
 // Seed default vehicle if none exists
