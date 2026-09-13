@@ -32,7 +32,7 @@ interface Props {
   onDataChanged?: () => void;
 }
 
-type EditableField = 'start_km' | 'end_km' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited';
+type EditableField = 'start_km' | 'end_km' | 'start_time' | 'end_time' | 'trip_type' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited';
 
 interface EditState {
   tripId: string;
@@ -112,6 +112,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     } else if (field === 'fuel_pumped_amount') {
       const num = parseFloat(value);
       fields.fuel_pumped_amount = isNaN(num) ? 0 : num;
+    } else if (field === 'start_time' || field === 'end_time') {
+      fields[field] = value.trim();
+    } else if (field === 'trip_type') {
+      fields.trip_type = value.toLowerCase().includes('priv') ? 'Private' : 'Official';
     } else {
       (fields as Record<string, string>)[field] = value;
     }
@@ -264,7 +268,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           setImportMsg(`Import computed ${result.appendedCount} trips but failed to persist: ${bulkError}`);
         } else {
           const failed = result.appendedCount - persisted;
-          setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`);
+          if (result.appendedCount === 0 && result.skippedDuplicates > 0) {
+            setImportMsg(`Imported 0 new trips (${result.skippedDuplicates} duplicate records skipped from workbook).`);
+          } else {
+            setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`);
+          }
         }
         onDataChanged?.();
       } else {
@@ -399,7 +407,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 </button>
               </th>
               <th className="py-2.5 px-2 text-center border-r border-rule-line">#</th>
-              <th className="py-2.5 px-2 border-r border-rule-line">Time</th>
+              <th className="py-2.5 px-2 border-r border-rule-line">Start Time</th>
+              <th className="py-2.5 px-2 border-r border-rule-line">End Time</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">
                 <button onClick={() => handleSort('start_km')} className="flex items-center ml-auto hover:text-on-surface">
                   Start ODO <SortIcon col="start_km" />
@@ -437,7 +446,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           <tbody className="divide-y divide-rule-line font-body-sm text-sm text-on-surface">
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={11} className="py-12 text-center text-sm text-on-surface-variant">
+                <td colSpan={12} className="py-12 text-center text-sm text-on-surface-variant">
                   No trips match your search and filters.
                 </td>
               </tr>
@@ -461,7 +470,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     {String(globalSeqMap.get(t.id) ?? '-').padStart(2, '0')}
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
-                    {t.start_time && t.end_time ? `${t.start_time}–${t.end_time}` : t.end_time || '-'}
+                    {renderEditableCell(t, 'start_time', t.start_time || '-')}
+                  </td>
+                  <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
+                    {renderEditableCell(t, 'end_time', t.end_time || '-')}
                   </td>
                   <td className={`py-2 px-2 text-right font-odometer-sm text-xs border-r border-rule-line ${hasKmGap ? 'bg-red-100 font-bold' : ''}`}>
                     {renderEditableCell(t, 'start_km', Math.round(t.start_km).toLocaleString(), 'right')}
@@ -473,9 +485,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     {Math.round(t.trip_distance).toLocaleString()}
                   </td>
                   <td className="py-2 px-2 border-r border-rule-line">
-                    <span className={`inline-flex px-1.5 py-0.5 rounded font-label-caps text-[10px] uppercase font-bold ${t.trip_type === 'Official' ? 'bg-surface-container-highest text-trip-official' : 'bg-surface-container text-trip-private'}`}>
-                      {t.trip_type}
-                    </span>
+                    {renderEditableCell(t, 'trip_type', t.trip_type)}
                   </td>
                   <td className="py-2 px-3 max-w-[220px] border-r border-rule-line" title={t.places_visited}>
                     {renderEditableCell(t, 'places_visited', t.places_visited)}
