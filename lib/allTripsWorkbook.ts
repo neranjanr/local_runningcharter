@@ -136,6 +136,20 @@ export interface ImportResult {
   trips: Trip[];
 }
 
+export function parseInteger(val: any): number {
+  if (val === null || val === undefined || val === '') return NaN;
+  if (typeof val === 'number') return Math.round(val);
+  const cleaned = String(val).replace(/,/g, '').trim();
+  return parseInt(cleaned, 10);
+}
+
+export function parseFloatNum(val: any): number {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return val;
+  const cleaned = String(val).replace(/,/g, '').replace(/[^\d.-]/g, '').trim();
+  return parseFloat(cleaned);
+}
+
 export function parseExcelDate(v: any): string {
   if (v === null || v === undefined) return '';
   if (v instanceof Date) {
@@ -168,15 +182,17 @@ export function parseExcelDate(v: any): string {
 
 /**
  * Validate header row is case-insensitive and order-enforced.
- * Returns true if headers match exactly (case-insensitive, same order).
+ * Returns true if headers match (case-insensitive, normalized).
  */
 export function validateHeaders(rowValues: string[]): boolean {
   const trimmed = [...rowValues];
-  while (trimmed.length > 0 && trimmed[trimmed.length - 1].trim() === '') {
+  while (trimmed.length > 0 && String(trimmed[trimmed.length - 1]).trim() === '') {
     trimmed.pop();
   }
   if (trimmed.length !== ALL_TRIPS_HEADERS.length) return false;
-  return trimmed.every((val, idx) => val.toLowerCase() === ALL_TRIPS_HEADERS[idx].toLowerCase());
+  const expectedNorm = ALL_TRIPS_HEADERS.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const actualNorm = trimmed.map(v => String(v).toLowerCase().replace(/[^a-z0-9]/g, ''));
+  return expectedNorm.every((exp, idx) => actualNorm[idx] === exp);
 }
 
 /**
@@ -262,23 +278,28 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     const fuelPumpedStr = getVal(9);
     const fuelOrderNo = getVal(10);
 
+    // Skip trailing/empty rows
+    if (!dateStr && !startKmStr && !endKmStr && !endTimeStr && !placesVisited && !fuelPumpedStr) {
+      return;
+    }
+
     // Validate essential fields: Date, Start KM, End KM, End Time, Places Visited
     if (!dateStr) errors.push({ row: rowIdx, field: 'Date', message: 'Date is required (YYYY-MM-DD)' });
     else if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) errors.push({ row: rowIdx, field: 'Date', message: `Invalid date format: ${dateStr} (expected YYYY-MM-DD)` });
 
     if (!startKmStr) errors.push({ row: rowIdx, field: 'Start KM', message: 'Start KM is required' });
-    const startKm = parseInt(startKmStr, 10);
+    const startKm = parseInteger(startKmStr);
     if (isNaN(startKm)) errors.push({ row: rowIdx, field: 'Start KM', message: `Invalid Start KM: ${startKmStr}` });
 
     if (!endKmStr) errors.push({ row: rowIdx, field: 'End KM', message: 'End KM is required' });
-    const endKm = parseInt(endKmStr, 10);
+    const endKm = parseInteger(endKmStr);
     if (isNaN(endKm)) errors.push({ row: rowIdx, field: 'End KM', message: `Invalid End KM: ${endKmStr}` });
 
     if (!isNaN(startKm) && !isNaN(endKm) && endKm < startKm) {
       errors.push({ row: rowIdx, field: 'End KM', message: `End KM (${endKm}) cannot be less than Start KM (${startKm})` });
     }
 
-    let distance = distanceStr ? parseInt(distanceStr, 10) : NaN;
+    let distance = distanceStr ? parseInteger(distanceStr) : NaN;
     if (isNaN(distance) && !isNaN(startKm) && !isNaN(endKm)) {
       distance = roundToIntegerKm(endKm - startKm);
     } else if (isNaN(distance)) {
@@ -290,7 +311,7 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     if (!placesVisited) errors.push({ row: rowIdx, field: 'Places Visited', message: 'Places Visited is required' });
 
     const tripType = typeStr.toLowerCase().includes('priv') ? 'Private' : 'Official';
-    const fuelPumped = fuelPumpedStr ? parseFloat(fuelPumpedStr) : 0;
+    const fuelPumped = parseFloatNum(fuelPumpedStr);
 
     parsedTrips.push({
       date: dateStr,
