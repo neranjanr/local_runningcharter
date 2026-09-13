@@ -113,7 +113,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       const num = parseFloat(value);
       fields.fuel_pumped_amount = isNaN(num) ? 0 : num;
     } else if (field === 'start_time' || field === 'end_time') {
-      fields[field] = value.trim();
+      const v = value.trim();
+      if (v === '' || v === '-') {
+        // Conditioning: empty keeps existing for end_time validation downstream, start_time optional
+        fields[field] = '';
+      } else {
+        // Conditioning: normalize H:MM / HH:M → HH:MM, reject invalid
+        const m = v.match(/^(\d{1,2}):(\d{1,2})(?::\d{2})?$/);
+        if (!m) { cancelEdit(); return; }
+        let hh = parseInt(m[1], 10);
+        let mm = parseInt(m[2], 10);
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) { cancelEdit(); return; }
+        fields[field] = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+        if (field === 'end_time' && !fields[field]) { cancelEdit(); return; }
+      }
     } else if (field === 'trip_type') {
       fields.trip_type = value.toLowerCase().includes('priv') ? 'Private' : 'Official';
     } else {
@@ -330,11 +343,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const renderEditableCell = (trip: Trip, field: EditableField, displayValue: string, align: 'left' | 'right' = 'left') => {
     const isEditing = editState?.tripId === trip.id && editState?.field === field;
     if (isEditing) {
+      const isTime = field === 'start_time' || field === 'end_time';
       return (
         <input
           autoFocus
-          type={field === 'fuel_pumped_amount' ? 'text' : 'text'}
-          value={editState!.value}
+          type={isTime ? 'time' : field === 'fuel_pumped_amount' ? 'text' : 'text'}
+          value={editState!.value === '-' ? '' : editState!.value}
           onChange={(e) => setEditState({ ...editState!, value: e.target.value })}
           onBlur={() => commitEdit(trip.id, field, editState!.value)}
           onKeyDown={(e) => {

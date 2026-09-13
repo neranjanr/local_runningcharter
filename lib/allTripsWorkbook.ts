@@ -443,13 +443,17 @@ export function validateNoOverlap(existingTrips: Trip[], importedTrips: Partial<
     for (const existing of sameDateTrips) {
       // Exact same odo on same date is an update, not an overlap – skip (upsert allowed)
       if (Math.round(existing.start_km) === Math.round(Number(trip.start_km)) && Math.round(existing.end_km) === Math.round(Number(trip.end_km))) continue;
-      // Overlap check: two ranges [a,b] and [c,d] overlap if a < d and c < b
-      const overlaps = trip.start_km < existing.end_km && existing.start_km < trip.end_km;
+      // Overlap check on integer KM (focus on start/end): [a,b) overlaps [c,d) if a < d && c < b
+      const a = Math.round(Number(trip.start_km));
+      const b = Math.round(Number(trip.end_km));
+      const c = Math.round(existing.start_km);
+      const d = Math.round(existing.end_km);
+      const overlaps = a < d && c < b;
       if (overlaps) {
         errors.push({
           row: i + 2,
           field: 'KM Range',
-          message: `KM range ${trip.start_km}–${trip.end_km} overlaps existing trip ${existing.start_km}–${existing.end_km} on ${trip.date}`,
+          message: `Import ${a}–${b} on ${trip.date} overlaps DB ${c}–${d} on ${existing.date}`,
         });
         break; // One error per imported row is enough
       }
