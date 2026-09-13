@@ -42,7 +42,6 @@ export async function getPages(): Promise<BookPage[]> {
 
 export async function rebuildLedger(): Promise<{ success: boolean; message: string }> {
   try {
-    const { applyChronologicalRenumber } = await import('./pageStore');
     const { trips } = await applyChronologicalRenumber();
     return { success: true, message: `Ledger rebuilt successfully. Recalculated ${trips.length} trips.` };
   } catch (e: any) {

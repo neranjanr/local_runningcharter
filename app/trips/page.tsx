@@ -55,18 +55,17 @@ export default function TripsMasterPage() {
 
         <ContinuityAlertBanner pages={pages} trips={trips} />
 
-        {trips.length === 0 ? (
+        {trips.length === 0 && (
           <div className="bg-paper-sheet rounded-xl border border-rule-line p-12 text-center flex flex-col items-center gap-3">
             <span className="text-4xl">📋</span>
             <h2 className="text-lg font-bold text-on-surface">No trips recorded</h2>
-            <p className="text-sm text-on-surface-variant">Your master table will populate as you add trips.</p>
+            <p className="text-sm text-on-surface-variant">Your master table will populate as you add trips or import Excel.</p>
             <Link href="/trips/new" className="mt-2 px-5 py-2 bg-slate-surface text-on-primary rounded-lg text-sm font-semibold hover:bg-primary">
               Enter First Trip
             </Link>
           </div>
-        ) : (
-          <AllTripsMasterTable key={refreshKey} trips={trips} pages={pages} compact={false} onDataChanged={refresh} />
         )}
+        <AllTripsMasterTable key={refreshKey} trips={trips} pages={pages} compact={false} onDataChanged={refresh} />
       </div>
     </ProtectedRoute>
   );

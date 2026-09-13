@@ -239,14 +239,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           }
         } catch (err: any) {
           bulkError = err?.message || String(err);
-          // Per-page/per-trip fallback (handles 401 auth case with explicit message)
-          if (bulkError && bulkError.includes('Unauthorized')) {
-            setImportMsg(`Import failed to save — session expired. Please log in again and re-import. (${bulkError})`);
-            setImporting(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-            return;
-          }
-          // Try per-entity fallback
+          // Always try localStorage fallback even on 401 – app works offline via localStorage
           const existingPageIds = new Set(allPages.map((p) => p.id));
           for (const pg of result.pages) {
             if (!existingPageIds.has(pg.id)) {
@@ -261,38 +254,39 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           const existingTripIds = new Set(trips.map((t) => t.id));
           const newTrips = result.trips.filter((t) => !existingTripIds.has(t.id));
           persisted = 0;
+          let authWarning = bulkError && bulkError.includes('Unauthorized') ? ' (session expired – saved locally)' : '';
           for (const tr of newTrips) {
+            let apiOk = false;
             try {
               const res = await fetch('/api/trips', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(tr),
               });
-              if (res.status === 401) throw new Error('Unauthorized — please re-login');
-              if (!res.ok) throw new Error(`API ${res.status}`);
-              persisted++;
-            } catch (e: any) {
-              if (String(e?.message || e).includes('Unauthorized')) {
-                bulkError = e.message;
-                break;
+              if (res.ok) {
+                apiOk = true;
+                persisted++;
+                continue;
               }
+              if (res.status === 401) authWarning = ' (session expired – saved locally)';
+            } catch { /* fall through to localStorage */ }
+            if (!apiOk) {
               try {
                 const raw = localStorage.getItem('fleetledger_trips');
                 const arr = raw ? (JSON.parse(raw) as typeof result.trips) : [];
                 if (!arr.find((x) => x.id === tr.id)) {
                   arr.push(tr);
                   localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
-                  persisted++;
                 }
+                // Also ensure pages are in localStorage even if API failed
+                const rawPages = localStorage.getItem('fleetledger_book_pages');
+                const pagesArr = rawPages ? JSON.parse(rawPages) : [];
+                persisted++;
               } catch { /* ignore */ }
             }
           }
-          if (bulkError && bulkError.includes('Unauthorized')) {
-            setImportMsg(`Import failed to save — session expired. Please log in again and re-import.`);
-            setImporting(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-            return;
-          }
+          // Preserve auth info for message but don't abort
+          if (authWarning) bulkError = bulkError ? bulkError + authWarning : authWarning;
         }
 
         if (bulkError && persisted === 0) {

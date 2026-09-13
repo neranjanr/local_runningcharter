@@ -156,6 +156,8 @@ export function parseExcelDate(v: any): string {
     const yyyy = v.getFullYear();
     const mm = String(v.getMonth() + 1).padStart(2, '0');
     const dd = String(v.getDate()).padStart(2, '0');
+    // Filter out Excel time-only dates (1899-12-30) – not a real trip date
+    if (yyyy === 1899) return '';
     return `${yyyy}-${mm}-${dd}`;
   }
   if (typeof v === 'number' && v > 30000 && v < 60000) {
@@ -180,9 +182,41 @@ export function parseExcelDate(v: any): string {
   return str;
 }
 
+export function parseExcelTime(v: any): string {
+  if (v === null || v === undefined || v === '') return '';
+  if (v instanceof Date) {
+    // Excel time stored as Date on 1899-12-30 – use UTC to avoid TZ shift
+    const hh = String(v.getUTCHours()).padStart(2, '0');
+    const mm = String(v.getUTCMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  if (typeof v === 'number' && v >= 0 && v < 1) {
+    // Excel fractional day (e.g. 0.0833 = 02:00)
+    const totalMinutes = Math.round(v * 1440);
+    const hh = String(Math.floor(totalMinutes / 60) % 24).padStart(2, '0');
+    const mm = String(totalMinutes % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  const str = String(v).trim();
+  // Already HH:MM or HH:MM:SS
+  const m = str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+  // Locale long date string from Date.toString fallback – try Date parse
+  const d = new Date(str);
+  if (!isNaN(d.getTime()) && d.getFullYear() === 1899) {
+    return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+  }
+  return str;
+}
+
+const FUEL_PUMPED_ALIASES = new Set(['fuelpumped', 'fueldrawn', 'fueldraw', 'fuelpumpeddrawn', 'drawn', 'fuelpumpedl', 'fueldrawnl']);
+
+function normHeader(h: string): string { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
 /**
  * Validate header row is case-insensitive and order-enforced.
  * Returns true if headers match (case-insensitive, normalized).
+ * Col 9 (Fuel Pumped) also accepts alias Fuel Drawn.
  */
 export function validateHeaders(rowValues: string[]): boolean {
   const trimmed = [...rowValues];
@@ -190,9 +224,12 @@ export function validateHeaders(rowValues: string[]): boolean {
     trimmed.pop();
   }
   if (trimmed.length !== ALL_TRIPS_HEADERS.length) return false;
-  const expectedNorm = ALL_TRIPS_HEADERS.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-  const actualNorm = trimmed.map(v => String(v).toLowerCase().replace(/[^a-z0-9]/g, ''));
-  return expectedNorm.every((exp, idx) => actualNorm[idx] === exp);
+  const expectedNorm = ALL_TRIPS_HEADERS.map(h => normHeader(h));
+  const actualNorm = trimmed.map(v => normHeader(v));
+  return expectedNorm.every((exp, idx) => {
+    if (idx === 8) return actualNorm[idx] === exp || FUEL_PUMPED_ALIASES.has(actualNorm[idx]);
+    return actualNorm[idx] === exp;
+  });
 }
 
 /**
@@ -254,13 +291,15 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     const getVal = (colIdx: number) => {
       const cell = row.getCell(colIdx);
       const v: any = cell.value;
-      if (colIdx === 1) {
-        return parseExcelDate(v);
-      }
+      if (colIdx === 1) return parseExcelDate(v);
+      if (colIdx === 5 || colIdx === 6) return parseExcelTime(v);
       if (v === null || v === undefined) return '';
       if (typeof v === 'object' && 'text' in v) return String((v as any).text).trim();
       if (typeof v === 'object' && 'result' in v) {
         const r: any = (v as any).result;
+        // Formula result could be Date for time cols
+        if (colIdx === 5 || colIdx === 6) return parseExcelTime(r);
+        if (r instanceof Date) return parseExcelDate(r);
         return String(r ?? '').trim();
       }
       return String(v).trim();
