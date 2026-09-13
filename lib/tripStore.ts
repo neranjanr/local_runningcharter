@@ -50,14 +50,18 @@ async function apiFetch(url: string, opts?: RequestInit): Promise<Response> {
 }
 
 export async function getTrips(): Promise<Trip[]> {
+  let apiTrips: Trip[] = [];
   try {
     const res = await apiFetch('/api/trips');
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) return data as Trip[];
+      if (Array.isArray(data)) apiTrips = data;
     }
   } catch { /* fall through */ }
-  return readLocalTrips();
+  const localTrips = readLocalTrips();
+  if (apiTrips.length > 0) return apiTrips;
+  if (localTrips.length > 0) return localTrips;
+  return apiTrips;
 }
 
 export async function getLastEndKm(): Promise<number> {

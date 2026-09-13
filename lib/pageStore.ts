@@ -26,14 +26,28 @@ async function apiFetch(url: string, opts?: RequestInit): Promise<Response> {
 }
 
 export async function getPages(): Promise<BookPage[]> {
+  let apiPages: BookPage[] = [];
   try {
     const res = await apiFetch('/api/pages');
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) return data as BookPage[];
+      if (Array.isArray(data)) apiPages = data;
     }
   } catch { /* fall through to localStorage */ }
-  return readLocalPages();
+  const localPages = readLocalPages();
+  if (apiPages.length > 0) return apiPages;
+  if (localPages.length > 0) return localPages;
+  return apiPages;
+}
+
+export async function rebuildLedger(): Promise<{ success: boolean; message: string }> {
+  try {
+    const { applyChronologicalRenumber } = await import('./pageStore');
+    const { trips } = await applyChronologicalRenumber();
+    return { success: true, message: `Ledger rebuilt successfully. Recalculated ${trips.length} trips.` };
+  } catch (e: any) {
+    return { success: false, message: e?.message || 'Failed to rebuild ledger' };
+  }
 }
 
 export async function savePage(page: BookPage): Promise<BookPage> {

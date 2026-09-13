@@ -20,8 +20,8 @@ import {
   validatePaginationForImport,
   importTripsFromWorkbook,
 } from '@/lib/allTripsWorkbook';
-import { getPages, savePage } from '@/lib/pageStore';
-import { getVehicleProfile } from '@/lib/vehicleStore';
+import { getPages, savePage, rebuildLedger } from '@/lib/pageStore';
+import { getVehicleProfile, saveVehicleProfile } from '@/lib/vehicleStore';
 import { getTrips } from '@/lib/tripStore';
 
 interface Props {
@@ -145,6 +145,37 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     a.download = getAllTripsFileName();
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleRebuildLedger = async () => {
+    setImporting(true);
+    setImportMsg(null);
+    const res = await rebuildLedger();
+    setImportMsg(res.message);
+    setImporting(false);
+    onDataChanged?.();
+  };
+
+  const handleSetStartOdo = async () => {
+    const vehicle = await getVehicleProfile();
+    const current = vehicle.current_odometer ?? (trips[0]?.start_km ?? 0);
+    const val = window.prompt(`Enter start position of first record (Book Opening KM):`, String(current));
+    if (val === null) return;
+    const num = parseInt(val, 10);
+    if (isNaN(num) || num < 0) {
+      alert('Invalid odometer value');
+      return;
+    }
+    await saveVehicleProfile({ current_odometer: num });
+    const allPages = await getPages();
+    if (allPages.length > 0) {
+      const firstPage = [...allPages].sort((a, b) => a.page_number - b.page_number)[0];
+      firstPage.start_km = num;
+      await savePage(firstPage);
+    }
+    await rebuildLedger();
+    setImportMsg(`Start ODO updated to ${num} KM and ledger rebuilt.`);
+    onDataChanged?.();
   };
 
   // Import
@@ -340,6 +371,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors"
             >
               <span>📥</span> {importing ? 'Importing...' : 'Import Excel'}
+            </button>
+            <button
+              onClick={handleRebuildLedger}
+              disabled={importing}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors"
+            >
+              <span>🔄</span> Rebuild Ledger
+            </button>
+            <button
+              onClick={handleSetStartOdo}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors"
+            >
+              <span>⚙️</span> Set Start ODO
             </button>
           </div>
         </div>
