@@ -441,6 +441,8 @@ export function validateNoOverlap(existingTrips: Trip[], importedTrips: Partial<
 
     const sameDateTrips = existingByDate.get(trip.date) || [];
     for (const existing of sameDateTrips) {
+      // Exact same odo on same date is an update, not an overlap – skip (upsert allowed)
+      if (Math.round(existing.start_km) === Math.round(Number(trip.start_km)) && Math.round(existing.end_km) === Math.round(Number(trip.end_km))) continue;
       // Overlap check: two ranges [a,b] and [c,d] overlap if a < d and c < b
       const overlaps = trip.start_km < existing.end_km && existing.start_km < trip.end_km;
       if (overlaps) {
