@@ -157,7 +157,6 @@ export async function applyChronologicalRenumber(): Promise<{ pages: BookPage[];
   }
   // persist renumbered trips page_id mapping
   try {
-    const { default: tripStore } = await import('./tripStore');
     // direct localStorage write to avoid API round-trip
     if (typeof window !== 'undefined') {
       const TRIPS_KEY = 'fleetledger_trips';
