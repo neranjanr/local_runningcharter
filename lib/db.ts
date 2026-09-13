@@ -101,20 +101,13 @@ db.exec(`
   );
 `);
 
-// Seed default super admin if not exists
-const adminCount = db.prepare('SELECT COUNT(*) as count FROM super_admin WHERE username = ?').get('Neranjan') as { count: number };
-if (adminCount.count === 0) {
-  db.prepare(`
-    INSERT INTO super_admin (id, username, password_hash, must_change_password, totp_enabled)
-    VALUES (?, 'Neranjan', '3eec12103e18ed4b583491fd33733ab1e0c94a20aaf6c45b9515996066f7bd69', 1, 0)
-  `).run(crypto.randomUUID ? crypto.randomUUID() : 'super-admin-id-1');
-} else {
-  // Update legacy placeholder hash if present
-  db.prepare(`
-    UPDATE super_admin SET password_hash = '3eec12103e18ed4b583491fd33733ab1e0c94a20aaf6c45b9515996066f7bd69'
-    WHERE username = 'Neranjan' AND password_hash = '$2b$12$bootstrap_placeholder_will_be_rehashed_on_first_login'
-  `).run();
-}
+// Seed or upsert default super admin
+db.prepare(`
+  INSERT INTO super_admin (id, username, password_hash, must_change_password, totp_enabled)
+  VALUES (?, 'Neranjan', '3eec12103e18ed4b583491fd33733ab1e0c94a20aaf6c45b9515996066f7bd69', 1, 0)
+  ON CONFLICT(username) DO UPDATE SET
+    password_hash = CASE WHEN must_change_password = 1 THEN '3eec12103e18ed4b583491fd33733ab1e0c94a20aaf6c45b9515996066f7bd69' ELSE password_hash END
+`).run(crypto.randomUUID ? crypto.randomUUID() : 'super-admin-id-1');
 
 // Seed default vehicle if none exists
 const vehicleCount = db.prepare('SELECT COUNT(*) as count FROM vehicles').get() as { count: number };
