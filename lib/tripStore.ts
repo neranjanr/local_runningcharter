@@ -253,6 +253,30 @@ async function recalculatePageEndForTrip(trip: Trip): Promise<void> {
   }
 }
 
+export async function deleteTrip(tripId: string): Promise<boolean> {
+  const trips = await getTrips();
+  const existing = trips.find(t => t.id === tripId);
+  if (!existing) return false;
+  // Try API first
+  try {
+    const res = await apiFetch(`/api/trips?id=${encodeURIComponent(tripId)}`, { method: 'DELETE' });
+    if (res.ok) {
+      await recalculatePageEndForTrip(existing);
+      return true;
+    }
+  } catch { /* fall through */ }
+  // localStorage fallback
+  const localTrips = readLocalTrips();
+  const idx = localTrips.findIndex(t => t.id === tripId);
+  if (idx >= 0) {
+    localTrips.splice(idx, 1);
+    writeLocalTrips(localTrips);
+    await recalculatePageEndForTrip(existing);
+    return true;
+  }
+  return false;
+}
+
 export function clearTrips(): void {
   if (typeof window !== 'undefined') localStorage.removeItem(LOCAL_STORAGE_KEY);
 }

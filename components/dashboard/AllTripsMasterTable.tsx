@@ -9,9 +9,9 @@ import {
   type SortDirection,
   computeFilteredSums,
 } from '@/lib/dashboardCalculations';
-import { computeGlobalSeq } from '@/lib/ledgerCalculations';
-import { detectTripGaps } from '@/lib/continuityAlerts';
-import { updateTrip, type TripUpdateFields } from '@/lib/tripStore';
+import { computeGlobalSeq, computeLedgerDays, computeLedgerSummary } from '@/lib/ledgerCalculations';
+import { detectTripGaps, detectPageGaps, detectDayGroupFuelGaps } from '@/lib/continuityAlerts';
+import { updateTrip, deleteTrip, type TripUpdateFields } from '@/lib/tripStore';
 import {
   generateAllTripsBuffer,
   getAllTripsFileName,
@@ -21,8 +21,11 @@ import {
   importTripsFromWorkbook,
 } from '@/lib/allTripsWorkbook';
 import { getPages, savePage, rebuildLedger } from '@/lib/pageStore';
-import { getVehicleProfile, saveVehicleProfile } from '@/lib/vehicleStore';
+import { getVehicleProfile } from '@/lib/vehicleStore';
 import { getTrips } from '@/lib/tripStore';
+import { estimateStartTime } from '@/lib/tripCalculations';
+import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
+import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 
 interface Props {
   trips: Trip[];
@@ -32,7 +35,7 @@ interface Props {
   onDataChanged?: () => void;
 }
 
-type EditableField = 'start_km' | 'end_km' | 'start_time' | 'end_time' | 'trip_type' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited';
+type EditableField = 'start_km' | 'end_km' | 'start_time' | 'end_time' | 'trip_type' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited' | 'fuel_position' | 'in_tank' | 'fuel_economy';
 
 interface EditState {
   tripId: string;
@@ -48,6 +51,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [editState, setEditState] = useState<EditState | null>(null);
   const [confirmSave, setConfirmSave] = useState<{ tripId: string; fields: TripUpdateFields } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -75,6 +79,24 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     return groups;
   }, [filtered]);
 
+  // Fuel ledger per date (Position, InTank, Pumped, Economy, Balance) for All Trips view
+  const fuelMap = useMemo(() => {
+    const map = new Map<string, { position: number; inTank: number; pumped: number; economy: number; balance: number }>();
+    const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
+    for (const page of sortedPages) {
+      try {
+        const economies = getFuelEconomiesForPage(page.id);
+        const inTanks = getInTanksForPage(page.id);
+        const days = computeLedgerDays({ page, trips, economies, inTanks });
+        for (const d of days) {
+          if (!map.has(d.date)) map.set(d.date, { position: d.fuelPosition, inTank: d.inTank, pumped: d.drawn, economy: d.fuelEconomy, balance: d.balance });
+        }
+      } catch {}
+    }
+    // fallback for dates without ledger (e.g. no page yet): zero values
+    return map;
+  }, [trips, pages]);
+
   const handleSort = (col: SortColumn) => {
     if (sortColumn === col) {
       setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -99,6 +121,39 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const commitEdit = (tripId: string, field: EditableField, value: string) => {
     const trip = trips.find((t) => t.id === tripId);
     if (!trip) return;
+
+    // Fuel economy / in-tank / position are per-day per-page, handle via stores directly
+    if (field === 'fuel_economy' || field === 'in_tank' || field === 'fuel_position') {
+      const num = parseFloat(value);
+      if (isNaN(num) || num < 0) { cancelEdit(); return; }
+      const dayTrips = trips.filter(t => t.page_id === trip.page_id && t.date === trip.date);
+      const dayIndex = dayTrips.length > 0 ? Math.min(...dayTrips.map(d => d.day_index)) : trip.day_index;
+      const pageId = trip.page_id;
+      if (field === 'fuel_economy') {
+        const arr = getFuelEconomiesForPage(pageId);
+        while (arr.length < dayIndex) arr.push(null);
+        arr[dayIndex - 1] = Math.round(num * 10) / 10;
+        saveFuelEconomiesForPage(pageId, arr);
+      } else if (field === 'in_tank') {
+        const arr = getInTanksForPage(pageId);
+        while (arr.length < dayIndex) arr.push(null);
+        arr[dayIndex - 1] = Math.round(num * 10) / 10;
+        saveInTanksForPage(pageId, arr);
+      } else if (field === 'fuel_position') {
+        // For first day of first page, update page start_fuel_balance
+        const targetPage = pages.find(p => p.id === pageId);
+        if (targetPage && dayIndex === 1) {
+          const sorted = [...pages].sort((a,b)=>a.page_number-b.page_number);
+          if (sorted[0]?.id === pageId) {
+            targetPage.start_fuel_balance = Math.round(num * 10) / 10;
+            savePage(targetPage);
+          }
+        }
+      }
+      setEditState(null);
+      onDataChanged?.();
+      return;
+    }
 
     const fields: TripUpdateFields = {};
     if (field === 'start_km' || field === 'end_km') {
@@ -145,6 +200,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     if (!confirmSave) return;
     await updateTrip(confirmSave.tripId, confirmSave.fields);
     setConfirmSave(null);
+    // Run gap detection and alert
+    const gaps = detectTripGaps([...trips.filter(t=>t.id!==confirmSave.tripId), {...trips.find(t=>t.id===confirmSave.tripId)!, ...confirmSave.fields} as Trip]);
+    if (gaps.length > 0) {
+      const kmGaps = gaps.filter(g=>g.kind==='km').length;
+      const fuelGaps = gaps.filter(g=>g.kind==='fuel').length;
+      if (kmGaps || fuelGaps) setImportMsg(`Gap detected after edit: ${kmGaps} KM gaps, ${fuelGaps} fuel gaps — check ledger continuity`);
+    }
+    onDataChanged?.();
+  };
+
+  const handleDelete = async (tripId: string) => {
+    await deleteTrip(tripId);
+    setConfirmDelete(null);
+    setImportMsg('Record deleted');
     onDataChanged?.();
   };
 
@@ -169,28 +238,6 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     onDataChanged?.();
   };
 
-  const handleSetStartOdo = async () => {
-    const vehicle = await getVehicleProfile();
-    const current = vehicle.current_odometer ?? (trips[0]?.start_km ?? 0);
-    const val = window.prompt(`Enter start position of first record (Book Opening KM):`, String(current));
-    if (val === null) return;
-    const num = parseInt(val, 10);
-    if (isNaN(num) || num < 0) {
-      alert('Invalid odometer value');
-      return;
-    }
-    await saveVehicleProfile({ current_odometer: num });
-    const allPages = await getPages();
-    if (allPages.length > 0) {
-      const firstPage = [...allPages].sort((a, b) => a.page_number - b.page_number)[0];
-      firstPage.start_km = num;
-      await savePage(firstPage);
-    }
-    await rebuildLedger();
-    setImportMsg(`Start ODO updated to ${num} KM and ledger rebuilt.`);
-    onDataChanged?.();
-  };
-
   // Import
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -204,6 +251,14 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         setImportMsg(`Import failed: ${parseResult.errors.map((e) => `Row ${e.row}: ${e.message}`).join('; ')}`);
         setImporting(false);
         return;
+      }
+
+      // Conditioning: if Start Times not there, estimate via end_time - distance/20 ceiled to 5min
+      for (const t of parseResult.trips) {
+        if ((!t.start_time || String(t.start_time).trim() === '') && t.end_time && t.trip_distance) {
+          const est = estimateStartTime(t.end_time!, Number(t.trip_distance));
+          if (est) t.start_time = est;
+        }
       }
 
       // Overlap/pagination should ignore rows that are upserts (same date+odo) – they update in place
@@ -404,12 +459,6 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             >
               <span>🔄</span> Rebuild Ledger
             </button>
-            <button
-              onClick={handleSetStartOdo}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors"
-            >
-              <span>⚙️</span> Set Start ODO
-            </button>
           </div>
         </div>
 
@@ -470,7 +519,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         <table className="w-full text-left border-collapse">
           <thead className="sticky top-0 bg-paper-gutter z-10">
             <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
-              <th className="py-2.5 px-3 border-r border-rule-line">
+              <th className="py-2.5 px-2 border-r border-rule-line">
                 <button onClick={() => handleSort('date')} className="flex items-center hover:text-on-surface">
                   Date <SortIcon col="date" />
                 </button>
@@ -498,24 +547,25 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   Type <SortIcon col="trip_type" />
                 </button>
               </th>
-              <th className="py-2.5 px-3 border-r border-rule-line">
+              <th className="py-2.5 px-2 border-r border-rule-line">
                 <button onClick={() => handleSort('places_visited')} className="flex items-center hover:text-on-surface">
-                  Route & Purpose <SortIcon col="places_visited" />
+                  Route <SortIcon col="places_visited" />
                 </button>
               </th>
-              <th className="py-2.5 px-2 text-right border-r border-rule-line">
-                <button onClick={() => handleSort('fuel_pumped_amount')} className="flex items-center ml-auto hover:text-on-surface">
-                  Fuel <SortIcon col="fuel_pumped_amount" />
-                </button>
-              </th>
+              <th className="py-2.5 px-2 text-right border-r border-rule-line">Pumped</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Order No</th>
-              <th className="py-2.5 px-2">Page</th>
+              <th className="py-2.5 px-2 text-right border-r border-rule-line">Pos.</th>
+              <th className="py-2.5 px-2 text-right border-r border-rule-line">In-Tank</th>
+              <th className="py-2.5 px-2 text-right border-r border-rule-line">Econ</th>
+              <th className="py-2.5 px-2 text-right border-r border-rule-line">Balance</th>
+              <th className="py-2.5 px-2 border-r border-rule-line">Page</th>
+              <th className="py-2.5 px-2">Del</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-rule-line font-body-sm text-sm text-on-surface">
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={12} className="py-12 text-center text-sm text-on-surface-variant">
+                <td colSpan={17} className="py-12 text-center text-sm text-on-surface-variant">
                   No trips match your search and filters.
                 </td>
               </tr>
@@ -524,14 +574,15 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const hasKmGap = tripKmGapIds.has(t.id);
                 const groupIdx = dateGroups.get(t.date) ?? 0;
                 const isAltDay = groupIdx % 2 === 1;
+                const fuel = fuelMap.get(t.date);
                 return (
                 <tr
                   key={t.id}
                   data-testid={`trip-row-${t.id}`}
                   className={`hover:bg-surface-container-lowest/60 transition-colors ${isAltDay ? 'bg-blue-50/40' : 'bg-white'}`}
                 >
-                  <td className="py-2 px-3 whitespace-nowrap border-r border-rule-line">
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-label-caps text-[10px] font-bold uppercase tracking-tight ${isAltDay ? 'bg-surface-container-high text-secondary' : 'bg-surface-container-low text-secondary'}`}>
+                  <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line">
+                    <span className={`inline-flex items-center gap-1 px-1 py-0.5 rounded font-label-caps text-[10px] font-bold uppercase tracking-tight ${isAltDay ? 'bg-surface-container-high text-secondary' : 'bg-surface-container-low text-secondary'}`}>
                       {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
                     </span>
                   </td>
@@ -553,20 +604,35 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-right font-odometer-sm text-xs font-bold text-slate-surface border-r border-rule-line">
                     {Math.round(t.trip_distance).toLocaleString()}
                   </td>
-                  <td className="py-2 px-2 border-r border-rule-line">
+                  <td className="py-2 px-1 border-r border-rule-line">
                     {renderEditableCell(t, 'trip_type', t.trip_type)}
                   </td>
-                  <td className="py-2 px-3 max-w-[220px] border-r border-rule-line" title={t.places_visited}>
+                  <td className="py-2 px-2 max-w-[160px] border-r border-rule-line truncate" title={t.places_visited}>
                     {renderEditableCell(t, 'places_visited', t.places_visited)}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}L` : '0.0L', 'right')}
+                    {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '0.0', 'right')}
                   </td>
-                  <td className="py-2 px-2 text-xs font-mono text-on-surface-variant border-r border-rule-line">
+                  <td className="py-2 px-1 text-xs font-mono text-on-surface-variant border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_order_no', t.fuel_order_no || '-')}
                   </td>
-                  <td className="py-2 px-2 text-xs font-mono">
+                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
+                    {renderEditableCell(t, 'fuel_position', fuel ? fuel.position.toFixed(1) : '-', 'right')}
+                  </td>
+                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
+                    {renderEditableCell(t, 'in_tank', fuel ? fuel.inTank.toFixed(1) : '0.0', 'right')}
+                  </td>
+                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
+                    {renderEditableCell(t, 'fuel_economy', fuel ? fuel.economy.toFixed(1) : '10.5', 'right')}
+                  </td>
+                  <td className="py-2 px-2 text-right font-mono text-xs font-bold border-r border-rule-line">
+                    {fuel ? fuel.balance.toFixed(1) : '-'}
+                  </td>
+                  <td className="py-2 px-2 text-xs font-mono border-r border-rule-line">
                     {t.page_id.replace('page-', 'P')}
+                  </td>
+                  <td className="py-2 px-1 text-center">
+                    <button onClick={() => setConfirmDelete(t.id)} className="text-red-600 hover:text-red-800 text-xs px-1" title="Delete">🗑️</button>
                   </td>
                 </tr>
                 );
@@ -607,6 +673,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               >
                 Save Changes
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setConfirmDelete(null)}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-2">Confirm Delete</h3>
+            <p className="text-sm text-on-surface-variant mb-4">
+              Delete trip on {trips.find((t) => t.id === confirmDelete)?.date} ({trips.find((t) => t.id === confirmDelete)?.start_km}–{trips.find((t) => t.id === confirmDelete)?.end_km})? This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg transition-colors">Cancel</button>
+              <button onClick={() => handleDelete(confirmDelete)} className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">Delete</button>
             </div>
           </div>
         </div>
