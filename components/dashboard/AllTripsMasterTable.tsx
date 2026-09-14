@@ -437,10 +437,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     if (e < s) { setInsertError('End KM must be >= Start KM'); return; }
     if (!insertForm.places_visited.trim()) { setInsertError('Places Visited is required'); return; }
     if (!insertForm.end_time.trim()) { setInsertError('End Time is required'); return; }
-    // date clamp
+    if (!['Official','Private'].includes(insertForm.trip_type)) { setInsertError('Trip Type must be Official or Private'); return; }
+    // date clamp: must be within [anchor date, next date]
     const nextTrip = sortedAll[insertTarget.sortedIdx + 1] ?? null;
     const minDate = insertTarget.anchor.date;
     const maxDate = nextTrip ? nextTrip.date : null;
+    if (!insertForm.date) { setInsertError('Date is required'); return; }
     if (insertForm.date < minDate || (maxDate && insertForm.date > maxDate)) {
       setInsertError(`Date must be between ${minDate} and ${maxDate ?? 'future'}`);
       return;
@@ -482,21 +484,23 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const vp = await getVehicleProfile().catch(()=>null);
     const vehicleId = vp?.id ?? 'veh-1';
     const assignment = assignPageForNewTrip({ pages, trips, newTripDate: insertForm.date });
-    // Handle MAX_TRIPS_PER_DAY blocked -> create new page manually if needed; for now treat as error unless auto-split desired
-    if ('allowed' in assignment && (assignment as any).allowed === false) {
-      // Attempt auto-split: create a new page for this date if exceeds limit — since spec expects auto-split, we allow creation
-      // For simplicity, allow insertion on new page anyway using next page id
-      const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
-      const last = sortedPages[sortedPages.length-1];
-      // Next page number
-      const nextNumber = last ? last.page_number + 1 : 1;
+    const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
+    const last = sortedPages[sortedPages.length-1];
+    const nextNumber = last ? last.page_number + 1 : 1;
+
+    // Auto-split cases: MAX_TRIPS blocked OR requiresNewPage (MAX_DAYS / MONTH_ROLLOVER)
+    const needsNewPage = ('allowed' in assignment && (assignment as any).allowed === false) || (assignment as any).requiresNewPage;
+    if (needsNewPage) {
+      const isBlocked = 'allowed' in assignment && (assignment as any).allowed === false;
+      const targetPageId = isBlocked ? `page-${nextNumber}` : (assignment as any).pageId;
+      const targetPageNumber = isBlocked ? nextNumber : (assignment as any).pageNumber;
       const newTrip: Trip = {
         id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         vehicle_id: vehicleId,
-        page_id: `page-${nextNumber}`,
+        page_id: targetPageId,
         date: insertForm.date,
-        day_index: 1,
-        trip_index: 1,
+        day_index: isBlocked ? 1 : ((assignment as any).dayIndex ?? 1),
+        trip_index: isBlocked ? 1 : ((assignment as any).tripIndex ?? 1),
         start_time: insertForm.start_time.trim(),
         end_time: insertForm.end_time.trim(),
         start_km: s,
@@ -508,26 +512,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         fuel_order_no: insertForm.fuel_order_no.trim(),
         created_at: new Date().toISOString(),
       };
-      // Use shift helper with new page id — still shifts downstream
       const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
-      const recomputed = await recomputePagesForTrips(result.trips);
-      // Need to ensure pages array includes the new page if not exists
-      let pagesForRecalc = recomputed;
-      if (!pagesForRecalc.find(p=>p.id===newTrip.page_id)) {
-        // create page entry if missing in recomputed (recalculate will not create pages, it only updates existing)
-        // Manually add page
+      let recomputed = await recomputePagesForTrips(result.trips);
+      if (!recomputed.find(p=>p.id===newTrip.page_id)) {
         const month = insertForm.date.slice(0,7);
-        const newPage: BookPage = { id: newTrip.page_id, vehicle_id: vehicleId, page_number: nextNumber, month, start_km: s, end_km: e, start_fuel_balance: 10, end_fuel_balance: 10, created_at: new Date().toISOString() };
-        pagesForRecalc = [...pagesForRecalc, newPage].sort((a,b)=>a.page_number-b.page_number);
-        // Recalculate again with new page included
-        const vp2 = await getVehicleProfile().catch(()=>null);
-        const openingKm = vp2 ? roundToIntegerKm((vp2.current_odometer ?? 0)) : 0;
-        const openingFuel = vp2 ? roundToOneDecimal((vp2 as unknown as Record<string, unknown>).current_fuel_level as number ?? 10) : 10;
-        pagesForRecalc = recalculatePageBalancesFromOpening({ pages: pagesForRecalc, trips: result.trips, opening: { openingKm, openingFuel } });
+        const newPage: BookPage = { id: newTrip.page_id, vehicle_id: vehicleId, page_number: targetPageNumber, month, start_km: s, end_km: e, start_fuel_balance: 10, end_fuel_balance: 10, created_at: new Date().toISOString() };
+        recomputed = [...recomputed, newPage].sort((a,b)=>a.page_number-b.page_number);
+        const openingKm = vp ? roundToIntegerKm((vp.current_odometer ?? 0)) : 0;
+        const openingFuel = vp ? roundToOneDecimal((vp as unknown as Record<string, unknown>).current_fuel_level as number ?? 10) : 10;
+        recomputed = recalculatePageBalancesFromOpening({ pages: recomputed, trips: result.trips, opening: { openingKm, openingFuel } });
       }
-      await persistTripsAndPages(result.trips, pagesForRecalc, `Trip inserted — ${result.trips.length - sortedAll.length} inserted, ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
+      await persistTripsAndPages(result.trips, recomputed, `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
       setInsertConfirm(null);
       setInsertTarget(null);
+      setInsertError(null);
       return;
     }
     const assign = assignment as { pageId: string; dayIndex: number; tripIndex: number };
@@ -550,12 +548,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       created_at: new Date().toISOString(),
     };
     const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
-    // Pre-flight pagination validation on shifted trips
     const recomputed = await recomputePagesForTrips(result.trips);
     const violations = validatePaginationConstraints(recomputed, result.trips);
     if (violations.length > 0) {
-      setInsertError(`Pagination violation: ${violations.map(v=>v.violation).join('; ')} — may need new Page auto-split`);
-      // Allow auto-split via createNextPage? For now block
+      setInsertError(`Pagination violation: ${violations.map(v=>v.violation).join('; ')}`);
       return;
     }
     await persistTripsAndPages(result.trips, recomputed, `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
@@ -1203,7 +1199,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             {insertError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="insert-error">{insertError}</div>}
             <div className="grid grid-cols-2 gap-3 text-xs">
               <label className="flex flex-col gap-1">Date *
-                <input type="date" value={insertForm.date} onChange={e=>setInsertForm({...insertForm, date:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-date" />
+                <input type="date" value={insertForm.date} min={insertTarget.anchor.date} max={sortedAll[insertTarget.sortedIdx+1]?.date} onChange={e=>setInsertForm({...insertForm, date:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-date" />
               </label>
               <label className="flex flex-col gap-1">Trip Type
                 <select value={insertForm.trip_type} onChange={e=>setInsertForm({...insertForm, trip_type:e.target.value as any})} className="border border-rule-line rounded px-2 py-1">
