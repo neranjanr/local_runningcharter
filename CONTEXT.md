@@ -99,7 +99,7 @@ _Avoid_: Mismatch, discontinuity error
 **Continuity Alert**: Persistent, non-dismissible banner/drawer listing every KM Gap (RED) and Fuel Gap (AMBER) at Page-to-Page and Trip-to-Trip levels; survives refresh, shows expected vs actual and jump-to-page/trip links, clears only when gaps are fixed or missing records are added to close them (no auto-recalc). Dashboard shows a compact alert bar ("Continuity Gaps Detected") with a "View All Trips" link; All Trips and Ledger pages show the full detailed alert.
 _Avoid_: Toast alert, dismissible warning
 
-**All Trips Workbook**: Excel file named per All Trips table with Sheet "All Trips" and header row `Date | Start KM | End KM | Distance | Start Time | End Time | Type | Places Visited | Fuel Pumped | Fuel Order No` (case-insensitive, order-enforced); export writes that sheet, import validates pre-flight and appends chronologically without overwriting.
+**All Trips Workbook**: Excel file named per All Trips table with Sheet "All Trips" and header row `Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No` (`Type` alias accepted case-insensitive, order-enforced); export writes that sheet, import validates pre-flight and appends chronologically without overwriting.
 _Avoid_: Book-Mirror sheet, generic export
 
 **Transposed Side 2**: Side 2 Fuel Economy & Position tables rendered with days as columns to mirror the physical book's landscape layout, matching Side 1 column orientation.
@@ -107,3 +107,27 @@ _Avoid_: Rotated tables, flipped view
 
 **Ledger Full-Width Stack**: Ledger Page View layout where Table 1 (Trips Log) occupies full width on top, with Table 2 (Fuel Economy & Consumption) and Table 3 (Fuel Position & Balance) stacked full-width beneath it, replacing the dual-column Side 1 / Side 2 folio; print and responsive rules preserve this stack.
 _Avoid_: Side-by-side folio, two-column ledger
+
+**Fuel-In Segment**: Contiguous Day Groups from a fuel-in date (Drawn>0 aggregated per date) inclusive to the day before the next fuel-in date; the final segment ends at the Book's last Day Group. One Fuel Economy value applies uniformly across the segment.
+_Avoid_: Fill interval, refuel block
+
+**Estimated Fuel Economy**: Calibrated km/L for a Fuel-In Segment suggested by the estimator, chosen as the 1-decimal value within the feasible interval that keeps every intermediate Closing Balance in [1, tankCapacity] closest to the previous segment's economy (or practical seed 7.8 km/L for the first segment). If no feasible value exists, the nearest infeasible boundary is suggested with a warning.
+_Avoid_: Calculated economy, guessed economy
+
+**Fuel-IN Summary**: Dashboard table listing fuel-in dates with aggregated Fuel IN (L) and Fuel Order No, sorted newest-first; 12 rows shown with MORE opening a full-list popup.
+_Avoid_: Refuel log, fuel history
+
+**Trip Type**: Enumerated category of a Trip, restricted to Official or Private; validated as a select list in All Trips, New Trip, and import.
+_Avoid_: Category, purpose type
+
+**Private Trip (Bold Row)**: A Trip with `Trip Type = Private`; rendered as a fully bold row weight in both Ledger (`Side1TripsLog`) and All Trips Master Table (preserving `bg-orange-200` background, RED gap cell `bg-red-100` wins on Start KM). Print retains bold.
+_Avoid_: Partial bold, badge-only
+
+**Gap Fill Trip**: A Trip inserted solely to close a detected **KM Gap** (`Trip N End KM ≠ Trip N+1 Start KM`); the dialog auto-fills `Start KM = predecessor End KM`, `End KM = successor Start KM`, `Distance = End − Start`, `Date = predecessor Date` (editable within `[predecessor Date, successor Date]`), `Trip Type = Official` default; no downstream shift — it consumes the gap extent exactly and is surfaced only in All Trips via an inline `+ Fill Gap` chip and row ⋯ menu when a KM Gap exists.
+_Avoid_: Gap patch, gap insert
+
+**Inserted Trip (Shift)**: A Trip inserted after any existing Trip at a chosen chronological position in All Trips; downstream Trips (all later in `date || start_km` order, across Page boundaries) have their `Start KM` and `End KM` increased uniformly by `Δ = new.end − new.start` (their `trip_distance` and other fields frozen), with `BookPage` start/end KM and fuel chain recomputed forward via `recalculatePageBalancesFromOpening`; pagination auto-splits (`13 trips/day`, `4 days/page`, month rollover) creating a new Page when needed. Confirmation previews `N` shifted trips and `Δ` before save.
+_Avoid_: Add record in between, middle insert
+
+**Removed Trip (Shift)**: Deletion of a Trip (the “Remove & Shift” action, distinct from plain **Delete** which leaves a gap) that shifts all downstream Trips down by `Δ = removed.end − removed.start` (`Start KM −= Δ`, `End KM −= Δ`), recomputes fuel chain forward, and patches Page continuity; confirmation previews `N` and `−Δ`; empty Pages are retained v1 (not collapsed).
+_Avoid_: Delete, shift-delete

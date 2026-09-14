@@ -83,27 +83,32 @@ export function Side1TripsLog({ pageNumber, month, dayGroups, grandTotals, pageS
         <table className="w-full text-left text-on-surface border-collapse">
           <thead className="sticky top-0 z-10">
             <tr className="bg-primary-container text-on-primary">
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-24 border border-rule-line-strong">Date</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-8 border border-rule-line-strong">#</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-12 border border-rule-line-strong">Dep.</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-12 border border-rule-line-strong">Arr.</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-right w-20 border border-rule-line-strong">Start KM</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-right w-20 border border-rule-line-strong">End KM</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-10 border border-rule-line-strong">#</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-36 border border-rule-line-strong">Date</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-14 border border-rule-line-strong">Dep.</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-14 border border-rule-line-strong">Arr.</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-right w-22 border border-rule-line-strong">Start KM</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-right w-22 border border-rule-line-strong">End KM</th>
               <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-right w-16 border border-rule-line-strong">Dist</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-16 border border-rule-line-strong">Type</th>
-              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong">Route / Purpose</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase text-center w-18 border border-rule-line-strong">Type</th>
+              <th className="py-2 px-2.5 text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong w-[30%]">Route / Purpose</th>
             </tr>
           </thead>
           <tbody className="text-[13px] leading-[18px] font-medium divide-y-0">
             {flatTrips.map((t: Trip, idx: number) => {
               const dateIdx = dateToIdx.get(t.date) ?? 0;
-              const isAltDate = dateIdx % 2 === 1;
+              const isAltDate = dateIdx % 2 === 0;
+              const tripName = (t.places_visited ?? '').trim().toLowerCase();
+              const isDummyOrPrivateTrip = tripName === 'dummy' || tripName === 'private';
+              const isPrivateType = t.trip_type === 'Private';
+              const shouldOrange = isDummyOrPrivateTrip || isPrivateType;
+              const rowBg = shouldOrange ? 'bg-orange-200' : isAltDate ? 'bg-slate-200' : 'bg-white';
               return (
-                <tr key={t.id} className={`${isAltDate ? 'bg-blue-50/40' : idx % 2 === 0 ? 'bg-paper-sheet' : 'bg-paper-ledger'} hover:bg-surface-container-low transition-colors`}>
+                <tr key={t.id} className={`${rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange ? '' : 'hover:bg-amber-50/50'} transition-colors`}>
+                  <td className="py-2 px-2.5 text-center font-mono text-sm font-semibold border border-rule-line">{pageSeq[idx]}</td>
                   <td className="py-2 px-2.5 text-center text-[10px] font-semibold tracking-widest text-on-surface-variant border border-rule-line">
                     {formatDateCell(t.date)}
                   </td>
-                  <td className="py-2 px-2.5 text-center font-mono text-sm font-semibold border border-rule-line">{pageSeq[idx]}</td>
                   <td className="py-2 px-2.5 text-center font-mono text-sm border border-rule-line">{t.start_time || '-'}</td>
                   <td className="py-2 px-2.5 text-center font-mono text-sm border border-rule-line">{t.end_time}</td>
                   <td className="py-2 px-2.5 text-right font-mono text-sm border border-rule-line">{Math.round(t.start_km).toLocaleString()}</td>
@@ -114,7 +119,7 @@ export function Side1TripsLog({ pageNumber, month, dayGroups, grandTotals, pageS
                       {t.trip_type.toUpperCase()}
                     </span>
                   </td>
-                  <td className="py-2 px-2.5 truncate max-w-[180px] border border-rule-line" title={t.places_visited}>{t.places_visited}</td>
+                  <td className="py-2 px-2.5 truncate max-w-[30%] border border-rule-line" title={t.places_visited}>{t.places_visited}</td>
                 </tr>
               );
             })}

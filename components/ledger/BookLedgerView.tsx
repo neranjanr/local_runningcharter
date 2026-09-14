@@ -10,6 +10,7 @@ import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEco
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { roundToOneDecimal, roundToIntegerKm } from '@/lib/tripCalculations';
 import { ExcelExportButton } from '@/components/ExcelExportButton';
+import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
 import { detectPageGaps, detectDayGroupFuelGaps } from '@/lib/continuityAlerts';
 
 interface Props {
@@ -172,6 +173,7 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
         vehicleLabel={vehicleLabel}
       />
       <div className="flex flex-wrap items-center justify-end gap-2 mb-3 print:hidden">
+        <EstimateFuelEconomy trips={trips} pages={sortedPages} vehicle={vehicle} onApplied={() => { if(currentPage){ setRawEconomies([...getFuelEconomiesForPage(currentPage.id)]); }}} />
         <ExcelExportButton pages={sortedPages} trips={trips} vehicle={vehicle} />
       </div>
 
@@ -199,6 +201,7 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
           body { background: white !important; }
           aside, header { display: none !important; }
           main { padding: 0 !important; max-width: none !important; }
+          tr.font-semibold { font-weight: 600 !important; }
         }
       `}</style>
     </div>

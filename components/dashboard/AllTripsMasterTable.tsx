@@ -26,6 +26,8 @@ import { getTrips } from '@/lib/tripStore';
 import { estimateStartTime } from '@/lib/tripCalculations';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
+import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
+import type { Vehicle } from '@/types';
 
 interface Props {
   trips: Trip[];
@@ -55,6 +57,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [vehicle, setVehicle] = useState<Vehicle | null>(null);
+  React.useEffect(() => { getVehicleProfile().then(setVehicle).catch(()=>{}); }, []);
 
   const availableMonths = useMemo(() => getAvailableMonths(trips, pages), [trips, pages]);
 
@@ -69,31 +73,39 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const tripKmGaps = useMemo(() => detectTripGaps(trips), [trips]);
   const tripKmGapIds = useMemo(() => new Set(tripKmGaps.filter((g) => g.kind === 'km').map((g) => g.tripId)), [tripKmGaps]);
 
-  // Group trips by date for alternating row backgrounds
+  // Group trips by date for alternating row backgrounds — chronological distinct order among visible rows
   const dateGroups = useMemo(() => {
-    const groups = new Map<string, number>();
-    let idx = 0;
-    for (const t of filtered) {
-      if (!groups.has(t.date)) groups.set(t.date, idx++);
-    }
-    return groups;
+    const distinctSorted = Array.from(new Set(filtered.map(t => t.date))).sort();
+    const map = new Map<string, number>();
+    distinctSorted.forEach((d, idx) => map.set(d, idx));
+    return map;
   }, [filtered]);
 
-  // Fuel ledger per date (Position, InTank, Pumped, Economy, Balance) for All Trips view
+  // Identify earliest date (lowest ODO chronologically) — only this Pos is editable; rest auto-count
+  const earliestDate = useMemo(() => {
+    if (trips.length === 0) return null;
+    return [...trips].map(t=>t.date).sort()[0];
+  }, [trips]);
+
+  // Fuel ledger per date — continuous chain: page N start = previous page computed balance (auto-count for continuous range)
   const fuelMap = useMemo(() => {
     const map = new Map<string, { position: number; inTank: number; pumped: number; economy: number; balance: number }>();
     const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
+    let runningFuelPos: number | null = null;
     for (const page of sortedPages) {
       try {
         const economies = getFuelEconomiesForPage(page.id);
         const inTanks = getInTanksForPage(page.id);
-        const days = computeLedgerDays({ page, trips, economies, inTanks });
+        // Continuous carry-forward: use computed running pos instead of stored start_fuel_balance for pages > 1
+        const pageForCompute = runningFuelPos !== null ? { ...page, start_fuel_balance: runningFuelPos } : page;
+        const days = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks });
         for (const d of days) {
           if (!map.has(d.date)) map.set(d.date, { position: d.fuelPosition, inTank: d.inTank, pumped: d.drawn, economy: d.fuelEconomy, balance: d.balance });
         }
+        if (days.length > 0) runningFuelPos = days[days.length - 1].balance;
+        else if (runningFuelPos === null) runningFuelPos = page.start_fuel_balance;
       } catch {}
     }
-    // fallback for dates without ledger (e.g. no page yet): zero values
     return map;
   }, [trips, pages]);
 
@@ -126,6 +138,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     if (field === 'fuel_economy' || field === 'in_tank' || field === 'fuel_position') {
       const num = parseFloat(value);
       if (isNaN(num) || num < 0) { cancelEdit(); return; }
+      // Fuel Position: only earliest date (lowest ODO) is editable; rest are auto-counted continuous
+      if (field === 'fuel_position' && earliestDate && trip.date !== earliestDate) {
+        cancelEdit();
+        return;
+      }
       const dayTrips = trips.filter(t => t.page_id === trip.page_id && t.date === trip.date);
       const dayIndex = dayTrips.length > 0 ? Math.min(...dayTrips.map(d => d.day_index)) : trip.day_index;
       const pageId = trip.page_id;
@@ -140,15 +157,33 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         arr[dayIndex - 1] = Math.round(num * 10) / 10;
         saveInTanksForPage(pageId, arr);
       } else if (field === 'fuel_position') {
-        // For first day of first page, update page start_fuel_balance
-        const targetPage = pages.find(p => p.id === pageId);
-        if (targetPage && dayIndex === 1) {
-          const sorted = [...pages].sort((a,b)=>a.page_number-b.page_number);
-          if (sorted[0]?.id === pageId) {
-            targetPage.start_fuel_balance = Math.round(num * 10) / 10;
-            savePage(targetPage);
-          }
-        }
+        // Continuous auto-count: update Book Opening (first page) and downstream pages will display via running chain
+        const sorted = [...pages].sort((a,b)=>a.page_number-b.page_number);
+        if (sorted.length === 0) { cancelEdit(); return; }
+        const firstPage = sorted[0];
+        // Only allow if this trip belongs to first page chronologically
+        if (firstPage.id !== pageId) { cancelEdit(); return; }
+        firstPage.start_fuel_balance = Math.round(num * 10) / 10;
+        // Persist opening; downstream pages' displayed Pos will auto-count via fuelMap continuous chain
+        savePage(firstPage).then(() => {
+          // Optionally propagate stored start_fuel_balance downstream for continuity alerts (fire-and-forget)
+          let running = Math.round(num * 10) / 10;
+          (async () => {
+            for (let i = 0; i < sorted.length; i++) {
+              const p = sorted[i];
+              if (i === 0) {
+                const days = computeLedgerDays({ page: p, trips, economies: getFuelEconomiesForPage(p.id), inTanks: getInTanksForPage(p.id) });
+                running = days.length > 0 ? days[days.length - 1].balance : running;
+              } else {
+                const updated = { ...p, start_fuel_balance: running };
+                // Avoid spamming API, write local only if needed; savePage will handle
+                await savePage(updated as BookPage);
+                const days = computeLedgerDays({ page: updated as BookPage, trips, economies: getFuelEconomiesForPage(p.id), inTanks: getInTanksForPage(p.id) });
+                running = days.length > 0 ? days[days.length - 1].balance : running;
+              }
+            }
+          })();
+        });
       }
       setEditState(null);
       onDataChanged?.();
@@ -398,6 +433,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const renderEditableCell = (trip: Trip, field: EditableField, displayValue: string, align: 'left' | 'right' = 'left') => {
     const isEditing = editState?.tripId === trip.id && editState?.field === field;
     if (isEditing) {
+      if (field === 'trip_type') {
+        return (
+          <select
+            autoFocus
+            value={editState!.value}
+            onChange={(e) => commitEdit(trip.id, field, e.target.value)}
+            onBlur={() => cancelEdit()}
+            className="w-full px-1 py-0.5 border border-telemetry-cyan rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-telemetry-cyan"
+          >
+            <option value="Official">Official</option>
+            <option value="Private">Private</option>
+          </select>
+        );
+      }
       const isTime = field === 'start_time' || field === 'end_time';
       return (
         <input
@@ -443,6 +492,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => onDataChanged?.()} />
             <button
               onClick={handleExport}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-surface text-on-primary rounded-lg text-xs font-semibold hover:bg-primary transition-colors shadow-sm"
@@ -523,12 +573,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         <table className="w-full text-left border-collapse">
           <thead className="sticky top-0 bg-paper-gutter z-10">
             <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
-              <th className="py-2.5 px-2 border-r border-rule-line">
+              <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
+              <th className="py-2.5 px-2 border-r border-rule-line w-40">
                 <button onClick={() => handleSort('date')} className="flex items-center hover:text-on-surface">
                   Date <SortIcon col="date" />
                 </button>
               </th>
-              <th className="py-2.5 px-2 text-center border-r border-rule-line">#</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Start Time</th>
               <th className="py-2.5 px-2 border-r border-rule-line">End Time</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">
@@ -577,21 +627,27 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               filtered.map((t) => {
                 const hasKmGap = tripKmGapIds.has(t.id);
                 const groupIdx = dateGroups.get(t.date) ?? 0;
-                const isAltDay = groupIdx % 2 === 1;
+                const isAltDay = groupIdx % 2 === 0;
                 const fuel = fuelMap.get(t.date);
+                const isEarliest = earliestDate === t.date;
+                const tripName = (t.places_visited ?? '').trim().toLowerCase();
+                const isDummyOrPrivateTrip = tripName === 'dummy' || tripName === 'private';
+                const isPrivateType = t.trip_type === 'Private';
+                const shouldOrange = isDummyOrPrivateTrip || isPrivateType;
+                const rowBg = shouldOrange ? 'bg-orange-200' : isAltDay ? 'bg-slate-200' : 'bg-white';
                 return (
                 <tr
                   key={t.id}
                   data-testid={`trip-row-${t.id}`}
-                  className={`hover:bg-surface-container-lowest/60 transition-colors ${isAltDay ? 'bg-blue-50/40' : 'bg-white'}`}
+                  className={`transition-colors border-b border-rule-line/60 ${rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange ? '' : 'hover:bg-amber-50/40'}`}
                 >
-                  <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line">
-                    <span className={`inline-flex items-center gap-1 px-1 py-0.5 rounded font-label-caps text-[10px] font-bold uppercase tracking-tight ${isAltDay ? 'bg-surface-container-high text-secondary' : 'bg-surface-container-low text-secondary'}`}>
-                      {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
-                    </span>
-                  </td>
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
                     {String(globalSeqMap.get(t.id) ?? '-').padStart(2, '0')}
+                  </td>
+                  <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line">
+                    <span className="inline-flex items-center gap-1 px-1 py-0.5 rounded font-label-caps text-[10px] font-bold uppercase tracking-tight text-on-surface-variant">
+                      {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
+                    </span>
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
                     {renderEditableCell(t, 'start_time', t.start_time || '-')}
@@ -611,7 +667,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-1 border-r border-rule-line">
                     {renderEditableCell(t, 'trip_type', t.trip_type)}
                   </td>
-                  <td className="py-2 px-2 max-w-[160px] border-r border-rule-line truncate" title={t.places_visited}>
+                  <td className="py-2 px-2 max-w-[30%] w-[30%] border-r border-rule-line truncate" title={t.places_visited}>
                     {renderEditableCell(t, 'places_visited', t.places_visited)}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
@@ -620,8 +676,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-1 text-xs font-mono text-on-surface-variant border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_order_no', t.fuel_order_no || '-')}
                   </td>
-                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'fuel_position', fuel ? fuel.position.toFixed(1) : '-', 'right')}
+                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line" title={isEarliest ? 'Click to edit opening fuel (auto-counts downstream)' : 'Auto-calculated from opening fuel — edit earliest date only'}>
+                    {isEarliest ? renderEditableCell(t, 'fuel_position', fuel ? fuel.position.toFixed(1) : '-', 'right') : <span className="font-mono">{fuel ? fuel.position.toFixed(1) : '-'}</span>}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
                     {renderEditableCell(t, 'in_tank', fuel ? fuel.inTank.toFixed(1) : '0.0', 'right')}
