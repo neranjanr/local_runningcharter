@@ -39,8 +39,8 @@ export function FuelInSummary({ trips }: Props) {
     return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
   }, [trips]);
 
-  const visible = rows.slice(0, 12);
-  const hasMore = rows.length > 12;
+  const visible = rows.slice(0, 6);
+  const hasMore = rows.length > 6;
 
   if (rows.length === 0) return null;
 
@@ -54,7 +54,7 @@ export function FuelInSummary({ trips }: Props) {
           </div>
           <span className="text-xs font-mono text-on-surface-variant">{rows.length} fuel-ins</span>
         </div>
-        <div className="overflow-auto max-h-[380px]">
+        <div className="overflow-auto max-h-[240px] scrollbar-thin" style={{ scrollbarWidth: 'thin' }}>
           <table className="w-full text-left border-collapse">
             <thead className="sticky top-0 bg-paper-gutter z-10">
               <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
@@ -76,7 +76,7 @@ export function FuelInSummary({ trips }: Props) {
         </div>
         {hasMore && (
           <div className="p-3 border-t border-rule-line flex justify-center">
-            <button onClick={() => setShowAll(true)} className="px-4 py-1.5 bg-slate-surface text-on-primary rounded-lg text-xs font-semibold hover:bg-primary transition-colors">+ MORE ({rows.length - 12} more)</button>
+            <button onClick={() => setShowAll(true)} className="px-4 py-1.5 bg-slate-surface text-on-primary rounded-lg text-xs font-semibold hover:bg-primary transition-colors">+ MORE ({rows.length - 6} more)</button>
           </div>
         )}
       </div>

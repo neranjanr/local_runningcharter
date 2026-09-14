@@ -1098,42 +1098,42 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               {filtered.length} of {trips.length} trips
             </span>
           </div>
-          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto pb-1 -mb-1 scrollbar-thin" style={{ scrollbarWidth: 'thin' }}>
+          <div className="flex items-center gap-1 flex-wrap">
             <div className="flex-shrink-0">
               <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => notifyDataChanged()} />
             </div>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={importing || sheetPulling || sheetPushing}
-              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[11px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[96px]"
+              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[10px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 min-w-[78px] max-w-[88px] leading-tight whitespace-normal text-center"
               title="Import trips from All Trips Excel file"
             >
-              <span>📥</span> <span className="whitespace-normal">{importing ? 'Importing...' : 'Import from Excel'}</span>
+              <span className="text-[13px] leading-none">📥</span> <span className="whitespace-normal break-words leading-none">{importing ? 'Importing...' : 'Import from Excel'}</span>
             </button>
             <button
               onClick={handleExport}
-              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-slate-surface text-on-primary rounded-lg text-[11px] font-semibold hover:bg-primary transition-colors shadow-sm flex-shrink-0 whitespace-normal text-center leading-tight min-w-[96px]"
+              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-slate-surface text-on-primary rounded-lg text-[10px] font-semibold hover:bg-primary transition-colors shadow-sm min-w-[78px] max-w-[88px] leading-tight whitespace-normal text-center"
               title="Export all trips to All Trips Excel"
             >
-              <span>📊</span> <span className="whitespace-normal">Export to Excel</span>
+              <span className="text-[13px] leading-none">📊</span> <span className="whitespace-normal break-words leading-none">Export to Excel</span>
             </button>
             <button
               onClick={handlePullFromSheet}
               disabled={sheetPulling || importing || sheetPushing}
-              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-cyan-600 text-white rounded-lg text-[11px] font-semibold hover:bg-cyan-700 transition-colors shadow-sm disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[120px]"
+              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-cyan-600 text-white rounded-lg text-[10px] font-semibold hover:bg-cyan-700 transition-colors shadow-sm disabled:opacity-50 min-w-[86px] max-w-[98px] leading-tight whitespace-normal text-center"
               data-testid="pull-from-sheet-btn"
               title={lastPullAt ? `Last Sheet pull: ${new Date(lastPullAt).toLocaleString()}` : 'Pull new rows from Buffer Sheet via Apps Script'}
             >
-              <span>☁️↓</span> <span className="whitespace-normal">{sheetPulling ? 'Pulling…' : 'Import from Google Sheet'}</span>
+              <span className="text-[13px] leading-none">☁️↓</span> <span className="whitespace-normal break-words leading-none">{sheetPulling ? 'Pulling…' : 'Import from Google Sheet'}</span>
             </button>
             <button
               onClick={handlePushToSheet}
               disabled={sheetPushing || importing || sheetPulling}
-              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-emerald-600 text-white rounded-lg text-[11px] font-semibold hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[120px]"
+              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-semibold hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50 min-w-[86px] max-w-[98px] leading-tight whitespace-normal text-center"
               data-testid="push-to-sheet-btn"
               title={lastPushAt ? `Last Sheet push: ${new Date(lastPushAt).toLocaleString()}` : 'Export all trips to Buffer Sheet (atomic rewrite, preserves unimported)'}
             >
-              <span>☁️↑</span> <span className="whitespace-normal">{sheetPushing ? 'Exporting…' : 'Export to Google Sheet'}</span>
+              <span className="text-[13px] leading-none">☁️↑</span> <span className="whitespace-normal break-words leading-none">{sheetPushing ? 'Exporting…' : 'Export to Google Sheet'}</span>
             </button>
             <button
               onClick={() => setShowSheetSettings(true)}
@@ -1146,9 +1146,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <button
               onClick={handleRebuildLedger}
               disabled={importing || sheetPulling || sheetPushing}
-              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[11px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[96px]"
+              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[10px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 min-w-[78px] max-w-[88px] leading-tight whitespace-normal text-center"
             >
-              <span>🔄</span> <span className="whitespace-normal">Rebuild Ledger</span>
+              <span className="text-[13px] leading-none">🔄</span> <span className="whitespace-normal break-words leading-none">Rebuild Ledger</span>
             </button>
           </div>
         </div>
@@ -1300,10 +1300,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   className={`transition-colors border-b border-rule-line/60 ${isFocused ? 'ring-2 ring-telemetry-cyan bg-cyan-50' : isJustImported ? 'bg-cyan-50' : rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange && !isFocused && !isJustImported ? '' : 'hover:bg-amber-50/40'}`}
                 >
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
-                    {String(globalSeqMap.get(t.id) ?? '-').padStart(2, '0')}
+                    <span className="inline-flex items-center justify-center gap-0.5">
+                      <span>{String(globalSeqMap.get(t.id) ?? '-').padStart(2, '0')}</span>
+                      {(t.fuel_pumped_amount ?? 0) > 0 && <span title={`Fuel pumped ${t.fuel_pumped_amount?.toFixed(1)} L`} className="text-[11px] leading-none">⛽</span>}
+                    </span>
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line">
-                    <span className="inline-flex items-center gap-1 px-1 py-0.5 rounded font-label-caps text-[10px] font-bold uppercase tracking-tight text-on-surface-variant">
+                    <span className="inline-flex items-center gap-1 px-1 py-0.5 rounded font-label-caps text-[10px] uppercase tracking-tight text-on-surface-variant">
                       {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
                     </span>
                   </td>
@@ -1341,7 +1344,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     {renderEditableCell(t, 'places_visited', t.places_visited)}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '0.0', 'right')}
+                    {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '-', 'right')}
                   </td>
                   <td className="py-2 px-1 text-xs font-mono text-on-surface-variant border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_order_no', t.fuel_order_no || '-')}
@@ -1350,7 +1353,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     {isEarliest ? renderEditableCell(t, 'fuel_position', fuel ? fuel.position.toFixed(1) : '-', 'right') : <span className="font-mono">{fuel ? fuel.position.toFixed(1) : '-'}</span>}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'in_tank', fuel ? fuel.inTank.toFixed(1) : '0.0', 'right')}
+                    {renderEditableCell(t, 'in_tank', fuel && fuel.inTank > 0 ? fuel.inTank.toFixed(1) : '-', 'right')}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_economy', fuel ? fuel.economy.toFixed(1) : '10.5', 'right')}
