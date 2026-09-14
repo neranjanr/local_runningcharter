@@ -41,6 +41,18 @@ export default function DashboardPage() {
     };
   }, []);
 
+  // Refresh dashboard when any import (Excel or Sheet Pull) mutates data
+  useEffect(() => {
+    const handler = () => refresh();
+    window.addEventListener('fleetledger:data-changed', handler);
+    window.addEventListener('storage', handler);
+    // also listen for localStorage writes within same tab via custom poll? fleetledger event covers same-tab
+    return () => {
+      window.removeEventListener('fleetledger:data-changed', handler);
+      window.removeEventListener('storage', handler);
+    };
+  }, [refresh]);
+
   const metrics = useMemo(() => computeThisMonthMetrics({ trips, vehicle, pages }), [trips, vehicle, pages]);
   const monthly = useMemo(() => computeMonthlyBreakdown({ trips, pages }), [trips, pages]);
   const pageWise = useMemo(() => computePageWiseDistances({ trips, pages }), [trips, pages]);

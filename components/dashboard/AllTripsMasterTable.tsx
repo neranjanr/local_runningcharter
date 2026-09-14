@@ -226,6 +226,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     return () => clearTimeout(t);
   }, [importedIds]);
 
+  const notifyDataChanged = useCallback(() => {
+    onDataChanged?.();
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('fleetledger:data-changed'));
+  }, [onDataChanged]);
+
   const handleSort = (col: SortColumn) => {
     if (sortColumn === col) {
       setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -303,7 +308,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         });
       }
       setEditState(null);
-      onDataChanged?.();
+      notifyDataChanged();
       return;
     }
 
@@ -359,7 +364,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       const fuelGaps = gaps.filter(g=>g.kind==='fuel').length;
       if (kmGaps || fuelGaps) setImportMsg(`Gap detected after edit: ${kmGaps} KM gaps, ${fuelGaps} fuel gaps — check ledger continuity`);
     }
-    onDataChanged?.();
+    notifyDataChanged();
   };
 
   const handleDelete = async (tripId: string) => {
@@ -374,7 +379,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     await deleteTrip(tripId);
     setConfirmDelete(null);
     setImportMsg('Record deleted');
-    onDataChanged?.();
+    notifyDataChanged();
     if (focusId) focusTrip(focusId, { clearFilter: needsClear });
   };
 
@@ -401,7 +406,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       // localStorage already removed
     }
     setImportMsg(toastMsg);
-    onDataChanged?.();
+    notifyDataChanged();
   };
 
   const recomputePagesForTrips = async (newTrips: Trip[]): Promise<BookPage[]> => {
@@ -751,7 +756,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const res = await rebuildLedger();
     setImportMsg(res.message);
     setImporting(false);
-    onDataChanged?.();
+    notifyDataChanged();
   };
 
   // Import
@@ -900,7 +905,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`);
           }
         }
-        onDataChanged?.();
+        notifyDataChanged();
       } else {
         setImportMsg(`Import failed: ${result.errors.map((e) => e.message).join('; ')}`);
       }
@@ -1025,7 +1030,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       }
       setShowPullPreview(false);
       setPullComparison(null);
-      onDataChanged?.();
+      notifyDataChanged();
     } catch (e: unknown) {
       setSheetError(e instanceof Error ? e.message : String(e));
     }
@@ -1093,44 +1098,46 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               {filtered.length} of {trips.length} trips
             </span>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => onDataChanged?.()} />
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto pb-1 -mb-1 scrollbar-thin" style={{ scrollbarWidth: 'thin' }}>
+            <div className="flex-shrink-0">
+              <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => notifyDataChanged()} />
+            </div>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={importing || sheetPulling || sheetPushing}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50"
+              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[11px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[96px]"
               title="Import trips from All Trips Excel file"
             >
-              <span>📥</span> {importing ? 'Importing...' : 'Import from Excel'}
+              <span>📥</span> <span className="whitespace-normal">{importing ? 'Importing...' : 'Import from Excel'}</span>
             </button>
             <button
               onClick={handleExport}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-surface text-on-primary rounded-lg text-xs font-semibold hover:bg-primary transition-colors shadow-sm"
+              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-slate-surface text-on-primary rounded-lg text-[11px] font-semibold hover:bg-primary transition-colors shadow-sm flex-shrink-0 whitespace-normal text-center leading-tight min-w-[96px]"
               title="Export all trips to All Trips Excel"
             >
-              <span>📊</span> Export to Excel
+              <span>📊</span> <span className="whitespace-normal">Export to Excel</span>
             </button>
             <button
               onClick={handlePullFromSheet}
               disabled={sheetPulling || importing || sheetPushing}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 text-white rounded-lg text-xs font-semibold hover:bg-cyan-700 transition-colors shadow-sm disabled:opacity-50"
+              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-cyan-600 text-white rounded-lg text-[11px] font-semibold hover:bg-cyan-700 transition-colors shadow-sm disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[120px]"
               data-testid="pull-from-sheet-btn"
               title={lastPullAt ? `Last Sheet pull: ${new Date(lastPullAt).toLocaleString()}` : 'Pull new rows from Buffer Sheet via Apps Script'}
             >
-              <span>☁️↓</span> {sheetPulling ? 'Pulling…' : 'Import from Google Sheet'}
+              <span>☁️↓</span> <span className="whitespace-normal">{sheetPulling ? 'Pulling…' : 'Import from Google Sheet'}</span>
             </button>
             <button
               onClick={handlePushToSheet}
               disabled={sheetPushing || importing || sheetPulling}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50"
+              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-emerald-600 text-white rounded-lg text-[11px] font-semibold hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[120px]"
               data-testid="push-to-sheet-btn"
               title={lastPushAt ? `Last Sheet push: ${new Date(lastPushAt).toLocaleString()}` : 'Export all trips to Buffer Sheet (atomic rewrite, preserves unimported)'}
             >
-              <span>☁️↑</span> {sheetPushing ? 'Exporting…' : 'Export to Google Sheet'}
+              <span>☁️↑</span> <span className="whitespace-normal">{sheetPushing ? 'Exporting…' : 'Export to Google Sheet'}</span>
             </button>
             <button
               onClick={() => setShowSheetSettings(true)}
-              className="px-2 py-1.5 bg-paper-sheet border border-rule-line rounded-lg text-xs hover:bg-paper-gutter"
+              className="px-2 py-1.5 bg-paper-sheet border border-rule-line rounded-lg text-xs hover:bg-paper-gutter flex-shrink-0"
               title="Buffer Sheet Settings"
               data-testid="sheet-settings-btn"
             >
@@ -1139,9 +1146,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <button
               onClick={handleRebuildLedger}
               disabled={importing || sheetPulling || sheetPushing}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50"
+              className="flex items-center justify-center gap-1 px-2 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[11px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 flex-shrink-0 whitespace-normal text-center leading-tight min-w-[96px]"
             >
-              <span>🔄</span> Rebuild Ledger
+              <span>🔄</span> <span className="whitespace-normal">Rebuild Ledger</span>
             </button>
           </div>
         </div>
@@ -1214,9 +1221,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </div>
       </div>
 
-      {/* Table */}
-      <div className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[600px]'}`}>
-        <table className="w-full text-left border-collapse">
+      {/* Table - scrollable with visible scrollbars */}
+      <div className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-x-auto overflow-y-auto scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
+        <table className="w-full min-w-[1180px] text-left border-collapse">
           <thead className="sticky top-0 bg-paper-gutter z-10">
             <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>

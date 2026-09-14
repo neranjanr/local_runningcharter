@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect } from 'react';
-import { getSheetSettings, saveSheetSettings } from '@/lib/sheetClient';
+import { getSheetSettings, saveSheetSettings, DEFAULT_SHEET_ID, DEFAULT_SHEET_URL, DEFAULT_SCRIPT_URL } from '@/lib/sheetClient';
 
 interface Props {
   open: boolean;
@@ -47,20 +47,33 @@ export function SheetSettingsDialog({ open, onClose, onSaved }: Props) {
     onSaved?.();
   };
 
+  const handleUseDefaults = () => {
+    setSheetId(DEFAULT_SHEET_ID);
+    setScriptUrl(DEFAULT_SCRIPT_URL);
+  };
+
+  const isDefault = sheetId.trim() === DEFAULT_SHEET_ID && scriptUrl.trim() === DEFAULT_SCRIPT_URL;
+
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="sheet-settings-dialog" onClick={onClose}>
       <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-lg w-full" onClick={e=>e.stopPropagation()}>
         <h3 className="text-sm font-bold text-on-surface mb-1">Buffer Sheet Settings</h3>
-        <p className="text-xs text-on-surface-variant mb-3">Paste Buffer Sheet URL (or ID) and Apps Script Web App URL. Same values as QuickTrip Mobile — stored locally.</p>
+        <p className="text-xs text-on-surface-variant mb-3">Paste Buffer Sheet URL (or ID) and Apps Script Web App URL. Same values as QuickTrip Mobile — stored locally. Default is pre-configured.</p>
+        <div className="flex gap-2 mb-3">
+          <button onClick={handleUseDefaults} className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-colors ${isDefault ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-paper-gutter text-on-surface-variant border-rule-line hover:bg-emerald-50 hover:text-emerald-700'}`} data-testid="sheet-use-defaults">
+            {isDefault ? '✓ Using defaults' : 'Use defaults'}
+          </button>
+          <span className="text-[11px] text-on-surface-variant self-center">Default Sheet: 1-TxFy…174a9E</span>
+        </div>
         <div className="space-y-3">
           <label className="flex flex-col gap-1 text-xs font-semibold">Sheet ID or URL
-            <input value={sheetId} onChange={e=>setSheetId(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/... or ID" className="border border-rule-line rounded px-2 py-1.5 text-sm font-mono" data-testid="sheet-id-input" />
+            <input value={sheetId} onChange={e=>setSheetId(e.target.value)} placeholder={DEFAULT_SHEET_URL} className="border border-rule-line rounded px-2 py-1.5 text-sm font-mono" data-testid="sheet-id-input" />
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Apps Script Web App URL
-            <input value={scriptUrl} onChange={e=>setScriptUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="border border-rule-line rounded px-2 py-1.5 text-sm font-mono" data-testid="sheet-script-input" />
+            <input value={scriptUrl} onChange={e=>setScriptUrl(e.target.value)} placeholder={DEFAULT_SCRIPT_URL} className="border border-rule-line rounded px-2 py-1.5 text-sm font-mono" data-testid="sheet-script-input" />
           </label>
           {testMsg && <div className={`text-xs px-2 py-1 rounded border ${testMsg.ok ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`} data-testid="sheet-settings-test-msg">{testMsg.msg}</div>}
-          <p className="text-[11px] text-on-surface-variant">Setup: Sheet must have header row <code>Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No</code>. Apps Script: Extensions → Apps Script → paste <code>quicktrip-mobile/apps-script/Code.gs</code> → Deploy → Web App → Execute as you, Anyone with link.</p>
+          <p className="text-[11px] text-on-surface-variant">Setup: Sheet must have header row <code>Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No</code>. Apps Script: Extensions → Apps Script → paste <code>quicktrip-mobile/apps-script/Code.gs</code> → Deploy → Web App → Execute as you, Anyone with link. Defaults point to the team’s shared Buffer Sheet.</p>
         </div>
         <div className="flex justify-end gap-2 mt-4">
           <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
