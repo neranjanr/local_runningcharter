@@ -22,7 +22,7 @@ export const ALL_TRIPS_HEADERS = [
   'Distance',
   'Start Time',
   'End Time',
-  'Type',
+  'Private / Official',
   'Places Visited',
   'Fuel Pumped',
   'Fuel Order No',
@@ -211,12 +211,14 @@ export function parseExcelTime(v: any): string {
 }
 
 const FUEL_PUMPED_ALIASES = new Set(['fuelpumped', 'fueldrawn', 'fueldraw', 'fuelpumpeddrawn', 'drawn', 'fuelpumpedl', 'fueldrawnl']);
+const TYPE_ALIASES = new Set(['type', 'triptype', 'privateofficial', 'privateofficialstatus', 'status', 'triptypestatus', 'officialprivate']);
 
 function normHeader(h: string): string { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
 /**
  * Validate header row is case-insensitive and order-enforced.
  * Returns true if headers match (case-insensitive, normalized).
+ * Col 7 (Type) also accepts aliases Private / Official, Status etc.
  * Col 9 (Fuel Pumped) also accepts alias Fuel Drawn.
  */
 export function validateHeaders(rowValues: string[]): boolean {
@@ -228,6 +230,7 @@ export function validateHeaders(rowValues: string[]): boolean {
   const expectedNorm = ALL_TRIPS_HEADERS.map(h => normHeader(h));
   const actualNorm = trimmed.map(v => normHeader(v));
   return expectedNorm.every((exp, idx) => {
+    if (idx === 6) return actualNorm[idx] === exp || TYPE_ALIASES.has(actualNorm[idx]);
     if (idx === 8) return actualNorm[idx] === exp || FUEL_PUMPED_ALIASES.has(actualNorm[idx]);
     return actualNorm[idx] === exp;
   });

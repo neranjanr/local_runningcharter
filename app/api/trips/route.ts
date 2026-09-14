@@ -56,3 +56,14 @@ export async function PUT(request: NextRequest) {
   );
   return NextResponse.json(rows[0] ?? null);
 }
+
+export async function DELETE(request: NextRequest) {
+  if (!(await validateSession())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+  if (!id) return NextResponse.json({ error: 'Missing trip id' }, { status: 400 });
+  await query('DELETE FROM trips WHERE id = $1', [id]);
+  return NextResponse.json({ success: true });
+}

@@ -23,10 +23,12 @@ import {
 import { getPages, savePage, rebuildLedger } from '@/lib/pageStore';
 import { getVehicleProfile } from '@/lib/vehicleStore';
 import { getTrips } from '@/lib/tripStore';
-import { estimateStartTime } from '@/lib/tripCalculations';
+import { estimateStartTime, roundToIntegerKm, roundToOneDecimal } from '@/lib/tripCalculations';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
+import { sortTripsChronologically, shiftForInsert, shiftForRemove } from '@/lib/tripShift';
+import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip } from '@/lib/pagination';
 import type { Vehicle } from '@/types';
 
 interface Props {
@@ -45,6 +47,14 @@ interface EditState {
   value: string;
 }
 
+interface GapPair {
+  predecessor: Trip;
+  successor: Trip;
+  expected: number;
+  actual: number;
+  delta: number;
+}
+
 export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Table', compact = false, onDataChanged }: Props) {
   const [search, setSearch] = useState('');
   const [tripType, setTripType] = useState<'All' | 'Official' | 'Private'>('All');
@@ -60,6 +70,17 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   React.useEffect(() => { getVehicleProfile().then(setVehicle).catch(()=>{}); }, []);
 
+  // Gap / Insert / Remove states
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [gapFillTarget, setGapFillTarget] = useState<GapPair | null>(null);
+  const [gapFillForm, setGapFillForm] = useState<{ date: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+  const [gapFillError, setGapFillError] = useState<string | null>(null);
+  const [insertTarget, setInsertTarget] = useState<{ anchor: Trip; sortedIdx: number } | null>(null);
+  const [insertForm, setInsertForm] = useState<{ date: string; start_km: string; end_km: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', start_km: '', end_km: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+  const [insertError, setInsertError] = useState<string | null>(null);
+  const [insertConfirm, setInsertConfirm] = useState<{ delta: number; downstreamCount: number; preview: Array<{ before: Trip; after: Trip }>; newTrip: Trip } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<{ trip: Trip; sortedIdx: number; delta: number; downstream: Trip[] } | null>(null);
+
   const availableMonths = useMemo(() => getAvailableMonths(trips, pages), [trips, pages]);
 
   const filtered = useMemo(() => {
@@ -72,6 +93,40 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   const tripKmGaps = useMemo(() => detectTripGaps(trips), [trips]);
   const tripKmGapIds = useMemo(() => new Set(tripKmGaps.filter((g) => g.kind === 'km').map((g) => g.tripId)), [tripKmGaps]);
+
+  // Chronological sorted trips and gap pairs for Fill Gap / Shift
+  const sortedAll = useMemo(() => sortTripsChronologically(trips), [trips]);
+  const sortedIdToIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    sortedAll.forEach((t, i) => m.set(t.id, i));
+    return m;
+  }, [sortedAll]);
+
+  const gapPairs: GapPair[] = useMemo(() => {
+    const pairs: GapPair[] = [];
+    for (let i = 0; i < sortedAll.length - 1; i++) {
+      const cur = sortedAll[i];
+      const nxt = sortedAll[i + 1];
+      const expected = roundToIntegerKm(cur.end_km);
+      const actual = roundToIntegerKm(nxt.start_km);
+      if (expected !== actual) {
+        pairs.push({ predecessor: cur, successor: nxt, expected, actual, delta: actual - expected });
+      }
+    }
+    return pairs;
+  }, [sortedAll]);
+
+  const predecessorGapMap = useMemo(() => {
+    const m = new Map<string, GapPair>();
+    for (const p of gapPairs) m.set(p.predecessor.id, p);
+    return m;
+  }, [gapPairs]);
+
+  const successorGapMap = useMemo(() => {
+    const m = new Map<string, GapPair>();
+    for (const p of gapPairs) m.set(p.successor.id, p);
+    return m;
+  }, [gapPairs]);
 
   // Group trips by date for alternating row backgrounds — chronological distinct order among visible rows
   const dateGroups = useMemo(() => {
@@ -250,6 +305,285 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setConfirmDelete(null);
     setImportMsg('Record deleted');
     onDataChanged?.();
+  };
+
+  // Persist helper: bulk via /api/import with localStorage fallback
+  const persistTripsAndPages = async (newTrips: Trip[], recomputedPages: BookPage[], toastMsg: string, removedId?: string) => {
+    // Optimistic localStorage write
+    try {
+      localStorage.setItem('fleetledger_trips', JSON.stringify(newTrips));
+      localStorage.setItem('fleetledger_book_pages', JSON.stringify(recomputedPages));
+    } catch {}
+    // Try bulk API
+    try {
+      const res = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages: recomputedPages, trips: newTrips }) });
+      if (!res.ok) throw new Error('bulk import failed');
+    } catch {
+      // fallback: try per-page save
+      for (const p of recomputedPages) {
+        try { await savePage(p); } catch {}
+      }
+      // fallback: per-trip via /api/trips PUT/POST handled by localStorage already; for removed, try DELETE
+    }
+    if (removedId) {
+      try { await fetch(`/api/trips?id=${encodeURIComponent(removedId)}`, { method: 'DELETE' }); } catch {}
+      // localStorage already removed
+    }
+    setImportMsg(toastMsg);
+    onDataChanged?.();
+  };
+
+  const recomputePagesForTrips = async (newTrips: Trip[]): Promise<BookPage[]> => {
+    const vp = await getVehicleProfile().catch(()=>null);
+    const openingKm = vp ? roundToIntegerKm((vp.current_odometer ?? 0)) : 0;
+    const openingFuel = vp ? roundToOneDecimal((vp as unknown as Record<string, unknown>).current_fuel_level as number ?? 10) : 10;
+    return recalculatePageBalancesFromOpening({ pages, trips: newTrips, opening: { openingKm, openingFuel } });
+  };
+
+  // Gap Fill handlers
+  const openGapFill = (pair: GapPair) => {
+    setGapFillTarget(pair);
+    setGapFillForm({ date: pair.predecessor.date, places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+    setGapFillError(null);
+    setOpenMenuId(null);
+  };
+
+  const handleGapFillSave = async () => {
+    if (!gapFillTarget) return;
+    // Validate gap still exists
+    const currentGaps = detectTripGaps(trips);
+    const stillExists = currentGaps.some(g => g.tripId === gapFillTarget.successor.id && g.expected === gapFillTarget.expected && g.actual === gapFillTarget.actual);
+    // Also check via sorted recompute
+    if (!stillExists) {
+      // re-derive via sortedAll gap check
+      const check = gapPairs.find(p => p.predecessor.id === gapFillTarget.predecessor.id && p.successor.id === gapFillTarget.successor.id);
+      if (!check) {
+        setGapFillError('Gap no longer exists');
+        return;
+      }
+    }
+    const startKm = roundToIntegerKm(gapFillTarget.expected);
+    const endKm = roundToIntegerKm(gapFillTarget.actual);
+    if (endKm < startKm) { setGapFillError('End KM must be >= Start KM'); return; }
+    if (!gapFillForm.places_visited.trim()) { setGapFillError('Places Visited is required'); return; }
+    if (!gapFillForm.end_time.trim()) { setGapFillError('End Time is required'); return; }
+    if (gapFillForm.date < gapFillTarget.predecessor.date || gapFillForm.date > gapFillTarget.successor.date) {
+      setGapFillError(`Date must be between ${gapFillTarget.predecessor.date} and ${gapFillTarget.successor.date}`);
+      return;
+    }
+    if (!['Official','Private'].includes(gapFillForm.trip_type)) { setGapFillError('Trip Type must be Official or Private'); return; }
+
+    // Build new trip
+    const vp = await getVehicleProfile().catch(()=>null);
+    const vehicleId = vp?.id ?? 'veh-1';
+    // Determine page assignment
+    const assignment = assignPageForNewTrip({ pages, trips, newTripDate: gapFillForm.date });
+    if ('allowed' in assignment && (assignment as any).allowed === false) {
+      setGapFillError(`Cannot add trip: ${ (assignment as any).reason } limit reached for ${gapFillForm.date}`);
+      return;
+    }
+    const assign = assignment as { pageId: string; dayIndex: number; tripIndex: number };
+    const newTrip: Trip = {
+      id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      vehicle_id: vehicleId,
+      page_id: assign.pageId,
+      date: gapFillForm.date,
+      day_index: assign.dayIndex,
+      trip_index: assign.tripIndex,
+      start_time: gapFillForm.start_time.trim(),
+      end_time: gapFillForm.end_time.trim(),
+      start_km: startKm,
+      end_km: endKm,
+      trip_distance: roundToIntegerKm(endKm - startKm),
+      trip_type: gapFillForm.trip_type,
+      places_visited: gapFillForm.places_visited.trim(),
+      fuel_pumped_amount: parseFloat(gapFillForm.fuel_pumped_amount) || 0,
+      fuel_order_no: gapFillForm.fuel_order_no.trim(),
+      created_at: new Date().toISOString(),
+    };
+    // Validate pagination pre-flight with no-shift insertion
+    // Gap fill is no-shift: insert between predecessor and successor without moving successor
+    const sortedIdx = sortedIdToIndex.get(gapFillTarget.predecessor.id) ?? -1;
+    const newSorted = [...sortedAll];
+    newSorted.splice(sortedIdx + 1, 0, newTrip);
+    // Validate pagination constraints for the newSorted set (with recomputed pages)
+    const recomputed = await recomputePagesForTrips(newSorted);
+    const violations = validatePaginationConstraints(recomputed, newSorted);
+    if (violations.length > 0) {
+      setGapFillError(`Pagination violation: ${violations.map(v=>v.violation).join('; ')}`);
+      return;
+    }
+    // Persist
+    await persistTripsAndPages(newSorted, recomputed, `Gap filled — ${newTrip.start_km}→${newTrip.end_km} (${newTrip.trip_distance} km)`);
+    setGapFillTarget(null);
+  };
+
+  // Insert After handlers
+  const openInsert = (trip: Trip) => {
+    const idx = sortedIdToIndex.get(trip.id) ?? -1;
+    setInsertTarget({ anchor: trip, sortedIdx: idx });
+    setInsertForm({ date: trip.date, start_km: String(roundToIntegerKm(trip.end_km)), end_km: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+    setInsertError(null);
+    setOpenMenuId(null);
+  };
+
+  const handleInsertPreview = () => {
+    if (!insertTarget) return;
+    const startNum = parseInt(insertForm.start_km, 10);
+    const endNum = parseInt(insertForm.end_km, 10);
+    if (isNaN(startNum) || isNaN(endNum)) { setInsertError('Start KM and End KM are required integers'); return; }
+    const s = roundToIntegerKm(startNum);
+    const e = roundToIntegerKm(endNum);
+    if (e < s) { setInsertError('End KM must be >= Start KM'); return; }
+    if (!insertForm.places_visited.trim()) { setInsertError('Places Visited is required'); return; }
+    if (!insertForm.end_time.trim()) { setInsertError('End Time is required'); return; }
+    // date clamp
+    const nextTrip = sortedAll[insertTarget.sortedIdx + 1] ?? null;
+    const minDate = insertTarget.anchor.date;
+    const maxDate = nextTrip ? nextTrip.date : null;
+    if (insertForm.date < minDate || (maxDate && insertForm.date > maxDate)) {
+      setInsertError(`Date must be between ${minDate} and ${maxDate ?? 'future'}`);
+      return;
+    }
+    const delta = e - s;
+    const downstream = sortedAll.slice(insertTarget.sortedIdx + 1);
+    // Build preview trips for first 3 downstream
+    const preview = downstream.slice(0, 3).map(t => ({
+      before: t,
+      after: { ...t, start_km: roundToIntegerKm(t.start_km + delta), end_km: roundToIntegerKm(t.end_km + delta), trip_distance: roundToIntegerKm(t.trip_distance) },
+    }));
+    // Build newTrip for confirm (page assignment deferred to confirm)
+    const newTripTemp: Trip = {
+      id: `trip-preview`,
+      vehicle_id: 'veh-1',
+      page_id: insertTarget.anchor.page_id,
+      date: insertForm.date,
+      day_index: 1,
+      trip_index: 1,
+      start_time: insertForm.start_time.trim(),
+      end_time: insertForm.end_time.trim(),
+      start_km: s,
+      end_km: e,
+      trip_distance: roundToIntegerKm(e - s),
+      trip_type: insertForm.trip_type,
+      places_visited: insertForm.places_visited.trim(),
+      fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
+      fuel_order_no: insertForm.fuel_order_no.trim(),
+    };
+    setInsertConfirm({ delta, downstreamCount: downstream.length, preview, newTrip: newTripTemp });
+    setInsertError(null);
+  };
+
+  const handleInsertConfirm = async () => {
+    if (!insertTarget || !insertConfirm) return;
+    const s = roundToIntegerKm(parseInt(insertForm.start_km, 10));
+    const e = roundToIntegerKm(parseInt(insertForm.end_km, 10));
+    const delta = e - s;
+    const vp = await getVehicleProfile().catch(()=>null);
+    const vehicleId = vp?.id ?? 'veh-1';
+    const assignment = assignPageForNewTrip({ pages, trips, newTripDate: insertForm.date });
+    // Handle MAX_TRIPS_PER_DAY blocked -> create new page manually if needed; for now treat as error unless auto-split desired
+    if ('allowed' in assignment && (assignment as any).allowed === false) {
+      // Attempt auto-split: create a new page for this date if exceeds limit — since spec expects auto-split, we allow creation
+      // For simplicity, allow insertion on new page anyway using next page id
+      const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
+      const last = sortedPages[sortedPages.length-1];
+      // Next page number
+      const nextNumber = last ? last.page_number + 1 : 1;
+      const newTrip: Trip = {
+        id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        vehicle_id: vehicleId,
+        page_id: `page-${nextNumber}`,
+        date: insertForm.date,
+        day_index: 1,
+        trip_index: 1,
+        start_time: insertForm.start_time.trim(),
+        end_time: insertForm.end_time.trim(),
+        start_km: s,
+        end_km: e,
+        trip_distance: roundToIntegerKm(e - s),
+        trip_type: insertForm.trip_type,
+        places_visited: insertForm.places_visited.trim(),
+        fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
+        fuel_order_no: insertForm.fuel_order_no.trim(),
+        created_at: new Date().toISOString(),
+      };
+      // Use shift helper with new page id — still shifts downstream
+      const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
+      const recomputed = await recomputePagesForTrips(result.trips);
+      // Need to ensure pages array includes the new page if not exists
+      let pagesForRecalc = recomputed;
+      if (!pagesForRecalc.find(p=>p.id===newTrip.page_id)) {
+        // create page entry if missing in recomputed (recalculate will not create pages, it only updates existing)
+        // Manually add page
+        const month = insertForm.date.slice(0,7);
+        const newPage: BookPage = { id: newTrip.page_id, vehicle_id: vehicleId, page_number: nextNumber, month, start_km: s, end_km: e, start_fuel_balance: 10, end_fuel_balance: 10, created_at: new Date().toISOString() };
+        pagesForRecalc = [...pagesForRecalc, newPage].sort((a,b)=>a.page_number-b.page_number);
+        // Recalculate again with new page included
+        const vp2 = await getVehicleProfile().catch(()=>null);
+        const openingKm = vp2 ? roundToIntegerKm((vp2.current_odometer ?? 0)) : 0;
+        const openingFuel = vp2 ? roundToOneDecimal((vp2 as unknown as Record<string, unknown>).current_fuel_level as number ?? 10) : 10;
+        pagesForRecalc = recalculatePageBalancesFromOpening({ pages: pagesForRecalc, trips: result.trips, opening: { openingKm, openingFuel } });
+      }
+      await persistTripsAndPages(result.trips, pagesForRecalc, `Trip inserted — ${result.trips.length - sortedAll.length} inserted, ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
+      setInsertConfirm(null);
+      setInsertTarget(null);
+      return;
+    }
+    const assign = assignment as { pageId: string; dayIndex: number; tripIndex: number };
+    const newTrip: Trip = {
+      id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      vehicle_id: vehicleId,
+      page_id: assign.pageId,
+      date: insertForm.date,
+      day_index: assign.dayIndex,
+      trip_index: assign.tripIndex,
+      start_time: insertForm.start_time.trim(),
+      end_time: insertForm.end_time.trim(),
+      start_km: s,
+      end_km: e,
+      trip_distance: roundToIntegerKm(e - s),
+      trip_type: insertForm.trip_type,
+      places_visited: insertForm.places_visited.trim(),
+      fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
+      fuel_order_no: insertForm.fuel_order_no.trim(),
+      created_at: new Date().toISOString(),
+    };
+    const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
+    // Pre-flight pagination validation on shifted trips
+    const recomputed = await recomputePagesForTrips(result.trips);
+    const violations = validatePaginationConstraints(recomputed, result.trips);
+    if (violations.length > 0) {
+      setInsertError(`Pagination violation: ${violations.map(v=>v.violation).join('; ')} — may need new Page auto-split`);
+      // Allow auto-split via createNextPage? For now block
+      return;
+    }
+    await persistTripsAndPages(result.trips, recomputed, `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
+    setInsertConfirm(null);
+    setInsertTarget(null);
+  };
+
+  // Remove & Shift handlers
+  const openRemoveShift = (trip: Trip) => {
+    const idx = sortedIdToIndex.get(trip.id) ?? -1;
+    const delta = roundToIntegerKm(trip.end_km) - roundToIntegerKm(trip.start_km);
+    const downstream = sortedAll.slice(idx + 1);
+    setRemoveTarget({ trip, sortedIdx: idx, delta, downstream });
+    setOpenMenuId(null);
+  };
+
+  const handleRemoveConfirm = async () => {
+    if (!removeTarget) return;
+    const result = shiftForRemove(sortedAll, removeTarget.sortedIdx);
+    const recomputed = await recomputePagesForTrips(result.trips);
+    // No pagination violation expected on remove (reduces counts), but validate for safety
+    const violations = validatePaginationConstraints(recomputed, result.trips);
+    if (violations.length > 0) {
+      setImportMsg(`Pagination violation after remove: ${violations.map(v=>v.violation).join('; ')}`);
+      // continue anyway; empty pages retained
+    }
+    await persistTripsAndPages(result.trips, recomputed, `Trip removed — ${removeTarget.downstream.length} trips shifted by ${result.delta} km`, removeTarget.trip.id);
+    setRemoveTarget(null);
   };
 
   // Export
@@ -613,7 +947,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Econ</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Balance</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Page</th>
-              <th className="py-2.5 px-2">Del</th>
+              <th className="py-2.5 px-2">⋯</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-rule-line font-body-sm text-sm text-on-surface">
@@ -635,6 +969,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const isPrivateType = t.trip_type === 'Private';
                 const shouldOrange = isDummyOrPrivateTrip || isPrivateType;
                 const rowBg = shouldOrange ? 'bg-orange-200' : isAltDay ? 'bg-slate-200' : 'bg-white';
+                const succGap = successorGapMap.get(t.id);
+                const predGap = predecessorGapMap.get(t.id);
                 return (
                 <tr
                   key={t.id}
@@ -656,7 +992,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     {renderEditableCell(t, 'end_time', t.end_time || '-')}
                   </td>
                   <td className={`py-2 px-2 text-right font-odometer-sm text-xs border-r border-rule-line ${hasKmGap ? 'bg-red-100 font-bold' : ''}`}>
-                    {renderEditableCell(t, 'start_km', Math.round(t.start_km).toLocaleString(), 'right')}
+                    <div className="flex flex-col items-end gap-1">
+                      {renderEditableCell(t, 'start_km', Math.round(t.start_km).toLocaleString(), 'right')}
+                      {succGap && (
+                        <button
+                          data-testid={`fill-gap-chip-${t.id}`}
+                          onClick={() => openGapFill(succGap)}
+                          className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-600 text-white hover:bg-red-700"
+                          title={`Fill Gap ${succGap.expected}→${succGap.actual}`}
+                        >
+                          + Fill Gap {succGap.delta} km
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="py-2 px-2 text-right font-odometer-sm text-xs border-r border-rule-line">
                     {renderEditableCell(t, 'end_km', Math.round(t.end_km).toLocaleString(), 'right')}
@@ -691,8 +1039,49 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-xs font-mono border-r border-rule-line">
                     {t.page_id.replace('page-', 'P')}
                   </td>
-                  <td className="py-2 px-1 text-center">
-                    <button onClick={() => setConfirmDelete(t.id)} className="text-red-600 hover:text-red-800 text-xs px-1" title="Delete">🗑️</button>
+                  <td className="py-2 px-1 text-center relative">
+                    <button
+                      data-testid={`row-menu-${t.id}`}
+                      onClick={() => setOpenMenuId(openMenuId === t.id ? null : t.id)}
+                      className="px-2 py-1 text-xs font-bold rounded hover:bg-paper-gutter"
+                      aria-label="Actions"
+                    >
+                      ⋯
+                    </button>
+                    {openMenuId === t.id && (
+                      <div className="absolute right-1 top-8 z-20 bg-paper-sheet border border-rule-line rounded-lg shadow-lg py-1 w-48 text-left">
+                        {predGap && (
+                          <button
+                            data-testid={`fill-gap-menu-${t.id}`}
+                            onClick={() => openGapFill(predGap)}
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter"
+                          >
+                            Fill Gap ({predGap.expected}→{predGap.actual})
+                          </button>
+                        )}
+                        <button
+                          data-testid={`insert-after-menu-${t.id}`}
+                          onClick={() => openInsert(t)}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter"
+                        >
+                          Insert After
+                        </button>
+                        <button
+                          data-testid={`remove-shift-menu-${t.id}`}
+                          onClick={() => openRemoveShift(t)}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter text-amber-700"
+                        >
+                          Remove &amp; Shift
+                        </button>
+                        <button
+                          data-testid={`delete-menu-${t.id}`}
+                          onClick={() => { setOpenMenuId(null); setConfirmDelete(t.id); }}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter text-red-600"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
                 );
@@ -712,7 +1101,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </span>
       </div>
 
-      {/* Confirmation Dialog */}
+      {/* Click outside to close menu */}
+      {openMenuId && <div className="fixed inset-0 z-10" onClick={() => setOpenMenuId(null)} />}
+
+      {/* Confirmation Dialog for inline edit */}
       {confirmSave && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setConfirmSave(null)}>
           <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
@@ -747,6 +1139,178 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg transition-colors">Cancel</button>
               <button onClick={() => handleDelete(confirmDelete)} className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Gap Fill Dialog */}
+      {gapFillTarget && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="gap-fill-dialog">
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-lg w-full max-h-[90vh] overflow-auto" onClick={(e)=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-1">Fill Gap ({gapFillTarget.expected}→{gapFillTarget.actual})</h3>
+            <p className="text-xs text-on-surface-variant mb-3">Gap {gapFillTarget.delta} km between {gapFillTarget.predecessor.date} ({gapFillTarget.predecessor.start_km}→{gapFillTarget.predecessor.end_km}) and {gapFillTarget.successor.date} ({gapFillTarget.successor.start_km}→{gapFillTarget.successor.end_km}). No downstream shift — consumes gap exactly.</p>
+            {gapFillError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="gap-fill-error">{gapFillError}</div>}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <label className="flex flex-col gap-1">Date
+                <input type="date" value={gapFillForm.date} min={gapFillTarget.predecessor.date} max={gapFillTarget.successor.date} onChange={e=>setGapFillForm({...gapFillForm, date:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="gap-fill-date" />
+              </label>
+              <label className="flex flex-col gap-1">Trip Type
+                <select value={gapFillForm.trip_type} onChange={e=>setGapFillForm({...gapFillForm, trip_type:e.target.value as any})} className="border border-rule-line rounded px-2 py-1" data-testid="gap-fill-type">
+                  <option value="Official">Official</option>
+                  <option value="Private">Private</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">Start KM (auto)
+                <input value={String(gapFillTarget.expected)} disabled className="border border-rule-line rounded px-2 py-1 bg-paper-gutter" data-testid="gap-fill-start" />
+              </label>
+              <label className="flex flex-col gap-1">End KM (auto)
+                <input value={String(gapFillTarget.actual)} disabled className="border border-rule-line rounded px-2 py-1 bg-paper-gutter" data-testid="gap-fill-end" />
+              </label>
+              <label className="flex flex-col gap-1">Distance (auto)
+                <input value={String(gapFillTarget.delta)} disabled className="border border-rule-line rounded px-2 py-1 bg-paper-gutter" />
+              </label>
+              <label className="flex flex-col gap-1">End Time *
+                <input type="time" value={gapFillForm.end_time} onChange={e=>setGapFillForm({...gapFillForm, end_time:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="gap-fill-end-time" />
+              </label>
+              <label className="flex flex-col gap-1">Start Time
+                <input type="time" value={gapFillForm.start_time} onChange={e=>setGapFillForm({...gapFillForm, start_time:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+              </label>
+              <label className="flex flex-col gap-1">Fuel Pumped
+                <input type="number" step="0.1" value={gapFillForm.fuel_pumped_amount} onChange={e=>setGapFillForm({...gapFillForm, fuel_pumped_amount:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+              </label>
+              <label className="col-span-2 flex flex-col gap-1">Places Visited *
+                <input value={gapFillForm.places_visited} onChange={e=>setGapFillForm({...gapFillForm, places_visited:e.target.value})} placeholder="e.g., Colombo -> Kandy" className="border border-rule-line rounded px-2 py-1" data-testid="gap-fill-places" />
+              </label>
+              <label className="flex flex-col gap-1">Fuel Order No
+                <input value={gapFillForm.fuel_order_no} onChange={e=>setGapFillForm({...gapFillForm, fuel_order_no:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>setGapFillTarget(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button data-testid="confirm-gap-fill" onClick={handleGapFillSave} className="px-4 py-2 text-sm font-semibold text-on-primary bg-slate-surface rounded-lg hover:bg-primary">Confirm Gap Fill</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Insert After Dialog */}
+      {insertTarget && !insertConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="insert-dialog">
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-lg w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-1">Insert After {insertTarget.anchor.date} ({insertTarget.anchor.start_km}→{insertTarget.anchor.end_km})</h3>
+            <p className="text-xs text-on-surface-variant mb-3">Downstream trips will shift by Δ = End − Start. Confirmation shows preview.</p>
+            {insertError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="insert-error">{insertError}</div>}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <label className="flex flex-col gap-1">Date *
+                <input type="date" value={insertForm.date} onChange={e=>setInsertForm({...insertForm, date:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-date" />
+              </label>
+              <label className="flex flex-col gap-1">Trip Type
+                <select value={insertForm.trip_type} onChange={e=>setInsertForm({...insertForm, trip_type:e.target.value as any})} className="border border-rule-line rounded px-2 py-1">
+                  <option value="Official">Official</option>
+                  <option value="Private">Private</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">Start KM *
+                <input type="number" value={insertForm.start_km} onChange={e=>setInsertForm({...insertForm, start_km:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-start" />
+              </label>
+              <label className="flex flex-col gap-1">End KM *
+                <input type="number" value={insertForm.end_km} onChange={e=>setInsertForm({...insertForm, end_km:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-end" />
+              </label>
+              <div className="col-span-2 text-[11px] text-on-surface-variant">Distance auto: {insertForm.start_km && insertForm.end_km && !isNaN(parseInt(insertForm.start_km,10)) && !isNaN(parseInt(insertForm.end_km,10)) ? roundToIntegerKm(parseInt(insertForm.end_km,10) - parseInt(insertForm.start_km,10)) : '-'} km</div>
+              <label className="flex flex-col gap-1">End Time *
+                <input type="time" value={insertForm.end_time} onChange={e=>setInsertForm({...insertForm, end_time:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-end-time" />
+              </label>
+              <label className="flex flex-col gap-1">Start Time
+                <input type="time" value={insertForm.start_time} onChange={e=>setInsertForm({...insertForm, start_time:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+              </label>
+              <label className="flex flex-col gap-1">Fuel Pumped
+                <input type="number" step="0.1" value={insertForm.fuel_pumped_amount} onChange={e=>setInsertForm({...insertForm, fuel_pumped_amount:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+              </label>
+              <label className="flex flex-col gap-1">Fuel Order No
+                <input value={insertForm.fuel_order_no} onChange={e=>setInsertForm({...insertForm, fuel_order_no:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+              </label>
+              <label className="col-span-2 flex flex-col gap-1">Places Visited *
+                <input value={insertForm.places_visited} onChange={e=>setInsertForm({...insertForm, places_visited:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-places" />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>setInsertTarget(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button data-testid="insert-preview-btn" onClick={handleInsertPreview} className="px-4 py-2 text-sm font-semibold text-on-primary bg-slate-surface rounded-lg hover:bg-primary">Preview Shift</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Insert Confirmation Preview */}
+      {insertConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="insert-confirm-modal">
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-2">Insert Trip — Shift {insertConfirm.downstreamCount} trips by {insertConfirm.delta} km?</h3>
+            <p className="text-xs text-on-surface-variant mb-3">This will insert a new trip and shift all later trips chronologically. Fuel chain will be recomputed forward.</p>
+            <div className="border border-rule-line rounded-lg overflow-hidden mb-3">
+              <table className="w-full text-xs">
+                <thead className="bg-paper-gutter">
+                  <tr><th className="px-2 py-1 text-left">Trip</th><th className="px-2 py-1 text-right">Before</th><th className="px-2 py-1 text-right">After</th></tr>
+                </thead>
+                <tbody>
+                  {insertConfirm.preview.map((p, i) => (
+                    <tr key={p.before.id} data-testid={`shift-preview-row-${i}`} className="border-t border-rule-line">
+                      <td className="px-2 py-1">{p.before.date} {p.before.start_km}→{p.before.end_km}</td>
+                      <td className="px-2 py-1 text-right font-mono">{p.before.start_km}→{p.before.end_km}</td>
+                      <td className="px-2 py-1 text-right font-mono font-bold">{p.after.start_km}→{p.after.end_km}</td>
+                    </tr>
+                  ))}
+                  {insertConfirm.downstreamCount > 3 && (
+                    <tr className="border-t border-rule-line"><td colSpan={3} className="px-2 py-1 text-center text-on-surface-variant">+{insertConfirm.downstreamCount - 3} more trips will shift</td></tr>
+                  )}
+                  {insertConfirm.downstreamCount === 0 && (
+                    <tr><td colSpan={3} className="px-2 py-2 text-center text-on-surface-variant">No downstream trips to shift (insert at end)</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {insertError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2">{insertError}</div>}
+            <div className="flex justify-end gap-2">
+              <button onClick={()=>setInsertConfirm(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button data-testid="confirm-insert-shift" onClick={handleInsertConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-slate-surface rounded-lg hover:bg-primary">Confirm Insert &amp; Shift</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove & Shift Confirmation */}
+      {removeTarget && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="remove-confirm-modal">
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-2">Remove Trip — Shift {removeTarget.downstream.length} trips by −{removeTarget.delta} km?</h3>
+            <p className="text-xs text-on-surface-variant mb-2">Remove {removeTarget.trip.date} ({removeTarget.trip.start_km}→{removeTarget.trip.end_km}, {removeTarget.delta} km) and shift downstream down by Δ. This cannot be undone without re-inserting. Empty Pages retained.</p>
+            <div className="border border-rule-line rounded-lg overflow-hidden mb-3">
+              <table className="w-full text-xs">
+                <thead className="bg-paper-gutter">
+                  <tr><th className="px-2 py-1 text-left">Trip</th><th className="px-2 py-1 text-right">Before</th><th className="px-2 py-1 text-right">After</th></tr>
+                </thead>
+                <tbody>
+                  {removeTarget.downstream.slice(0,3).map((t,i) => {
+                    const afterStart = roundToIntegerKm(t.start_km - removeTarget.delta);
+                    const afterEnd = roundToIntegerKm(t.end_km - removeTarget.delta);
+                    return (
+                      <tr key={t.id} data-testid={`remove-preview-row-${i}`} className="border-t border-rule-line">
+                        <td className="px-2 py-1">{t.date} {t.start_km}→{t.end_km}</td>
+                        <td className="px-2 py-1 text-right font-mono">{t.start_km}→{t.end_km}</td>
+                        <td className="px-2 py-1 text-right font-mono font-bold">{afterStart}→{afterEnd}</td>
+                      </tr>
+                    );
+                  })}
+                  {removeTarget.downstream.length > 3 && <tr className="border-t border-rule-line"><td colSpan={3} className="px-2 py-1 text-center text-on-surface-variant">+{removeTarget.downstream.length - 3} more trips will shift</td></tr>}
+                  {removeTarget.downstream.length === 0 && <tr><td colSpan={3} className="px-2 py-2 text-center text-on-surface-variant">No downstream trips to shift</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-on-surface-variant mb-3">Plain Delete (no shift) remains available in the ⋯ menu and may leave a new RED gap.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={()=>setRemoveTarget(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button data-testid="confirm-remove-shift" onClick={handleRemoveConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700">Remove &amp; Shift</button>
             </div>
           </div>
         </div>

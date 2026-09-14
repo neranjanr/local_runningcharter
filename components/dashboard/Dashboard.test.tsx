@@ -69,7 +69,7 @@ describe('Dashboard components', () => {
     expect(screen.getByTestId('metric-fuel')).toHaveTextContent('48.3 L');
     expect(screen.getByTestId('metric-fuel')).toHaveTextContent('60.4%');
     expect(screen.getByTestId('metric-odo')).toHaveTextContent('123,456 KM');
-    expect(screen.getByTestId('metric-odo')).toHaveTextContent('2024-10-21');
+    expect(screen.getByTestId('metric-odo')).toHaveTextContent('21-10-2024');
   });
 
   it('MonthlyBreakdownChart renders monthly rows', () => {

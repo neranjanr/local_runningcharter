@@ -18,6 +18,11 @@ interface Props {
   dayGroupFuelGaps?: FuelGap[];
 }
 
+function formatAuditDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return `${d}-${m}-${y}`;
+}
+
 export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCapacity, rawEconomies, rawInTanks, onEconomyChange, onInTankChange, pageGaps, dayGroupFuelGaps }: Props) {
   if (ledgerDays.length === 0) {
     return (
@@ -83,7 +88,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Date</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{d.dayLabel}</td>
+                  <td key={d.date} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{formatAuditDate(d.date)}</td>
                 ))}
                 <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px] tracking-widest">—</td>
               </tr>

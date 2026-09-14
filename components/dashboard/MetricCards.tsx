@@ -7,10 +7,15 @@ interface Props {
   metrics: DashboardMetrics;
 }
 
+function formatDdMmYyyy(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return `${d}-${m}-${y}`;
+}
+
 export function MetricCards({ metrics }: Props) {
   // ODO graphic: 6-digit mechanical odometer
   const odoStr = String(Math.round(metrics.lastOdo)).padStart(6, '0');
-  const odoDateLabel = metrics.lastOdoDate ? `as at ${metrics.lastOdoDate}` : 'as at —';
+  const odoDateLabel = metrics.lastOdoDate ? `as at ${formatDdMmYyyy(metrics.lastOdoDate)}` : 'as at —';
   const fuelPct = Math.min(100, Math.max(0, metrics.fuelLevelPercent));
   // Gauge needle angle: -90deg (empty) to +90deg (full), 0deg = 50%
   const needleAngle = (fuelPct / 100) * 180 - 90;
@@ -21,8 +26,8 @@ export function MetricCards({ metrics }: Props) {
       value: `${Math.round(metrics.officialKm)} KM`,
       sub: `${metrics.tripCount} trips tracked`,
       accent: 'text-trip-official',
-      bg: 'bg-surface-container-highest',
-      border: 'border-trip-official/20',
+      bg: 'bg-amber-50/60',
+      border: 'border-amber-200',
       testId: 'metric-official',
     },
     {
@@ -30,8 +35,8 @@ export function MetricCards({ metrics }: Props) {
       value: `${Math.round(metrics.privateKm)} KM`,
       sub: 'Personal usage',
       accent: 'text-trip-private',
-      bg: 'bg-surface-container',
-      border: 'border-trip-private/20',
+      bg: 'bg-amber-50/60',
+      border: 'border-amber-200',
       testId: 'metric-private',
     },
     {
@@ -39,9 +44,9 @@ export function MetricCards({ metrics }: Props) {
       value: `${Math.round(metrics.totalKm)} KM`,
       sub: 'Ledger-verified odometer span',
       accent: 'text-primary',
-      bg: 'bg-slate-surface',
-      textLight: true,
-      border: 'border-slate-700',
+      bg: 'bg-amber-100/70',
+      textLight: false,
+      border: 'border-amber-300',
       testId: 'metric-total',
     },
     {

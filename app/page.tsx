@@ -10,6 +10,7 @@ import { computeThisMonthMetrics, computeMonthlyBreakdown, computePageWiseDistan
 import { MetricCards } from '@/components/dashboard/MetricCards';
 import { MonthlyBreakdownChart } from '@/components/dashboard/MonthlyBreakdownChart';
 import { PageWiseChart } from '@/components/dashboard/PageWiseChart';
+import { FuelInSummary } from '@/components/dashboard/FuelInSummary';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ContinuityAlertBanner } from '@/components/ContinuityAlertBanner';
 
@@ -70,6 +71,9 @@ export default function DashboardPage() {
 
       {/* Metric cards */}
       <MetricCards metrics={metrics} />
+
+      {/* Fuel IN Summary — 12 + MORE */}
+      {hasData && <FuelInSummary trips={trips} />}
 
       {/* Vehicle context strip */}
       {vehicle && (
