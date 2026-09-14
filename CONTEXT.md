@@ -131,3 +131,35 @@ _Avoid_: Add record in between, middle insert
 
 **Removed Trip (Shift)**: Deletion of a Trip (the “Remove & Shift” action, distinct from plain **Delete** which leaves a gap) that shifts all downstream Trips down by `Δ = removed.end − removed.start` (`Start KM −= Δ`, `End KM −= Δ`), recomputes fuel chain forward, and patches Page continuity; confirmation previews `N` and `−Δ`; empty Pages are retained v1 (not collapsed).
 _Avoid_: Delete, shift-delete
+
+**Focused Trip**: The ephemeral highlight-and-scroll target after a mutating operation in All Trips; `Inserted Trip`/`Gap Fill Trip` focuses the new row, `Removed Trip`/`Delete` focuses the predecessor (or successor if earliest) after clearing any search/month filter so the row is visible; rendered as `ring-2 ring-telemetry-cyan` + `bg-cyan-50` flash for ~3s and scrolled to center.
+_Avoid_: Selected row, active row
+
+**Sheet Pull Import**: Direct pull from the Buffer Sheet via `GET scriptUrl?action=allRows` using the same Sheet Proxy as QuickTrip Mobile, compared by Odo Key (`date|start_km|end_km` integer) into New / Changed (same odo, diff fields) / Skipped (exact duplicate) buckets, previewed with consent, validated by the same `validateNoOverlap`/`validatePaginationForImport` pipeline and persisted via `importTripsFromWorkbook` + bulk `/api/import` (localStorage fallback), focusing the earliest newly added Trip (`date||start_km` order) and flashing all imported rows `bg-cyan-50`; triggered manually by "Import from Google Sheet" (formerly "Pull from Google Sheet") next to Import from Excel.
+_Avoid_: Sheet sync, auto-pull
+
+**Sheet Settings**: Persisted Buffer Sheet identity (`mobile.sheetId` extracted from full Sheet URL + `mobile.scriptUrl` Apps Script URL) shared between `QuickTrip Mobile` and All Trips header, editable via a shared dialog that probes `?action=allRows`; last successful pull time stored as `mobile.lastSheetPullAt` and push time as `mobile.lastSheetPushAt`.
+_Avoid_: Sheet config, path
+
+**Import Preview**: Modal shown before a Sheet Pull commit, listing New Trips (checked by default) and Changed rows (unchecked, with `old→new` diff such as `places: "A"→"B"`), supporting select/deselect all, blocking Confirm until at least one row is checked and until overlap/pagination pre-flight passes.
+_Avoid_: Import dialog, confirm screen
+
+**Sheet Push (Export to Google Sheet)**: Inverse of Sheet Pull Import; manual push that atomically rewrites the Buffer Sheet with all DB Trips sorted `date ASC → start_km ASC` plus header, preserving valid buffer rows whose Odo Key not in DB (appended at bottom in original buffer order, DB wins on same Odo Key); invalid buffer rows ignored; via `POST rewriteSheet` with `LockService`; stores `mobile.lastSheetPushAt`; triggered manually by "Export to Google Sheet" next to Import from Google Sheet.
+_Avoid_: Sheet sync, auto-push
+
+**Push Preview**: Modal shown before a Sheet Push commit, showing counts `DB rows N | Preserved M (unimported) | Overwriting K | Invalid ignored X` with expandable preserved-row list, blocking Confirm until settings configured.
+_Avoid_: Export dialog, confirm screen
+
+### Mobile Capture
+
+**QuickTrip Mobile**: Installable PWA for Android that mirrors QuickTripForm entry (Date, Integer KM reciprocals, Estimated Start Time, Trip Type, Places Visited, Drawn Fuel) but writes to a Buffer Sheet, not the deployment DB; lives in `quicktrip-mobile/` sibling folder (or `app/mobile/` route) and is usable while deployment is unreachable.
+_Avoid_: Mobile app, trip app
+
+**Buffer Sheet**: A dedicated Google Sheet (QuickTrip Buffer) with the identical All Trips Workbook header row (`Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No`) used as offline staging; rows are later imported into the Book via Trip Import (manual .xlsx download or future direct pull).
+_Avoid_: Staging sheet, temp sheet
+
+**Sheet Proxy**: Google Apps Script Web App bound to the Buffer Sheet exposing `POST appendTrip` / `POST rewriteSheet` and `GET last10` / `GET allRows` over HTTPS so the PWA writes/reads without embedding Google credentials; the script re-applies Integer KM and 1-dec fuel rounding, rejects invalid `End < Start`, and uses `LockService` for atomic rewrite.
+_Avoid_: Sheet API, backend proxy
+
+**Mobile Queue**: IndexedDB-backed offline buffer in QuickTrip Mobile that stores Trips when offline and retries Sheet Proxy sync when online, preserving sheet truth for Start KM auto-fill.
+_Avoid_: Offline cache, sync queue

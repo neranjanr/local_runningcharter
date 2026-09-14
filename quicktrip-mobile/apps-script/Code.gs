@@ -1,0 +1,186 @@
+/**
+ * Sheet Proxy — Apps Script bound to Buffer Sheet (ADR 0014)
+ * Install: Extensions → Apps Script → paste this file → Deploy → Web App → Execute as you, Anyone with link (or restrict).
+ * Sheet must have header row exactly: Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No
+ * Headers validated order-enforced case-insensitive; Type col accepts alias; Fuel col accepts Fuel Drawn alias.
+ */
+const HEADERS = ['Date','Start KM','End KM','Distance','Start Time','End Time','Private / Official','Places Visited','Fuel Pumped','Fuel Order No'];
+const SHEET_NAME = 'All Trips';
+
+function getSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) sh = ss.getSheets()[0];
+  return sh;
+}
+
+function roundIntKm_(n){ return Math.round(Number(n)); }
+function round1_(n){ return Math.round(Number(n)*10)/10; }
+
+function doGet(e){
+  const action = (e && e.parameter && e.parameter.action) || '';
+  if (action === 'last10' || action === 'last' ) {
+    const sh = getSheet_();
+    const lastRow = sh.getLastRow();
+    if (lastRow < 2) return json_({ rows: [] });
+    const start = Math.max(2, lastRow - 9);
+    const vals = sh.getRange(start, 1, lastRow - start + 1, HEADERS.length).getValues();
+    const rows = vals.map(r => ({
+      date: formatDate_(r[0]),
+      start_km: roundIntKm_(r[1]),
+      end_km: roundIntKm_(r[2]),
+      trip_distance: roundIntKm_(r[3] || (Number(r[2])-Number(r[1]))),
+      start_time: formatTime_(r[4]),
+      end_time: formatTime_(r[5]),
+      trip_type: String(r[6]).toLowerCase().includes('priv') ? 'Private' : 'Official',
+      places_visited: String(r[7]||''),
+      fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
+      fuel_order_no: String(r[9]||''),
+    })).filter(r => r.date && r.places_visited);
+    return json_({ rows });
+  }
+  if (action === 'allRows') {
+    const sh = getSheet_();
+    const lastRow = sh.getLastRow();
+    if (lastRow < 2) return json_({ rows: [] });
+    const vals = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+    const rows = vals.map(r => ({
+      date: formatDate_(r[0]),
+      start_km: roundIntKm_(r[1]),
+      end_km: roundIntKm_(r[2]),
+      trip_distance: roundIntKm_(r[3]),
+      start_time: formatTime_(r[4]),
+      end_time: formatTime_(r[5]),
+      trip_type: String(r[6]).toLowerCase().includes('priv') ? 'Private' : 'Official',
+      places_visited: String(r[7]||''),
+      fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
+      fuel_order_no: String(r[9]||''),
+    }));
+    return json_({ rows });
+  }
+  return json_({ ok: true, headers: HEADERS, hint: '?action=last10 or ?action=allRows' });
+}
+
+function doPost(e){
+  try {
+    const body = JSON.parse(e.postData.contents);
+    if (body.action === 'rewriteSheet' || body.action === 'pushAll') {
+      const rows = body.rows || [];
+      if (!Array.isArray(rows)) return json_({ ok:false, error:'rows must be an array' });
+      const lock = LockService.getDocumentLock();
+      const gotLock = lock.tryLock(30000);
+      if (!gotLock) return json_({ ok:false, error:'Could not acquire lock — try again' });
+      try {
+        const sh = getSheet_();
+        ensureHeaders_(sh);
+        // Atomic batch rewrite: clear + header + values
+        sh.clear();
+        sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+        sh.getRange(1,1,1,HEADERS.length).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+        if (rows.length > 0) {
+          const values = rows.map(function(t){
+            var sKm = roundIntKm_(t.start_km);
+            var eKm = roundIntKm_(t.end_km);
+            var dist = roundIntKm_(t.trip_distance != null ? t.trip_distance : (eKm - sKm));
+            var fuel = t.fuel_pumped_amount != null && Number(t.fuel_pumped_amount) !== 0 ? round1_(t.fuel_pumped_amount) : 0;
+            return [
+              String(t.date||''),
+              sKm,
+              eKm,
+              dist,
+              String(t.start_time||''),
+              String(t.end_time||''),
+              t.trip_type === 'Private' ? 'Private' : 'Official',
+              String(t.places_visited||''),
+              fuel,
+              String(t.fuel_order_no||''),
+            ];
+          });
+          sh.getRange(2, 1, values.length, HEADERS.length).setValues(values);
+          sh.getRange(2, 2, values.length, 3).setNumberFormat('0');
+          sh.getRange(2, 9, values.length, 1).setNumberFormat('0.0');
+        }
+        return json_({ ok: true, rows: rows.length });
+      } finally {
+        try { lock.releaseLock(); } catch(e2) {}
+      }
+    }
+    if (body.action !== 'appendTrip' || !body.trip) return json_({ ok:false, error:'expected {action:appendTrip,trip} or {action:rewriteSheet,rows}' });
+    const t = body.trip;
+    const date = String(t.date||'').trim();
+    const places = String(t.places_visited||'').trim();
+    const endTime = String(t.end_time||'').trim();
+    const sKm = roundIntKm_(t.start_km);
+    const eKm = roundIntKm_(t.end_km);
+    const dist = roundIntKm_(t.trip_distance != null ? t.trip_distance : (eKm - sKm));
+    if (!date) return json_({ ok:false, error:'Date required' });
+    if (!places) return json_({ ok:false, error:'Places Visited required' });
+    if (!endTime) return json_({ ok:false, error:'End Time required' });
+    if (isNaN(sKm) || isNaN(eKm)) return json_({ ok:false, error:'Start/End KM required' });
+    if (eKm < sKm) return json_({ ok:false, error:'End KM < Start KM' });
+
+    const sh = getSheet_();
+    ensureHeaders_(sh);
+    sh.appendRow([
+      date,
+      sKm,
+      eKm,
+      dist,
+      String(t.start_time||''),
+      endTime,
+      t.trip_type === 'Private' ? 'Private' : 'Official',
+      places,
+      t.fuel_pumped_amount != null && Number(t.fuel_pumped_amount) !== 0 ? round1_(t.fuel_pumped_amount) : 0,
+      String(t.fuel_order_no||''),
+    ]);
+    // Format int cols as 0, fuel as 0.0
+    const lr = sh.getLastRow();
+    sh.getRange(lr, 2, 1, 3).setNumberFormat('0');
+    sh.getRange(lr, 9, 1, 1).setNumberFormat('0.0');
+    return json_({ ok: true, row: lr });
+  } catch(err){
+    return json_({ ok:false, error: String(err) });
+  }
+}
+
+function ensureHeaders_(sh){
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(HEADERS);
+    sh.getRange(1,1,1,HEADERS.length).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+    return;
+  }
+  const h = sh.getRange(1,1,1,HEADERS.length).getValues()[0].map(v=>String(v).trim());
+  const norm = s=>String(s).toLowerCase().replace(/[^a-z0-9]/g,'');
+  const ok = HEADERS.every((exp,i)=> norm(h[i])===norm(exp) || (i===6 && ['type','triptype','privateofficial'].includes(norm(h[i]))) || (i===8 && ['fuelpumped','fueldrawn'].includes(norm(h[i]))));
+  if (!ok) throw new Error('Header row mismatch. Expected: ' + HEADERS.join(' | '));
+}
+
+function formatDate_(v){
+  if (!v) return '';
+  if (Object.prototype.toString.call(v)==='[object Date]' && !isNaN(v)){
+    if (v.getFullYear()===1899) return '';
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  const s=String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d=new Date(s);
+  if (!isNaN(d) && d.getFullYear()>=2000) return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return s;
+}
+function formatTime_(v){
+  if (!v) return '';
+  if (Object.prototype.toString.call(v)==='[object Date]' && !isNaN(v)){
+    return Utilities.formatDate(v, 'UTC', 'HH:mm');
+  }
+  if (typeof v==='number' && v>=0 && v<1){
+    const mins=Math.round(v*1440);
+    return ('0'+Math.floor(mins/60)%24).slice(-2)+':'+('0'+mins%60).slice(-2);
+  }
+  const s=String(v).trim();
+  const m=s.match(/^(\d{1,2}):(\d{2})/);
+  if (m) return ('0'+m[1]).slice(-2)+':'+m[2];
+  return s;
+}
+function json_(o){
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}

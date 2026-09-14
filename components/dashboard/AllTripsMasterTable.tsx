@@ -30,6 +30,11 @@ import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
 import { sortTripsChronologically, shiftForInsert, shiftForRemove } from '@/lib/tripShift';
 import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip } from '@/lib/pagination';
 import type { Vehicle } from '@/types';
+import { SheetSettingsDialog } from '@/components/SheetSettingsDialog';
+import { getSheetSettings, fetchAllRows, getLastPullAt, setLastPullAt, pushAllRows, getLastPushAt, setLastPushAt } from '@/lib/sheetClient';
+import { compareBufferToDb, type PullComparison } from '@/lib/sheetPull';
+import { computePreservedRows, buildDbBufferRows, buildPushPayload } from '@/lib/sheetPush';
+import type { BufferTrip } from '@/lib/sheetClient';
 
 interface Props {
   trips: Trip[];
@@ -80,6 +85,29 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [insertError, setInsertError] = useState<string | null>(null);
   const [insertConfirm, setInsertConfirm] = useState<{ delta: number; downstreamCount: number; preview: Array<{ before: Trip; after: Trip }>; newTrip: Trip } | null>(null);
   const [removeTarget, setRemoveTarget] = useState<{ trip: Trip; sortedIdx: number; delta: number; downstream: Trip[] } | null>(null);
+
+  // Focus retention (Inserted → new row, Remove/Delete → predecessor)
+  const [focusedTripId, setFocusedTripId] = useState<string | null>(null);
+  const [importedIds, setImportedIds] = useState<Set<string>>(new Set());
+  const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
+
+  // Sheet Pull state
+  const [showSheetSettings, setShowSheetSettings] = useState(false);
+  const [sheetPulling, setSheetPulling] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
+  const [pullComparison, setPullComparison] = useState<PullComparison | null>(null);
+  const [showPullPreview, setShowPullPreview] = useState(false);
+  const [selectedNew, setSelectedNew] = useState<Set<string>>(new Set());
+  const [selectedChanged, setSelectedChanged] = useState<Set<string>>(new Set());
+  const [lastPullAt, setLastPullAtState] = useState<string | null>(null);
+  const [lastPushAt, setLastPushAtState] = useState<string | null>(null);
+  React.useEffect(() => { setLastPullAtState(getLastPullAt()); setLastPushAtState(getLastPushAt()); }, []);
+  // Sheet Push state
+  const [sheetPushing, setSheetPushing] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [showPushPreview, setShowPushPreview] = useState(false);
+  const [pushPreview, setPushPreview] = useState<{ dbCount: number; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number; mergedRows: BufferTrip[] } | null>(null);
+  const [pushExpanded, setPushExpanded] = useState(false);
 
   const availableMonths = useMemo(() => getAvailableMonths(trips, pages), [trips, pages]);
 
@@ -163,6 +191,40 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     }
     return map;
   }, [trips, pages]);
+
+  const focusTrip = useCallback((tripId: string | null, opts?: { clearFilter?: boolean }) => {
+    if (!tripId) return;
+    // If filtered view hides the row, clear filters per Q1
+    if (opts?.clearFilter) {
+      setSearch('');
+      setMonth('All');
+      setSortColumn('date');
+      setSortDirection('asc');
+      setImportMsg('Filter cleared to show focused row');
+    }
+    setFocusedTripId(tripId);
+    // flash imported set also
+    setTimeout(() => setFocusedTripId(null), 3200);
+    // scroll after render
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        const el = rowRefs.current.get(tripId);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 150);
+    });
+  }, []);
+
+  React.useEffect(() => {
+    if (!focusedTripId) return;
+    const t = setTimeout(() => setFocusedTripId(null), 3200);
+    return () => clearTimeout(t);
+  }, [focusedTripId]);
+
+  React.useEffect(() => {
+    if (importedIds.size === 0) return;
+    const t = setTimeout(() => setImportedIds(new Set()), 3200);
+    return () => clearTimeout(t);
+  }, [importedIds]);
 
   const handleSort = (col: SortColumn) => {
     if (sortColumn === col) {
@@ -301,10 +363,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   };
 
   const handleDelete = async (tripId: string) => {
+    const idx = sortedIdToIndex.get(tripId) ?? -1;
+    let focusId: string | null = null;
+    let needsClear = false;
+    if (idx >= 0) {
+      if (idx > 0) focusId = sortedAll[idx - 1]?.id ?? null;
+      else if (sortedAll.length > 1) focusId = sortedAll[1]?.id ?? null;
+    }
+    if (focusId && !filtered.some(t=>t.id===focusId)) needsClear = true;
     await deleteTrip(tripId);
     setConfirmDelete(null);
     setImportMsg('Record deleted');
     onDataChanged?.();
+    if (focusId) focusTrip(focusId, { clearFilter: needsClear });
   };
 
   // Persist helper: bulk via /api/import with localStorage fallback
@@ -416,6 +487,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     // Persist
     await persistTripsAndPages(newSorted, recomputed, `Gap filled — ${newTrip.start_km}→${newTrip.end_km} (${newTrip.trip_distance} km)`);
     setGapFillTarget(null);
+    const gapNeedsClear = search !== '' || month !== 'All' || tripType !== 'All';
+    focusTrip(newTrip.id, { clearFilter: gapNeedsClear });
   };
 
   // Insert After handlers
@@ -526,6 +599,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       setInsertConfirm(null);
       setInsertTarget(null);
       setInsertError(null);
+      const needsClear1 = search !== '' || month !== 'All' || tripType !== 'All';
+      focusTrip(newTrip.id, { clearFilter: needsClear1 });
       return;
     }
     const assign = assignment as { pageId: string; dayIndex: number; tripIndex: number };
@@ -557,6 +632,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     await persistTripsAndPages(result.trips, recomputed, `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
     setInsertConfirm(null);
     setInsertTarget(null);
+    const needsClear2 = search !== '' || month !== 'All' || tripType !== 'All';
+    focusTrip(newTrip.id, { clearFilter: needsClear2 });
   };
 
   // Remove & Shift handlers
@@ -578,11 +655,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       setImportMsg(`Pagination violation after remove: ${violations.map(v=>v.violation).join('; ')}`);
       // continue anyway; empty pages retained
     }
+    const focusAfterRemove = (() => {
+      const idx = removeTarget.sortedIdx;
+      if (idx > 0) return sortedAll[idx - 1]?.id ?? null;
+      // if earliest removed, focus the trip that slid into its place (new first)
+      return result.trips[0]?.id ?? null;
+    })();
+    const needsClearR = search !== '' || month !== 'All' || tripType !== 'All';
     await persistTripsAndPages(result.trips, recomputed, `Trip removed — ${removeTarget.downstream.length} trips shifted by ${result.delta} km`, removeTarget.trip.id);
     setRemoveTarget(null);
+    if (focusAfterRemove) focusTrip(focusAfterRemove, { clearFilter: needsClearR });
   };
 
-  // Export
+  // Export Excel
   const handleExport = async () => {
     const buffer = await generateAllTripsBuffer(trips);
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -592,6 +677,72 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     a.download = getAllTripsFileName();
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Push Preview + Export to Google Sheet (preserving unimported rows)
+  const handlePushToSheet = async () => {
+    const { scriptUrl } = getSheetSettings();
+    if (!scriptUrl) { setShowSheetSettings(true); return; }
+    setPushError(null);
+    setImportMsg(null);
+    setSheetPushing(true);
+    try {
+      let bufferRows: BufferTrip[];
+      try {
+        bufferRows = await fetchAllRows();
+      } catch (e: unknown) {
+        const m = e instanceof Error ? e.message : String(e);
+        const hint = m.includes('Anyone with link') ? m : m + ' — verify Apps Script deployed as "Anyone with link"';
+        setPushError(hint);
+        setImportMsg(`Sheet not modified: ${hint}`);
+        setShowSheetSettings(true);
+        setSheetPushing(false);
+        return;
+      }
+      const payload = buildPushPayload({ dbTrips: trips, bufferRows });
+      setPushPreview({
+        dbCount: trips.length,
+        preserved: payload.preserved,
+        overwritingCount: payload.overwritingCount,
+        invalidIgnored: payload.invalidIgnored,
+        mergedRows: payload.rows,
+      });
+      setPushExpanded(false);
+      setShowPushPreview(true);
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e);
+      setPushError(m);
+      setImportMsg(`Sheet not modified: ${m}`);
+    }
+    setSheetPushing(false);
+  };
+
+  const handlePushConfirm = async () => {
+    if (!pushPreview) return;
+    const { sheetId, scriptUrl } = getSheetSettings();
+    if (!sheetId || !scriptUrl) {
+      setPushError('Blocked by: Settings — configure Sheet ID and Apps Script URL');
+      setImportMsg('Sheet not modified: Blocked by: Settings');
+      return;
+    }
+    setSheetPushing(true);
+    setPushError(null);
+    try {
+      await pushAllRows(pushPreview.mergedRows);
+      const iso = new Date().toISOString();
+      setLastPushAt(iso);
+      setLastPushAtState(iso);
+      const preservedMsg = pushPreview.preserved.length > 0 ? ` (+${pushPreview.preserved.length} preserved)` : '';
+      setImportMsg(`Exported — ${pushPreview.dbCount} rows${preservedMsg}`);
+      setShowPushPreview(false);
+      setPushPreview(null);
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e);
+      setPushError(m);
+      setImportMsg(`Sheet not modified: ${m}`);
+      setShowSheetSettings(true);
+    }
+    setSheetPushing(false);
   };
 
   const handleRebuildLedger = async () => {
@@ -760,6 +911,127 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // Sheet Pull handlers
+  const handlePullFromSheet = async () => {
+    const { scriptUrl } = getSheetSettings();
+    if (!scriptUrl) { setShowSheetSettings(true); return; }
+    setSheetPulling(true);
+    setSheetError(null);
+    setImportMsg(null);
+    try {
+      const rows = await fetchAllRows();
+      const comp = compareBufferToDb({ bufferRows: rows, existingTrips: trips });
+      setPullComparison(comp);
+      const iso = new Date().toISOString();
+      setLastPullAt(iso);
+      setLastPullAtState(iso);
+      if (comp.newRows.length === 0 && comp.changedRows.length === 0) {
+        setImportMsg(`Buffer Sheet up to date — 0 new rows (${comp.totalFetched} total, ${comp.skippedRows.length} already imported)`);
+        setSheetPulling(false);
+        return;
+      }
+      // default select all new, none of changed
+      setSelectedNew(new Set(comp.newRows.map((_, i) => String(comp.newRows[i].partial.date + '|' + comp.newRows[i].partial.start_km + '|' + comp.newRows[i].partial.end_km))));
+      setSelectedChanged(new Set());
+      setShowPullPreview(true);
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e);
+      setSheetError(m);
+      setImportMsg(`Sheet pull failed: ${m}`);
+    }
+    setSheetPulling(false);
+  };
+
+  const handleSheetImportConfirm = async () => {
+    if (!pullComparison) return;
+    // Build selected partials
+    const keyOf = (p: Partial<Trip>) => `${p.date}|${p.start_km}|${p.end_km}`;
+    const selectedPartials: Partial<Trip>[] = [];
+    for (const r of pullComparison.newRows) {
+      if (selectedNew.has(keyOf(r.partial))) selectedPartials.push(r.partial);
+    }
+    for (const r of pullComparison.changedRows) {
+      if (selectedChanged.has(keyOf(r.partial))) selectedPartials.push(r.partial);
+    }
+    if (selectedPartials.length === 0) { setSheetError('Select at least one row'); return; }
+
+    // Estimate start times if missing (same as file import)
+    for (const t of selectedPartials) {
+      if ((!t.start_time || String(t.start_time).trim() === '') && t.end_time && t.trip_distance) {
+        const est = estimateStartTime(t.end_time!, Number(t.trip_distance));
+        if (est) t.start_time = est;
+      }
+    }
+
+    // Pre-flight validation: only new rows affect overlap/pagination; changed rows are upserts
+    const isExactOdoMatch = (t: Partial<Trip>) => trips.some(e => e.date === t.date && Math.round(e.start_km) === Math.round(Number(t.start_km ?? NaN)) && Math.round(e.end_km) === Math.round(Number(t.end_km ?? NaN)));
+    const newOnly = selectedPartials.filter(t => !isExactOdoMatch(t));
+    const overlapErrors = validateNoOverlap(trips, newOnly);
+    if (overlapErrors.length > 0) { setSheetError(`Overlap: ${overlapErrors.map(e=>e.message).join('; ')}`); return; }
+    const vehicle = await getVehicleProfile();
+    const allPages = await getPages();
+    const paginationErrors = validatePaginationForImport(trips, allPages, newOnly);
+    if (paginationErrors.length > 0) { setSheetError(`Pagination: ${paginationErrors.map(e=>e.message).join('; ')}`); return; }
+
+    setSheetPulling(true);
+    setSheetError(null);
+    try {
+      const result = importTripsFromWorkbook({
+        existingTrips: trips,
+        existingPages: allPages,
+        parsedTrips: selectedPartials,
+        vehicleId: vehicle.id,
+        opening: { openingKm: vehicle.current_odometer, openingFuel: (vehicle as unknown as Record<string, unknown>).current_fuel_level as number ?? 10 },
+      });
+      if (!result.success) { setSheetError(result.errors.map(e=>e.message).join('; ')); setSheetPulling(false); return; }
+
+      // Persist same as handleImportFile bulk path
+      let persisted = 0;
+      let bulkError: string | null = null;
+      try {
+        const bulkRes = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages: result.pages, trips: result.trips }) });
+        if (!bulkRes.ok) { const j = await bulkRes.json().catch(()=>({})); throw new Error(j.error || `Bulk import HTTP ${bulkRes.status}`); }
+        await bulkRes.json().catch(()=>({}));
+        persisted = result.appendedCount + result.updatedCount;
+        try { localStorage.setItem('fleetledger_trips', JSON.stringify(result.trips)); localStorage.setItem('fleetledger_book_pages', JSON.stringify(result.pages)); } catch {}
+      } catch (err: unknown) {
+        bulkError = err instanceof Error ? err.message : String(err);
+        // fallback localStorage
+        try { localStorage.setItem('fleetledger_trips', JSON.stringify(result.trips)); localStorage.setItem('fleetledger_book_pages', JSON.stringify(result.pages)); } catch {}
+        persisted = result.appendedCount + result.updatedCount;
+        // per-trip fallback for API
+        const existingTripIds = new Set(trips.map(t=>t.id));
+        for (const tr of result.trips.filter(t=>!existingTripIds.has(t.id))) {
+          try { await fetch('/api/trips', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tr) }); } catch {}
+        }
+      }
+
+      const failed = (result.appendedCount + result.updatedCount) - persisted;
+      setImportMsg(`Pulled from Sheet — ${result.appendedCount} new, ${result.updatedCount} updated (${result.skippedDuplicates} already imported)${failed>0?` — ${failed} failed`:''}${bulkError?`: ${bulkError}`:''}`);
+      // Focus earliest of newly added (chronologically smallest per Q9 a)
+      const newIds = result.trips.filter(t=>!trips.some(o=>o.id===t.id)).map(t=>t.id);
+      if (newIds.length > 0) {
+        // find earliest among new
+        const newTrips = result.trips.filter(t=>newIds.includes(t.id)).sort((a,b)=>a.date.localeCompare(b.date)||a.start_km-b.start_km);
+        const earliestId = newTrips[0]?.id ?? newIds[0];
+        const needsClear = search !== '' || month !== 'All' || tripType !== 'All';
+        // highlight all imported briefly
+        setImportedIds(new Set(newIds));
+        focusTrip(earliestId, { clearFilter: needsClear });
+      } else if (result.updatedCount>0) {
+        // focus first updated (earliest)
+        const updatedIds = result.trips.filter(t=>trips.some(o=>o.id===t.id && (o.places_visited!==t.places_visited || o.end_time!==t.end_time))).map(t=>t.id);
+        if (updatedIds.length>0) focusTrip(updatedIds[0], { clearFilter: search!==''||month!=='All'||tripType!=='All' });
+      }
+      setShowPullPreview(false);
+      setPullComparison(null);
+      onDataChanged?.();
+    } catch (e: unknown) {
+      setSheetError(e instanceof Error ? e.message : String(e));
+    }
+    setSheetPulling(false);
+  };
+
   const renderEditableCell = (trip: Trip, field: EditableField, displayValue: string, align: 'left' | 'right' = 'left') => {
     const isEditing = editState?.tripId === trip.id && editState?.field === field;
     if (isEditing) {
@@ -821,25 +1093,53 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               {filtered.length} of {trips.length} trips
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => onDataChanged?.()} />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing || sheetPulling || sheetPushing}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50"
+              title="Import trips from All Trips Excel file"
+            >
+              <span>📥</span> {importing ? 'Importing...' : 'Import from Excel'}
+            </button>
             <button
               onClick={handleExport}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-surface text-on-primary rounded-lg text-xs font-semibold hover:bg-primary transition-colors shadow-sm"
+              title="Export all trips to All Trips Excel"
             >
-              <span>📊</span> Export Excel
+              <span>📊</span> Export to Excel
             </button>
             <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importing}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors"
+              onClick={handlePullFromSheet}
+              disabled={sheetPulling || importing || sheetPushing}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 text-white rounded-lg text-xs font-semibold hover:bg-cyan-700 transition-colors shadow-sm disabled:opacity-50"
+              data-testid="pull-from-sheet-btn"
+              title={lastPullAt ? `Last Sheet pull: ${new Date(lastPullAt).toLocaleString()}` : 'Pull new rows from Buffer Sheet via Apps Script'}
             >
-              <span>📥</span> {importing ? 'Importing...' : 'Import Excel'}
+              <span>☁️↓</span> {sheetPulling ? 'Pulling…' : 'Import from Google Sheet'}
+            </button>
+            <button
+              onClick={handlePushToSheet}
+              disabled={sheetPushing || importing || sheetPulling}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50"
+              data-testid="push-to-sheet-btn"
+              title={lastPushAt ? `Last Sheet push: ${new Date(lastPushAt).toLocaleString()}` : 'Export all trips to Buffer Sheet (atomic rewrite, preserves unimported)'}
+            >
+              <span>☁️↑</span> {sheetPushing ? 'Exporting…' : 'Export to Google Sheet'}
+            </button>
+            <button
+              onClick={() => setShowSheetSettings(true)}
+              className="px-2 py-1.5 bg-paper-sheet border border-rule-line rounded-lg text-xs hover:bg-paper-gutter"
+              title="Buffer Sheet Settings"
+              data-testid="sheet-settings-btn"
+            >
+              ⚙️
             </button>
             <button
               onClick={handleRebuildLedger}
-              disabled={importing}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors"
+              disabled={importing || sheetPulling || sheetPushing}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-xs font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50"
             >
               <span>🔄</span> Rebuild Ledger
             </button>
@@ -847,9 +1147,25 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </div>
 
         {importMsg && (
-          <div className={`text-xs px-3 py-2 rounded-lg ${importMsg.includes('failed') || importMsg.includes('error') || importMsg.includes('Overlap') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
+          <div className={`text-xs px-3 py-2 rounded-lg ${importMsg.includes('failed') || importMsg.includes('error') || importMsg.includes('Overlap') || importMsg.includes('Sheet not modified') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
             {importMsg}
             <button onClick={() => setImportMsg(null)} className="ml-2 font-bold">✕</button>
+          </div>
+        )}
+        {sheetError && (
+          <div className="text-xs px-3 py-2 rounded-lg bg-red-50 text-red-700 border border-red-200">
+            {sheetError} <button onClick={() => setSheetError(null)} className="ml-2 font-bold">✕</button>
+          </div>
+        )}
+        {pushError && (
+          <div className="text-xs px-3 py-2 rounded-lg bg-red-50 text-red-700 border border-red-200" data-testid="sheet-push-error">
+            {pushError} <button onClick={() => setPushError(null)} className="ml-2 font-bold">✕</button>
+          </div>
+        )}
+        {(lastPullAt || lastPushAt) && (
+          <div className="flex gap-4 text-[10px] text-on-surface-variant">
+            {lastPullAt && <span>Last Sheet pull: {new Date(lastPullAt).toLocaleString()}</span>}
+            {lastPushAt && <span>Last Sheet push: {new Date(lastPushAt).toLocaleString()}</span>}
           </div>
         )}
 
@@ -967,11 +1283,14 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const rowBg = shouldOrange ? 'bg-orange-200' : isAltDay ? 'bg-slate-200' : 'bg-white';
                 const succGap = successorGapMap.get(t.id);
                 const predGap = predecessorGapMap.get(t.id);
+                const isFocused = focusedTripId === t.id;
+                const isJustImported = importedIds.has(t.id);
                 return (
                 <tr
                   key={t.id}
                   data-testid={`trip-row-${t.id}`}
-                  className={`transition-colors border-b border-rule-line/60 ${rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange ? '' : 'hover:bg-amber-50/40'}`}
+                  ref={(el) => { if (el) rowRefs.current.set(t.id, el); else rowRefs.current.delete(t.id); }}
+                  className={`transition-colors border-b border-rule-line/60 ${isFocused ? 'ring-2 ring-telemetry-cyan bg-cyan-50' : isJustImported ? 'bg-cyan-50' : rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange && !isFocused && !isJustImported ? '' : 'hover:bg-amber-50/40'}`}
                 >
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
                     {String(globalSeqMap.get(t.id) ?? '-').padStart(2, '0')}
@@ -1307,6 +1626,120 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <div className="flex justify-end gap-2">
               <button onClick={()=>setRemoveTarget(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
               <button data-testid="confirm-remove-shift" onClick={handleRemoveConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700">Remove &amp; Shift</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sheet Settings Dialog */}
+      <SheetSettingsDialog open={showSheetSettings} onClose={() => setShowSheetSettings(false)} onSaved={() => { setShowSheetSettings(false); setLastPullAtState(getLastPullAt()); setLastPushAtState(getLastPushAt()); }} />
+
+      {/* Push Preview */}
+      {showPushPreview && pushPreview && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="sheet-push-preview" onClick={() => { setShowPushPreview(false); setPushPreview(null); }}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-3xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-1">Export to Google Sheet — Preview</h3>
+            <p className="text-xs text-on-surface-variant mb-2">
+              DB rows {pushPreview.dbCount} | Preserved {pushPreview.preserved.length} (unimported) | Overwriting {pushPreview.overwritingCount} | Invalid ignored {pushPreview.invalidIgnored}
+            </p>
+            <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">Sheet will be cleared and rewritten atomically (LockService, {pushPreview.mergedRows.length} rows total).</p>
+            {(() => { const { sheetId, scriptUrl } = getSheetSettings(); if (!sheetId || !scriptUrl) return <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-3" data-testid="push-blocked-banner">Blocked by: Settings — configure Sheet ID and Apps Script URL</div>; return null; })()}
+            {pushError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="sheet-push-preview-error">{pushError}</div>}
+
+            <div className="mb-3">
+              <button onClick={()=>setPushExpanded(v=>!v)} className="text-xs font-semibold text-cyan-700 hover:underline" data-testid="push-preserved-toggle">
+                {pushExpanded ? 'Hide preserved rows' : `Show preserved rows (${pushPreview.preserved.length})`}
+              </button>
+              {pushExpanded && (
+                <div className="mt-2 border border-rule-line rounded max-h-[260px] overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-paper-gutter sticky top-0"><tr><th className="px-2 py-1 text-left">Date</th><th className="px-2 py-1 text-right">KM</th><th className="px-2 py-1 text-left">Places</th></tr></thead>
+                    <tbody>
+                      {pushPreview.preserved.length===0 ? <tr><td colSpan={3} className="text-center py-2 text-on-surface-variant">No preserved rows — all buffer rows already in DB</td></tr> :
+                        pushPreview.preserved.map((r,i)=>(
+                          <tr key={`${r.date}|${r.start_km}|${r.end_km}|${i}`} className="border-t border-rule-line" data-testid={`push-preserved-${i}`}>
+                            <td className="px-2 py-1 whitespace-nowrap">{r.date}</td>
+                            <td className="px-2 py-1 font-mono text-right">{r.start_km}→{r.end_km}</td>
+                            <td className="px-2 py-1 truncate max-w-[200px]">{r.places_visited}</td>
+                          </tr>
+                        ))
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>{ setShowPushPreview(false); setPushPreview(null); }} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button
+                disabled={(()=>{ const { sheetId, scriptUrl } = getSheetSettings(); return !sheetId || !scriptUrl || sheetPushing; })()}
+                onClick={handlePushConfirm}
+                className="px-4 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                data-testid="confirm-sheet-push"
+              >
+                {sheetPushing ? 'Exporting…' : `Confirm Export (${pushPreview.mergedRows.length} rows)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sheet Pull Preview */}
+      {showPullPreview && pullComparison && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="sheet-pull-preview">
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-3xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-1">Import from Google Sheet — Preview</h3>
+            <p className="text-xs text-on-surface-variant mb-3">
+              Fetched {pullComparison.totalFetched} rows — <span className="font-bold text-emerald-700">{pullComparison.newRows.length} new</span>, <span className="font-bold text-amber-600">{pullComparison.changedRows.length} changed</span>, {pullComparison.skippedRows.length} already imported (Odo Key). New are checked, changed unchecked. Pagination/overlap validated on confirm.
+            </p>
+            {sheetError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="sheet-pull-error">{sheetError}</div>}
+
+            {/* New rows */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="text-xs font-bold">New Trips ({pullComparison.newRows.length})</h4>
+                <label className="text-[11px] flex items-center gap-1"><input type="checkbox" checked={pullComparison.newRows.length>0 && selectedNew.size===pullComparison.newRows.length} onChange={e=>{ if(e.target.checked) setSelectedNew(new Set(pullComparison.newRows.map(r=>`${r.partial.date}|${r.partial.start_km}|${r.partial.end_km}`))); else setSelectedNew(new Set()); }} /> {selectedNew.size===pullComparison.newRows.length?'Deselect all':'Select all'}</label>
+              </div>
+              <div className="border border-rule-line rounded max-h-[220px] overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-paper-gutter sticky top-0"><tr><th className="px-1 py-1"></th><th className="px-1 py-1 text-left">Date</th><th className="px-1 py-1 text-right">KM</th><th className="px-1 py-1 text-left">Places</th><th className="px-1 py-1 text-left">Type</th><th className="px-1 py-1 text-right">Fuel</th></tr></thead>
+                  <tbody>
+                    {pullComparison.newRows.length===0 ? <tr><td colSpan={6} className="text-center py-2 text-on-surface-variant">No new rows</td></tr> : pullComparison.newRows.map((r,i)=>{
+                      const k=`${r.partial.date}|${r.partial.start_km}|${r.partial.end_km}`;
+                      const checked=selectedNew.has(k);
+                      return <tr key={k} className="border-t border-rule-line"><td className="px-1"><input type="checkbox" checked={checked} onChange={e=>{ const ns=new Set(selectedNew); if(e.target.checked) ns.add(k); else ns.delete(k); setSelectedNew(ns); }} data-testid={`sheet-new-${i}`} /></td><td className="px-1 whitespace-nowrap">{r.partial.date}</td><td className="px-1 font-mono text-right">{r.partial.start_km}→{r.partial.end_km} ({r.partial.trip_distance})</td><td className="px-1 truncate max-w-[160px]">{r.partial.places_visited}</td><td className="px-1">{r.partial.trip_type}</td><td className="px-1 text-right">{r.partial.fuel_pumped_amount?.toFixed(1) ?? '0.0'}</td></tr>;
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Changed rows */}
+            {pullComparison.changedRows.length>0 && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className="text-xs font-bold text-amber-700">Changed (same odo, diff fields) ({pullComparison.changedRows.length})</h4>
+                  <label className="text-[11px] flex items-center gap-1"><input type="checkbox" checked={pullComparison.changedRows.length>0 && selectedChanged.size===pullComparison.changedRows.length} onChange={e=>{ if(e.target.checked) setSelectedChanged(new Set(pullComparison.changedRows.map(r=>`${r.partial.date}|${r.partial.start_km}|${r.partial.end_km}`))); else setSelectedChanged(new Set()); }} /> {selectedChanged.size===pullComparison.changedRows.length?'Deselect all':'Select all'}</label>
+                </div>
+                <div className="border border-amber-200 rounded max-h-[200px] overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-amber-50 sticky top-0"><tr><th className="px-1 py-1"></th><th className="px-1 py-1 text-left">Date</th><th className="px-1 py-1 text-right">KM</th><th className="px-1 py-1 text-left">Diff</th></tr></thead>
+                    <tbody>
+                      {pullComparison.changedRows.map((r,i)=>{
+                        const k=`${r.partial.date}|${r.partial.start_km}|${r.partial.end_km}`;
+                        const checked=selectedChanged.has(k);
+                        return <tr key={k} className="border-t border-rule-line"><td className="px-1"><input type="checkbox" checked={checked} onChange={e=>{ const ns=new Set(selectedChanged); if(e.target.checked) ns.add(k); else ns.delete(k); setSelectedChanged(ns); }} data-testid={`sheet-changed-${i}`} /></td><td className="px-1 whitespace-nowrap">{r.partial.date}</td><td className="px-1 font-mono text-right">{r.partial.start_km}→{r.partial.end_km}</td><td className="px-1 text-[11px] text-amber-700 max-w-[260px] truncate" title={r.diff}>{r.diff}</td></tr>;
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>{ setShowPullPreview(false); setPullComparison(null); }} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button disabled={sheetPulling || (selectedNew.size===0 && selectedChanged.size===0)} onClick={handleSheetImportConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-lg hover:bg-cyan-700 disabled:opacity-50" data-testid="confirm-sheet-pull">{sheetPulling?'Importing…':`Import Selected (${selectedNew.size+selectedChanged.size})`}</button>
             </div>
           </div>
         </div>
