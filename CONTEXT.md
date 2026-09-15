@@ -114,8 +114,17 @@ _Avoid_: Fill interval, refuel block
 **Estimated Fuel Economy**: Calibrated km/L for a Fuel-In Segment suggested by the estimator, chosen as the 1-decimal value within the feasible interval that keeps every intermediate Closing Balance in [1, tankCapacity] closest to the previous segment's economy (or practical seed 7.8 km/L for the first segment). If no feasible value exists, the nearest infeasible boundary is suggested with a warning.
 _Avoid_: Calculated economy, guessed economy
 
-**Fuel-IN Summary**: Dashboard table listing fuel-in dates with aggregated Fuel IN (L) and Fuel Order No, sorted newest-first; 12 rows shown with MORE opening a full-list popup.
+**Fuel-IN Summary**: Dashboard table listing fuel-in dates with aggregated Fuel IN (L) and Fuel Order No, sorted newest-first; 6 rows shown scrollable with MORE opening a full-list popup; in the 70:30 dashboard split it occupies the 30% pane beside Fuel Economy Trend.
 _Avoid_: Refuel log, fuel history
+
+**Fuel Economy Trend**: Dashboard graph in the 70% pane beside Fuel-IN Summary (70:30 split), showing per-DayGroup km/L (from `computeLedgerDays` `LedgerDay.fuelEconomy`) chronologically; X = DayGroup date, Y = km/L; horizontally scrollable with latest at right by default (scrollWidth), gaps where an Odometer loss (KM Gap) exists are rendered as a RED hatched gap column with “gap N km” label — calendar idle months without an ODO gap are not shown as gaps.
+_Avoid_: Mileage chart, consumption graph
+
+**Monthly Distances Tile**: Dashboard tile that shows two virtual rows inside one “Monthly Distances” container: row 1 “This Month Stats” (`Official Mileage | Private Mileage | Total` for the current calendar month via `computeThisMonthMetrics`), row 2 “Previous Month Stats” (`Official | Private | Total` for the calendar month immediately before now via `computeMetricsForMonth` with previous `YYYY-MM`). Zero shown as `0 KM` when no trips; integer KM per ADR 0002.
+_Avoid_: This-month card, last-month widget
+
+**Dashboard Auto-Refresh**: After any ledger mutation (Excel Import, Sheet Pull Import, inline edit, Delete/Remove & Shift, Gap Fill, Insert After, Rebuild Ledger, Estimated Economy apply) the originating component dispatches `fleetledger:data-changed` and the Dashboard page listens (`fleetledger:data-changed` + `storage`) to refresh `vehicle/pages/trips` so This/Previous Month Stats, Fuel IN, and Fuel Economy Trend update without manual reload.
+_Avoid_: Polling, manual refresh
 
 **Trip Type**: Enumerated category of a Trip, restricted to Official or Private; validated as a select list in All Trips, New Trip, and import.
 _Avoid_: Category, purpose type

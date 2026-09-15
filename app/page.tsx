@@ -6,11 +6,12 @@ import type { BookPage, Trip, Vehicle } from '@/types';
 import { getVehicleProfile } from '@/lib/vehicleStore';
 import { getPages } from '@/lib/pageStore';
 import { getTrips } from '@/lib/tripStore';
-import { computeThisMonthMetrics, computeMonthlyBreakdown, computePageWiseDistances } from '@/lib/dashboardCalculations';
+import { computeThisMonthMetrics, computeMonthlyBreakdown, computePageWiseDistances, computeMetricsForMonth, getCurrentMonthKey } from '@/lib/dashboardCalculations';
 import { MetricCards } from '@/components/dashboard/MetricCards';
 import { MonthlyBreakdownChart } from '@/components/dashboard/MonthlyBreakdownChart';
 import { PageWiseChart } from '@/components/dashboard/PageWiseChart';
 import { FuelInSummary } from '@/components/dashboard/FuelInSummary';
+import { FuelEconomyGraph } from '@/components/dashboard/FuelEconomyGraph';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ContinuityAlertBanner } from '@/components/ContinuityAlertBanner';
 
@@ -57,6 +58,18 @@ export default function DashboardPage() {
   const monthly = useMemo(() => computeMonthlyBreakdown({ trips, pages }), [trips, pages]);
   const pageWise = useMemo(() => computePageWiseDistances({ trips, pages }), [trips, pages]);
 
+  const { prevMetrics, curLabel, prevLabel } = useMemo(() => {
+    const curKey = getCurrentMonthKey(new Date());
+    const [y, m] = curKey.split('-').map(Number);
+    const prevDate = new Date(y, m - 2, 1); // m is 1-indexed, so m-2 is previous month index
+    const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+    const prev = computeMetricsForMonth(trips, vehicle, prevKey, pages);
+    const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const curLab = `${monthsShort[Number(curKey.split('-')[1]) - 1]} ${curKey.split('-')[0]}`;
+    const prevLab = `${monthsShort[Number(prevKey.split('-')[1]) - 1]} ${prevKey.split('-')[0]}`;
+    return { prevMetrics: prev, curLabel: curLab, prevLabel: prevLab };
+  }, [trips, vehicle, pages]);
+
   if (loading) {
     return <div className="p-8 text-center text-on-surface-variant">Loading dashboard...</div>;
   }
@@ -81,11 +94,20 @@ export default function DashboardPage() {
 
         <ContinuityAlertBanner pages={pages} trips={trips} compact />
 
-      {/* Metric cards */}
-      <MetricCards metrics={metrics} />
+      {/* Metric cards — This + Previous Month in one tile + Vehicle cluster */}
+      <MetricCards metrics={metrics} prevMetrics={prevMetrics} thisMonthLabel={`This Month (${curLabel})`} prevMonthLabel={`Previous Month (${prevLabel})`} />
 
-      {/* Fuel IN Summary — 12 + MORE */}
-      {hasData && <FuelInSummary trips={trips} />}
+      {/* Fuel Economy Trend (70%) + Fuel IN Summary (30%) — horizontal scroll, latest at right, gaps = odometer loss */}
+      {hasData && (
+        <div className="grid grid-cols-1 lg:grid-cols-10 gap-4">
+          <div className="lg:col-span-7 min-w-0">
+            <FuelEconomyGraph trips={trips} pages={pages} />
+          </div>
+          <div className="lg:col-span-3 min-w-0">
+            <FuelInSummary trips={trips} />
+          </div>
+        </div>
+      )}
 
       {/* Vehicle context strip */}
       {vehicle && (

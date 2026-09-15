@@ -5,6 +5,9 @@ import type { DashboardMetrics } from '@/lib/dashboardCalculations';
 
 interface Props {
   metrics: DashboardMetrics;
+  prevMetrics?: DashboardMetrics;
+  thisMonthLabel?: string;
+  prevMonthLabel?: string;
 }
 
 function formatDdMmYyyy(iso: string): string {
@@ -12,33 +15,57 @@ function formatDdMmYyyy(iso: string): string {
   return `${d}-${m}-${y}`;
 }
 
-export function MetricCards({ metrics }: Props) {
+export function MetricCards({ metrics, prevMetrics, thisMonthLabel, prevMonthLabel }: Props) {
   const odoStr = String(Math.round(metrics.lastOdo)).padStart(6, '0');
   const odoDateLabel = metrics.lastOdoDate ? `as at ${formatDdMmYyyy(metrics.lastOdoDate)}` : 'as at —';
   const fuelPct = Math.min(100, Math.max(0, metrics.fuelLevelPercent));
   const needleAngle = (fuelPct / 100) * 180 - 90;
+  const prev = prevMetrics ?? { officialKm: 0, privateKm: 0, totalKm: 0, tripCount: 0 } as DashboardMetrics;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      {/* Combined This Month Distances — one tile for Official/Private/Total */}
+      {/* Combined Monthly Distances — two virtual rows: This Month + Previous Month */}
       <div className="rounded-xl p-4 border shadow-sm bg-amber-50/60 border-amber-200 flex flex-col gap-3">
-        <span className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant">This Month Distances</span>
-        <div className="grid grid-cols-3 gap-2 divide-x divide-amber-200">
-          <div data-testid="metric-official" className="flex flex-col items-center text-center px-1">
-            <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Official Distance (This Month)</span>
-            <span className="text-lg font-bold font-mono tracking-tight text-trip-official">{Math.round(metrics.officialKm)} KM</span>
-            <span className="text-[10px] text-on-surface-variant">{metrics.tripCount} trips</span>
+        <span className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant">Monthly Distances</span>
+        {/* This Month Row */}
+        <div className="flex flex-col gap-1">
+          <span className="text-[9px] font-bold tracking-widest uppercase text-primary">{thisMonthLabel ?? 'This Month Stats'}</span>
+          <div className="grid grid-cols-3 gap-2 divide-x divide-amber-200">
+            <div data-testid="metric-official" className="flex flex-col items-center text-center px-1">
+              <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Official Distance (This Month)</span>
+              <span className="text-lg font-bold font-mono tracking-tight text-trip-official">{Math.round(metrics.officialKm)} KM</span>
+              <span className="text-[10px] text-on-surface-variant">{metrics.tripCount} trips</span>
+            </div>
+            <div data-testid="metric-private" className="flex flex-col items-center text-center px-1">
+              <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Private Mileage (This Month)</span>
+              <span className="text-lg font-bold font-mono tracking-tight text-trip-private">{Math.round(metrics.privateKm)} KM</span>
+              <span className="text-[10px] text-on-surface-variant">Personal</span>
+            </div>
+            <div data-testid="metric-total" className="flex flex-col items-center text-center px-1">
+              <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Total (This Month)</span>
+              <span className="text-lg font-bold font-mono tracking-tight text-primary">{Math.round(metrics.totalKm)} KM</span>
+              <span className="text-[10px] text-on-surface-variant">Ledger span</span>
+            </div>
           </div>
-          <div data-testid="metric-private" className="flex flex-col items-center text-center px-1">
-            <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Private Mileage (This Month)</span>
-            <span className="text-lg font-bold font-mono tracking-tight text-trip-private">{Math.round(metrics.privateKm)} KM</span>
-            <span className="text-[10px] text-on-surface-variant">Personal</span>
+        </div>
+        {/* Previous Month Row */}
+        <div className="flex flex-col gap-1 border-t border-amber-200 pt-2">
+          <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">{prevMonthLabel ?? 'Previous Month Stats'}</span>
+          <div className="grid grid-cols-3 gap-2 divide-x divide-amber-200">
+            <div data-testid="metric-prev-official" className="flex flex-col items-center text-center px-1">
+              <span className="text-[8px] font-bold tracking-widest uppercase text-on-surface-variant">Official</span>
+              <span className="text-base font-bold font-mono tracking-tight text-trip-official">{Math.round(prev.officialKm)} KM</span>
+            </div>
+            <div data-testid="metric-prev-private" className="flex flex-col items-center text-center px-1">
+              <span className="text-[8px] font-bold tracking-widest uppercase text-on-surface-variant">Private</span>
+              <span className="text-base font-bold font-mono tracking-tight text-trip-private">{Math.round(prev.privateKm)} KM</span>
+            </div>
+            <div data-testid="metric-prev-total" className="flex flex-col items-center text-center px-1">
+              <span className="text-[8px] font-bold tracking-widest uppercase text-on-surface-variant">Total</span>
+              <span className="text-base font-bold font-mono tracking-tight text-primary">{Math.round(prev.totalKm)} KM</span>
+            </div>
           </div>
-          <div data-testid="metric-total" className="flex flex-col items-center text-center px-1">
-            <span className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Total (This Month)</span>
-            <span className="text-lg font-bold font-mono tracking-tight text-primary">{Math.round(metrics.totalKm)} KM</span>
-            <span className="text-[10px] text-on-surface-variant">Ledger span</span>
-          </div>
+          <span className="text-[9px] text-on-surface-variant text-center">{(prev.tripCount ?? 0)} trips</span>
         </div>
       </div>
 
