@@ -4,7 +4,7 @@
   */
 import ExcelJS from 'exceljs';
 import type { Trip, BookPage } from '@/types';
-import { roundToIntegerKm, roundToOneDecimal } from './tripCalculations';
+import { estimateStartTime, roundToIntegerKm, roundToOneDecimal } from './tripCalculations';
 import {
   assignPageForNewTrip,
   isBackdatedInsertion,
@@ -363,12 +363,19 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     const tripType = typeStr.toLowerCase().includes('priv') ? 'Private' : 'Official';
     const fuelPumped = parseFloatNum(fuelPumpedStr);
 
+    // Canonical Estimated Start Time: fill when source Start Time empty but End Time + distance estimatable (Q1/Q2)
+    let effectiveStart = startTimeStr;
+    if ((!effectiveStart || String(effectiveStart).trim() === '') && endTimeStr && Number.isFinite(distance) && distance > 0) {
+      const est = estimateStartTime(endTimeStr, Number(distance));
+      if (est) effectiveStart = est;
+    }
+
     parsedTrips.push({
       date: dateStr,
       start_km: startKm,
       end_km: endKm,
       trip_distance: distance,
-      start_time: startTimeStr || undefined,
+      start_time: effectiveStart || undefined,
       end_time: endTimeStr,
       trip_type: tripType,
       places_visited: placesVisited,

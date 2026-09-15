@@ -81,13 +81,13 @@ _Avoid_: Soft gate, lazy redirect
 
 ### UX & Operations
 
-**Help Page**: Authenticated reference at `/help` explaining trip entry reciprocals, pagination rules, fuel formulas, import template, and auth roles.
+**Help Page**: Authenticated reference at `/help` with live search (title+content substring, highlight) and grouped navigable sections (sticky TOC) distilling Sheet linking and Mobile setup manuals inline and linking to `docs/manuals/user-setup.md`; covers trip entry reciprocals, pagination rules, fuel formulas, import template, and auth roles.
 _Avoid_: Guide, docs
 
 **Trip Import**: Bulk creation of Trips from an Excel file validated pre-flight against essential fields and pagination rules before any write.
 _Avoid_: Data import, upload
 
-**Estimated Start Time**: Suggested Start Time derived as End Time − (Distance / speed), ceiled to the nearest 5 minutes, where speed is tiered by distance (`<10 km→15 km/h, <20→20, <40→25, ≤60→30, >60→35`); auto-filled only when Start Time is empty and editable, also used to condition empty Start Time on Import and Sheet Pull.
+**Estimated Start Time**: Suggested Start Time derived as End Time − (Distance / speed), ceiled to the nearest 5 minutes, where speed is tiered by distance (`<10 km→15 km/h, <20→20, <40→25, ≤60→30, >60→35`); auto-filled only when Start Time is empty and editable. During Excel Workbook import (`parseAllTripsWorkbook`) and Buffer Sheet Pull (`toPartial`), an empty `start_time` is estimated from `end_time` + `distance` and persisted as `HH:MM` (overwrite on same Odo Key); if `end_time` is empty the row is rejected; if estimation yields `null` (zero/invalid distance) the Trip keeps `start_time = ""` and still imports.
 _Avoid_: Calculated start, inferred start
 
 **Global Search**: (Removed) Header search that previously live-filtered all Trips. Search is now available only within the All Trips Master Table section.

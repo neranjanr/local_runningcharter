@@ -4,7 +4,7 @@
  */
 import type { Trip } from '@/types';
 import type { BufferTrip } from './sheetClient';
-import { roundToIntegerKm, roundToOneDecimal } from './tripCalculations';
+import { estimateStartTime, roundToIntegerKm, roundToOneDecimal } from './tripCalculations';
 import { getOdoKey } from './allTripsWorkbook';
 
 export interface SheetRowAnalysis {
@@ -20,12 +20,19 @@ export interface PullComparison {
 }
 
 function toPartial(b: BufferTrip): Partial<Trip> {
+  const dist = roundToIntegerKm(b.trip_distance ?? (b.end_km - b.start_km));
+  let start = b.start_time || undefined;
+  // Canonical estimation when source start empty (mirrors allTripsWorkbook parser) — reject empty end_time upstream via validRows filter
+  if ((!start || String(start).trim() === '') && b.end_time && Number.isFinite(dist) && dist > 0) {
+    const est = estimateStartTime(b.end_time, dist);
+    if (est) start = est;
+  }
   return {
     date: b.date,
     start_km: roundToIntegerKm(b.start_km),
     end_km: roundToIntegerKm(b.end_km),
-    trip_distance: roundToIntegerKm(b.trip_distance ?? (b.end_km - b.start_km)),
-    start_time: b.start_time || undefined,
+    trip_distance: dist,
+    start_time: start,
     end_time: b.end_time,
     trip_type: b.trip_type || 'Official',
     places_visited: b.places_visited,
