@@ -30,7 +30,7 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
   const dragRef = useRef<{ active: boolean; startX: number; startScroll: number }>({ active: false, startX: 0, startScroll: 0 });
   const [activeYear, setActiveYear] = useState<string | null>(null);
 
-  const { days, gapsByDate, maxEconomy, sortedYears } = useMemo(() => {
+  const { days, gapsByDate, maxEconomy, sortedYears, distinctDateCount } = useMemo(() => {
     const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
     const dateEconomy = new Map<string, number>();
     const dateInTank = new Map<string, number>();
@@ -103,7 +103,8 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
     const yearSet = new Set<string>();
     for (const d of allDays) yearSet.add(d.date.slice(0, 4));
     const sortedYears = Array.from(yearSet).sort();
-    return { days: allDays, gapsByDate, maxEconomy: Math.ceil(max), sortedYears };
+    const distinctDateCount = new Set(allDays.map(d => d.date)).size;
+    return { days: allDays, gapsByDate, maxEconomy: Math.ceil(max), sortedYears, distinctDateCount };
   }, [trips, pages]);
 
   // map year -> palette index
@@ -159,15 +160,23 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
   const footerSegments = upperGroups;
 
   const minWidthPx = useMemo(() => {
-    // 32 w-8 + 6 gap-1.5 per stem, 96 w-24 per gap + 8 margins
-    const gapCount = gapsByDate.size;
-    return Math.max(days.length * 36 + gapCount * 56 + 48, 320);
-  }, [days.length, gapsByDate.size]);
+    // grouped calc: year groups (32 w-8 +6 gap-1.5 per stem +8 px-1) + gaps (96 w-24 +8 mx-1) + inter-group gaps
+    const groups = upperGroups;
+    if (groups.length === 0) return 320;
+    let w = 0;
+    for (const g of groups) {
+      if (g.kind === 'gap') w += 96 + 8;
+      else w += g.stems.length * 32 + Math.max(0, g.stems.length - 1) * 6 + 8;
+    }
+    w += Math.max(0, groups.length - 1) * 6; // flex gap-1.5 between groups
+    return Math.max(w + 48, 320);
+  }, [upperGroups]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollLeft = el.scrollWidth;
-  }, [days]);
+    if (sortedYears.length && !activeYear) setActiveYear(sortedYears[sortedYears.length - 1]);
+  }, [days, sortedYears, activeYear]);
 
   // middle-mouse drag only
   useEffect(() => {
@@ -260,7 +269,7 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
               Fuel Economy Trend
             </h1>
             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
-              {days.length} days logged
+              {distinctDateCount} days logged
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
@@ -306,7 +315,7 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
       {/* Viewport with baselines */}
       <div className="relative bg-white pt-6 pb-2">
         <div className="absolute left-6 right-6 top-10 pointer-events-none border-b border-dashed border-slate-200 z-0 flex justify-end">
-          <span className="text-[11px] font-mono text-slate-400 bg-white px-2 -translate-y-2.5">{maxEconomy} km/L (Rated Max Target)</span>
+          <span className="text-[11px] font-mono text-slate-400 bg-white px-2 -translate-y-2.5">14.0 km/L (Rated Max Target)</span>
         </div>
         <div className="absolute left-6 right-6 top-28 pointer-events-none border-b border-slate-100 z-0 flex justify-end">
           <span className="text-[10px] font-mono text-slate-300 bg-white px-2 -translate-y-2">10.0 km/L Average Baseline</span>
@@ -393,8 +402,8 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
               })}
             </div>
 
-            {/* BOTTOM ROW: sticky year footer interrupted by gaps */}
-            <div className="flex items-stretch text-xs font-bold border-t border-slate-200" data-purpose="sticky-year-footer-row">
+            {/* BOTTOM ROW: sticky year footer interrupted by gaps - labels use position:sticky per track */}
+            <div className="flex items-stretch text-xs font-bold border-t border-slate-200 sticky bottom-0 z-10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.04)]" data-purpose="sticky-year-footer-row">
               {footerSegments.map((seg, idx) => {
                 if (seg.kind === 'gap') {
                   return (
