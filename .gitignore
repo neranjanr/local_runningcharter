@@ -50,4 +50,11 @@ sheet.local.json
 # mobile private build — single-file with hard-coded Script URL for phone (gitignored)
 quicktrip-mobile/dist/Mobile_with_url_private.html
 
+# uploaded samples / scratch — not needed to run project
+.scratch/
+*.html.bak
+dashsample.html
+sampletrend.html
+AllTrips_sample.xlsx
+
 .vercel

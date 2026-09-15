@@ -110,5 +110,11 @@ export async function pushAllRows(rows: BufferTrip[]): Promise<void> {
   });
   if (!res.ok) throw new Error(`Sheet push failed: ${res.status} — verify Apps Script deployed as "Anyone with link"`);
   const j = await res.json().catch(() => ({}));
-  if (j.ok === false) throw new Error(j.error || 'Sheet rejected push');
+  if (j.ok === false) {
+    const err = String(j.error || 'Sheet rejected push');
+    if (err.includes('expected {action:appendTrip')) {
+      throw new Error('Your Apps Script deployment is OUTDATED — it only handles appendTrip. Update Apps Script: copy quicktrip-mobile/apps-script/Code.gs (v2 with rewriteSheet) → Deploy → New version → Anyone with link → copy new URL into config/sheet.local.json + Sheet Settings.');
+    }
+    throw new Error(err);
+  }
 }

@@ -63,9 +63,23 @@ function doGet(e){
 
 function doPost(e){
   try {
-    const body = JSON.parse(e.postData.contents);
-    if (body.action === 'rewriteSheet' || body.action === 'pushAll') {
-      const rows = body.rows || [];
+    let body = {};
+    try {
+      const raw = (e.postData && e.postData.contents) ? e.postData.contents : (e.postData ? e.postData.getDataAsString() : '');
+      body = raw ? JSON.parse(raw) : {};
+      // Apps Script can also deliver JSON as parameter when Content-Type is text/plain missing
+      if (!body.action && e.parameter && e.parameter.action) body.action = e.parameter.action;
+      if (!body.rows && e.parameter && e.parameter.rows) {
+        try { body.rows = JSON.parse(e.parameter.rows); } catch(_){ body.rows = []; }
+      }
+    } catch(parseErr) {
+      // fallback to parameter object
+      body = { action: (e.parameter && e.parameter.action) || '' };
+    }
+    // normalize aliases
+    if (body.action === 'rewriteSheet' || body.action === 'pushAll' || body.action === 'rewrite' || body.action === 'export') {
+      // accept rows / trips alias (already normalized above)
+      const rows = body.rows || body.trips || [];
       if (!Array.isArray(rows)) return json_({ ok:false, error:'rows must be an array' });
       const lock = LockService.getDocumentLock();
       const gotLock = lock.tryLock(30000);
@@ -105,7 +119,7 @@ function doPost(e){
         try { lock.releaseLock(); } catch(e2) {}
       }
     }
-    if (body.action !== 'appendTrip' || !body.trip) return json_({ ok:false, error:'expected {action:appendTrip,trip} or {action:rewriteSheet,rows}' });
+    if (body.action !== 'appendTrip' || !body.trip) return json_({ ok:false, error:'expected {action:appendTrip,trip} or {action:rewriteSheet,rows} (got action:' + (body.action||'empty') + ') — your Apps Script is outdated. Update Code.gs and redeploy as Anyone with link.' });
     const t = body.trip;
     const date = String(t.date||'').trim();
     const places = String(t.places_visited||'').trim();
