@@ -165,11 +165,12 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 **What it does:**
 
-1. Stops any old `LocalRunningCharterService` task and kills processes on `:8082`
-2. Runs `npm run build` (retries 3x on contention)
-3. Builds the mobile private file: `npm run build:mobile` — reads `$ScriptUrl` or `config/sheet.local.json`
-4. Registers a **Scheduled Task** at logon (`NT AUTHORITY\SYSTEM`, restart-on-failure x3)
-5. Starts the task, waits 3s, opens `http://localhost:8082`
+1. Prints `-- attempting to start service at HH:mm on dd-MM-yyyy` (cyan) immediately after `Set-Location` — so you see the exact click time even before UAC elevation.
+2. Stops any old `LocalRunningCharterService` task and kills processes on `:8082`
+3. Runs `npm run build` (retries 3x on contention)
+4. Builds the mobile private file: `npm run build:mobile` — reads `$ScriptUrl` or `config/sheet.local.json`
+5. Registers a **Scheduled Task** at logon (`NT AUTHORITY\SYSTEM`, restart-on-failure x3)
+6. Starts the task, waits 3s, opens `http://localhost:8082`
 
 **Configuring the Script URL in the PS1:**
 
@@ -284,7 +285,30 @@ Any one-file transfer works:
 
 ---
 
-## 7. Core Operations
+## 7. Calendar, Leaves & All Trips Table
+
+### 7.0 Holiday Calendar & Summaries (`/calendar`)
+
+- **Range:** 2024–2027. Saturdays/Sundays are Bank holidays; plus CBSL Poya/Bank/Public/Mercantile from `lib/sriLankanHolidays.ts`. Cells colored by kind; cyan dot marks dates with trips, ×N for multiple trips.
+- **Leave (manual-only):** Click any date → dialog. If not leave: enter optional note (max 200) → **Mark as Leave**. If already leave: edit note → **Save** or **Clear Leave**. Leaves are never auto-created from holidays/import; all prior auto leaves were purged. Leaves are always Off-Days (priority Leave > Mercantile > Public > Bank/Poya > Weekend). Only one **Cancel** button exists in the dialog.
+- **Header buttons (popups):**
+  - **Trips on Off-Days** — grouped by date (header `Date · DayOfWeek · Reason`) with per-trip Start/End KM, Distance, Type, Places, Fuel and per-date total km. Built from `validateTripsOnOffDays` + `getTripsOnOffDaysGrouped`.
+  - **No-Trip Working Days** — lists every Working Day (Mon–Fri, not holiday, not leave) with zero trips that lies inside an **ODO-Continuous Segment**. Dates strictly inside a Trip-to-Trip ODO Gap (`end_km ≠ next start_km` on different dates, `lib/continuityAlerts.ts`) are hidden (ledger missing). Range `firstTripDate..lastTripDate` clamped to 2024..2027.
+- **Leave History:** Persistent card below months — table `Date | Day | Holiday | Note` with Edit/Clear. Year filter `All | 2024..2027` (default current year), sorted `date DESC`.
+
+### 7.1 All Trips — Day Type & Layout
+
+- **Day Type column colors (with dot icon):**
+  - Sat/Sun or any holiday (Mercantile/Bank/Public) → **RED** `bg-red-100`
+  - Poya (`isPoya`) → **YELLOW** `bg-yellow-100` (priority over RED)
+  - Leave → **ORANGE** `bg-orange-100`
+  - Weekday → **light GREEN** `bg-green-50`
+- **Private:** `Type` column removed; Private is signaled solely by orange row `bg-orange-200` (RED gap cell wins on Start KM, dark-blue `text-blue-900` layers when fuel pumped). Filter `All Types / Official / Private` still available; set type via Insert After / Gap Fill / Import.
+- **Route width:** Reduced 22% → 6% narrow (`w-[6%]` −20% from 8%, Route text `text-xs`, `⋯` fixed `w-10 min-w-[40px]` fully visible, table `min-w-[1020px]` on mobile) so desktop `w-full lg:min-w-0 lg:overflow-x-hidden` shows all columns (Pumped/Order No/Pos./In-Tank/Econ/Balance/Page/⋯) with only vertical scroll.
+
+---
+
+## 8. Core Operations
 
 ### "Calculate Fuel" is Estimate Fuel Economy
 
@@ -319,7 +343,7 @@ Any one-file transfer works:
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -331,7 +355,7 @@ Any one-file transfer works:
 
 ---
 
-## 9. Files to Read Next
+## 10. Files to Read Next
 
 - `lib/sheetClient.ts` + `lib/sheetConfig.ts` — client seams & priority
 - `quicktrip-mobile/README.md` — phone PWA contract

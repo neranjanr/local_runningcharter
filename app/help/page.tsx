@@ -85,13 +85,11 @@ The overridden economy propagates forward to subsequent Day Groups until the nex
   },
   {
     id: 'private-bold',
-    title: '7. Private Trip — Bold Row',
+    title: '7. Private Trip — Orange Row (Private = Orange)',
     group: 'Ledger & Fuel',
-    content: `Any Trip with Type = Private is rendered as a fully bold row in both the Ledger (Side 1 Trips Log, per Page) and the All Trips Master Table, in addition to the orange background (bg-orange-200).
+    content: `Any Trip with Type = Private is rendered with an orange row background bg-orange-200 in both the Ledger (Side 1 Trips Log, per Page) and the All Trips Master Table. Fuel-pumped Private rows layer dark-blue text on the orange.
 
-The RED KM-gap highlight (bg-red-100) on a gapped Start KM cell takes precedence over the orange but the bold weight is retained. Print preserves bold (font-weight 600) so the paper Book and PDF match.
-
-Change Type via inline edit in All Trips (click Type cell → select Official/Private) — the row toggles bold immediately.`,
+The RED KM-gap highlight (bg-red-100) on a gapped Start KM cell takes precedence over the orange. Private is signaled solely by row color; the Type column was removed from All Trips (see section 20) to save width — use the "All Types / Official / Private" filter or set type via Insert After / Gap Fill / Import (Excel/Sheet) to change it. Print preserves the orange distinction.`,
   },
   {
     id: 'continuity-alerts',
@@ -325,8 +323,43 @@ All ledger routes are behind an authenticated Landing Gate except Landing and /r
 Successful Trip save shows a "Trip Added" toast (~2s) then redirects to Dashboard. Import success shows "N trips added" then redirects.`,
   },
   {
+    id: 'calendar-leaves',
+    title: '19. Calendar — Holiday Calendar, Leaves & Summaries',
+    group: 'Calendar & Leaves',
+    content: `Holiday Calendar 2024–2027 (Sat/Sun are Bank holidays, plus CBSL Poya/Bank/Public/Mercantile from lib/sriLankanHolidays.ts). Each month shows day cells colored by kind; a cyan dot marks dates with trips and ×N counts multiple trips.
+
+Leave (manual-only):
+  • Click any date → dialog shows Mark as Leave or, if already leave, Clear Leave. Leave is never auto-created from holidays/import.
+  • Optional note max 200 chars (e.g., personal, medical). Save keeps note, Clear removes the row from leaves table + localStorage and dispatches fleetledger:data-changed.
+  • All Leaves are Off-Days (priority Leave > Mercantile > Public > Bank/Poya > Weekend). Leave rows are sky/orange in calendar; existing auto-marked leaves were purged.
+
+Summaries (header buttons, popups):
+  • Trips on Off-Days — popup grouped by date, each group header Date · DayOfWeek · Reason (Leave/Mercantile/Public/Bank/Poya/Weekend) with per-trip Start KM / End KM / Distance / Type / Places / Fuel and per-date total km. Counts from validateTripsOnOffDays + getTripsOnOffDaysGrouped.
+  • No-Trip Working Days — popup lists every Working Day (Mon–Fri, not holiday, not leave) with zero trips that lies inside an ODO-Continuous Segment. Dates strictly inside a Trip-to-Trip ODO Gap (end_km ≠ next start_km on different dates, lib/continuityAlerts.ts) are hidden; range is firstTripDate..lastTripDate clamped to 2024..2027. Each row Date | Day.
+
+Leave History — persistent card below months:
+  • Table Date | Day | Holiday | Note with Edit / Clear actions.
+  • Year filter All | 2024 | 2025 | 2026 | 2027 (default current year), sorted date DESC; empty state shows "No leaves in YYYY".`,
+  },
+  {
+    id: 'all-trips-daytype',
+    title: '20. All Trips — Day Type Colors & Table Layout',
+    group: 'Calendar & Leaves',
+    content: `Day Type column (All Trips Master Table) is color-coded with a dot icon:
+  • Sat/Sun or any holiday (Mercantile/Bank/Public) — RED bg-red-100 border-red-300 + red dot
+  • Poya (isPoya) — YELLOW bg-yellow-100 border-yellow-300 + yellow dot (takes priority over RED)
+  • Leave — ORANGE bg-orange-100 border-orange-300 + orange dot
+  • Weekday (Mon–Fri, not holiday/leave) — light GREEN bg-green-50 border-green-200 + green dot
+
+Private indication:
+  • Type [Official/Private] column removed from All Trips table; Private trips are signaled solely by orange row background bg-orange-200 (RED gap cell bg-red-100 wins on Start KM, dark-blue text layers when fuel pumped). Use filter "All Types / Official / Private" or Insert/Gap-Fill dialogs to set type.
+
+Layout fix:
+  • Route column reduced 22% → 6% narrow (w-[6%], −20% from 8%, text-xs) and table min-w 1080→1020 on mobile; ⋯ menu column fixed w-10 min-w-[40px] so it stays fully visible; desktop stays w-full lg:min-w-0 lg:overflow-x-hidden so only vertical scroll appears and last columns (Pumped/Order No/Pos./In-Tank/Econ/Balance/Page/⋯) stay visible without horizontal scroll.`,
+  },
+  {
     id: 'ps1-service',
-    title: '19. PowerShell Service Script (start-service.ps1)',
+    title: '21. PowerShell Service Script (start-service.ps1)',
     group: 'Setup & Manuals',
     content: `The start-service.ps1 script automates build, deploy, and persistent service on Windows. Run it once and the app starts automatically at logon.
 
@@ -337,6 +370,8 @@ Prerequisites:
 Usage:
   1. Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
   2. .\\start-service.ps1
+
+On start it prints: -- attempting to start service at HH:mm on dd-MM-yyyy (cyan, e.g., -- attempting to start service at 09:14 on 15-09-2026).
 
 What it does:
   1. Stops any old LocalRunningCharterService task and kills processes on :8082
@@ -359,7 +394,7 @@ The script preserves runningcharter.db and browser localStorage fleetledger_* �
   },
 ];
 
-const groups = ['Core Concepts', 'Ledger & Fuel', 'Operations & Gaps', 'Data Exchange', 'Setup & Manuals'];
+const groups = ['Core Concepts', 'Ledger & Fuel', 'Operations & Gaps', 'Calendar & Leaves', 'Data Exchange', 'Setup & Manuals'];
 
 function highlight(text: string, query: string) {
   if (!query) return text;
@@ -460,7 +495,7 @@ export default function HelpPage() {
         <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-on-surface">Help — Running Chart Guide</h1>
-            <p className="text-sm text-on-surface-variant">19 sections across 5 groups. Search or browse the table of contents.</p>
+            <p className="text-sm text-on-surface-variant">21 sections across 6 groups. Search or browse the table of contents.</p>
           </div>
           <Link href="/" className="text-sm font-medium text-telemetry-cyan hover:underline shrink-0">
             ← Back to Dashboard
@@ -541,7 +576,7 @@ export default function HelpPage() {
             )}
 
             <p className="mt-6 text-xs text-on-surface-variant">
-              Domain glossary: Book, Page, Trip, Vehicle, Book Opening, Fuel Economy/Position/In-Tank/Drawn/Consumed/Closing Balance, Adjusted Fuel Economy, Page-Wide Trip Sequence, Integer KM, Continuity Alert, All Trips Workbook, Ledger Full-Width Stack, Super Admin, TOTP, Recovery Code, Landing, Help Page (searchable), Trip Import with Estimated Start Time auto-fill, Continuity Break, Transposed Side 2, Focused Trip, Sheet Pull Import, Sheet Push (Export to Google Sheet), Push Preview, Sheet Settings (mobile.lastSheetPullAt/mobile.lastSheetPushAt), Import Preview, Sheet Proxy (GET allRows/last10, POST appendTrip/rewriteSheet + LockService), Digital Vehicle Cluster, Fuel Economy Trend, Monthly Distances Tile. Full manuals: <Link href="/docs/manuals/user-setup.md" className="underline">docs/manuals/user-setup.md</Link> + quicktrip-mobile/README.md.
+              Domain glossary: Book, Page, Trip, Vehicle, Book Opening, Fuel Economy/Position/In-Tank/Drawn/Consumed/Closing Balance, Adjusted Fuel Economy, Page-Wide Trip Sequence, Integer KM, Continuity Alert, All Trips Workbook, Ledger Full-Width Stack, Super Admin, TOTP, Recovery Code, Landing, Help Page (searchable), Trip Import with Estimated Start Time auto-fill, Continuity Break, Transposed Side 2, Focused Trip, Sheet Pull Import, Sheet Push (Export to Google Sheet), Push Preview, Sheet Settings (mobile.lastSheetPullAt/mobile.lastSheetPushAt), Import Preview, Sheet Proxy (GET allRows/last10, POST appendTrip/rewriteSheet + LockService), Digital Vehicle Cluster, Fuel Economy Trend, Monthly Distances Tile, Off-Day/Working Day, LeaveDay (manual-only), Leave History, ODO Gap Period/ODO-Continuous Segment, Trips-On-OffDays & No-Trip Working Days Summaries, All Trips Day Type colors (RED/YELLOW/ORANGE/GREEN). Full manuals: <Link href="/docs/manuals/user-setup.md" className="underline">docs/manuals/user-setup.md</Link> + quicktrip-mobile/README.md.
             </p>
           </div>
         </div>

@@ -147,7 +147,7 @@ _Avoid_: Partial bold, badge-only
 **Fuel-Pumped Trip (Dark Blue)**: Any Trip with `fuel_pumped_amount > 0`; rendered with dark-blue text (`text-blue-900`) in All Trips Master Table, layered on top of Private orange or alternating day backgrounds. The ⛽ icon appears in the # column.
 _Avoid_: Blue highlight, fuel badge
 
-**All Trips Master Table (Desktop Layout)**: Master table with Route column reduced to ~22% width and desktop viewport fitting (`w-full lg:min-w-0 lg:overflow-x-hidden`, `min-w-[960px]` only on mobile) so only vertical scroll appears on desktop; footer sums and continuity chips remain.
+**All Trips Master Table (Desktop Layout)**: Master table with **Type column removed** (Private is signaled by `bg-orange-200` row) and Route column at ~6% width (narrow, from 22% → ~6%, text-xs, `⋯` fixed `w-10`) with horizontal scroll restored (`overflow-x-auto`, `min-w-[1020px]`) so all columns including ⋯ menu stay reachable via scroll; footer sums and continuity chips remain. Day Type badges are color-coded: Sat/Sun or any holiday (M/B) **RED**, **Poya YELLOW**, **Leave ORANGE** (with dot icon), **Weekday light GREEN**; Poya takes priority over other holiday colors.
 _Avoid_: Horizontal scroll, full-width route
 
 **Gap Fill Trip**: A Trip inserted solely to close a detected **KM Gap** (`Trip N End KM ≠ Trip N+1 Start KM`); the dialog auto-fills `Start KM = predecessor End KM`, `End KM = successor Start KM`, `Distance = End − Start`, `Date = predecessor Date` (editable within `[predecessor Date, successor Date]`), `Trip Type = Official` default; no downstream shift — it consumes the gap extent exactly and is surfaced only in All Trips via an inline `+ Fill Gap` chip and row ⋯ menu when a KM Gap exists.
@@ -190,3 +190,29 @@ _Avoid_: Sheet API, backend proxy
 
 **Mobile Queue**: IndexedDB-backed offline buffer in QuickTrip Mobile that stores Trips when offline and retries Sheet Proxy sync when online, preserving sheet truth for Start KM auto-fill.
 _Avoid_: Offline cache, sync queue
+
+### Calendar & Leaves
+
+**Off-Day**: Any date where `isOffDay=true` per `getDayTypeInfo(date, leaveSet)` — PersonalLeave (manual `LeaveDay`) OR Mercantile (M) OR Public (P) OR Bank/Poya (B) OR Saturday/Sunday. Priority `Leave > M > P > B > Weekend`. `LeaveDay` is manual-only, never auto-created from holidays.
+_Avoid_: Non-working day (ambiguous), holiday-only
+
+**Working Day**: Monday–Friday that is not a `SriLankanHoliday` (B/P/M) and not a manual `LeaveDay` and not Weekend; i.e. `isOffDay=false`. The complement of Off-Day.
+_Avoid_: Weekday (overloaded), business day
+
+**LeaveDay (Manual-Only)**: A personal leave record `{date, note?}` persisted via `leaves` table / `fleetledger_leaves` localStorage, created or cleared **only** through the Calendar cell dialog (“Mark as Leave” / “Clear Leave” with optional 200-char note); never seeded from holidays, import, or any auto path. A Leave date is always an Off-Day.
+_Avoid_: Auto-leave, holiday leave
+
+**Leave History**: Year-filterable table of `LeaveDay` rows (`Date | Day | Holiday | Note`) shown as a persistent card on the Calendar page; filter `All | 2024..2027` defaults to current year, sorted `date DESC`.
+_Avoid_: Leave log, leave report
+
+**ODO Gap Period**: Open interval `(curTrip.date, nextTrip.date)` strictly between two chronologically adjacent Trips (`date || start_km` sort) where `cur.end_km != next.start_km` per `detectTripGaps` (`lib/continuityAlerts.ts`); the gap extent is the missing odometer `Δ`. Page KM gaps are not used for calendar filtering.
+_Avoid_: Missing period, jump interval
+
+**ODO-Continuous Segment**: Maximal date interval between `firstTripDate .. lastTripDate` that contains **no** ODO Gap Period interior; i.e. ledger is contiguous by `end_km == next start_km` throughout. No-trip Working Day enumeration is restricted to these segments.
+_Avoid_: Continuous ledger, clean range
+
+**Trips-On-OffDays Summary**: Popup grouped by date listing every Trip whose date is an Off-Day, each group header `Date — DayOfWeek — Reason (Leave/Mercantile/Public/Bank+ Poya/Weekend)` with per-Trip `Start KM/End KM/Distance/Type/Places/Fuel` and per-date totals; sorted `date ASC, start_km ASC`.
+_Avoid_: Holiday trips list, off-day report
+
+**No-Trip Working Days Summary**: Popup listing every Working Day date (`isOffDay=false`) with zero Trips that lies inside an ODO-Continuous Segment (any date strictly inside an ODO Gap Period is excluded/hidden); each row `Date | Day (Monday…Friday) | Holiday none` sorted `date ASC`. Enumerated over `[firstTripDate .. lastTripDate]` intersect `CALENDAR_RANGE 2024..2027` (no future beyond last trip/today).
+_Avoid_: Idle days, unused days (vague)

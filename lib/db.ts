@@ -99,6 +99,13 @@ db.exec(`
     last_active_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS leaves (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    note TEXT DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Seed or upsert default super admin

@@ -61,3 +61,10 @@ export interface FuelLog {
   balance_amount: number;
   created_at?: string;
 }
+
+export interface LeaveDay {
+  id: string;
+  date: string; // YYYY-MM-DD
+  note?: string;
+  created_at?: string;
+}

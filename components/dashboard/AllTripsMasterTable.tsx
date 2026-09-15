@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import type { Trip, BookPage } from '@/types';
 import {
   filterAndSortTrips,
@@ -35,6 +35,9 @@ import { getSheetSettings, fetchAllRows, getLastPullAt, setLastPullAt, pushAllRo
 import { compareBufferToDb, type PullComparison } from '@/lib/sheetPull';
 import { computePreservedRows, buildDbBufferRows, buildPushPayload } from '@/lib/sheetPush';
 import type { BufferTrip } from '@/lib/sheetClient';
+import { getLeaves } from '@/lib/leaveStore';
+import { getDayTypeInfo, getHoliday } from '@/lib/sriLankanHolidays';
+import { validateTripsOnOffDays } from '@/lib/holidayValidation';
 
 interface Props {
   trips: Trip[];
@@ -106,6 +109,16 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [lastPullAt, setLastPullAtState] = useState<string | null>(null);
   const [lastPushAt, setLastPushAtState] = useState<string | null>(null);
   React.useEffect(() => { setLastPullAtState(getLastPullAt()); setLastPushAtState(getLastPushAt()); }, []);
+  // Holiday/Leave state
+  const [leaveDates, setLeaveDates] = useState<Set<string>>(new Set());
+  const [dayTypeFilter, setDayTypeFilter] = useState<'All' | 'Off' | 'Working'>('All');
+  useEffect(() => { getLeaves().then(lvs => setLeaveDates(new Set(lvs.map(l=>l.date)))).catch(()=>{}); }, [trips]);
+  useEffect(() => {
+    const h = () => getLeaves().then(lvs => setLeaveDates(new Set(lvs.map(l=>l.date)))).catch(()=>{});
+    window.addEventListener('fleetledger:data-changed', h);
+    window.addEventListener('storage', h);
+    return () => { window.removeEventListener('fleetledger:data-changed', h); window.removeEventListener('storage', h); };
+  }, []);
   // Sheet Push state
   const [sheetPushing, setSheetPushing] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
@@ -115,11 +128,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   const availableMonths = useMemo(() => getAvailableMonths(trips, pages), [trips, pages]);
 
-  const filtered = useMemo(() => {
+  const filteredBase = useMemo(() => {
     return filterAndSortTrips(trips, { search, tripType, month, sortColumn, sortDirection });
   }, [trips, search, tripType, month, sortColumn, sortDirection]);
 
+  const filtered = useMemo(() => {
+    if (dayTypeFilter === 'All') return filteredBase;
+    return filteredBase.filter(t => {
+      const info = getDayTypeInfo(t.date, leaveDates);
+      return dayTypeFilter === 'Off' ? info.isOffDay : !info.isOffDay;
+    });
+  }, [filteredBase, dayTypeFilter, leaveDates]);
+
   const sums = useMemo(() => computeFilteredSums(filtered), [filtered]);
+  const offDaySummary = useMemo(() => validateTripsOnOffDays(filtered, leaveDates), [filtered, leaveDates]);
 
   const globalSeqMap = useMemo(() => computeGlobalSeq(trips), [trips]);
 
@@ -1273,13 +1295,34 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
+            <select
+              aria-label="Filter by day type"
+              value={dayTypeFilter}
+              onChange={(e) => setDayTypeFilter(e.target.value as typeof dayTypeFilter)}
+              className="px-3 py-2 border border-rule-line rounded-lg text-sm bg-paper-sheet focus:outline-none focus:ring-2 focus:ring-telemetry-cyan/30"
+            >
+              <option value="All">All Days</option>
+              <option value="Off">Off-days only</option>
+              <option value="Working">Working days only</option>
+            </select>
           </div>
         </div>
+        {/* Off-day summary bar */}
+        {filtered.length > 0 && (
+          <div className="flex flex-wrap gap-2 text-[11px] px-1">
+            <span className="px-2 py-1 rounded-full bg-rose-50 border border-rose-200">Off-day: {offDaySummary.offDayTrips} trips • {offDaySummary.offDayKm.toLocaleString()} km</span>
+            <span className="px-2 py-1 rounded-full bg-slate-900 text-slate-100">Working: {offDaySummary.workingDayTrips} • {offDaySummary.workingDayKm.toLocaleString()} km</span>
+            <span className="px-2 py-1 rounded-full bg-sky-50 border border-sky-200">Leave: {offDaySummary.onLeave}</span>
+            <span className="px-2 py-1 rounded-full bg-amber-50 border border-amber-200">Mercantile: {offDaySummary.onMercantile}</span>
+            <span className="px-2 py-1 rounded-full bg-purple-50 border border-purple-200">Poya: {offDaySummary.onPoya}</span>
+            <a href="/calendar" className="px-2 py-1 rounded-full bg-paper-gutter border border-rule-line hover:bg-paper-sheet">Open Calendar →</a>
+          </div>
+        )}
       </div>
 
-      {/* Table - scrollable with visible scrollbars: desktop no horizontal scroll, only vertical */}
-      <div ref={tableContainerRef} className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-y-auto overflow-x-auto lg:overflow-x-hidden scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
-        <table className="w-full min-w-[960px] lg:min-w-0 lg:w-full text-left border-collapse">
+      {/* Table - scrollable with visible scrollbars: horizontal scroll restored */}
+      <div ref={tableContainerRef} className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-y-auto overflow-x-auto scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
+        <table className="w-full min-w-[1020px] text-left border-collapse">
           <thead className="sticky top-0 bg-paper-gutter z-10">
             <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
@@ -1288,6 +1331,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   Date <SortIcon col="date" />
                 </button>
               </th>
+              <th className="py-2.5 px-2 border-r border-rule-line w-28">Day Type</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Start Time</th>
               <th className="py-2.5 px-2 border-r border-rule-line">End Time</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">
@@ -1305,12 +1349,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   KM <SortIcon col="trip_distance" />
                 </button>
               </th>
-              <th className="py-2.5 px-2 border-r border-rule-line">
-                <button onClick={() => handleSort('trip_type')} className="flex items-center hover:text-on-surface">
-                  Type <SortIcon col="trip_type" />
-                </button>
-              </th>
-              <th className="py-2.5 px-2 border-r border-rule-line">
+              <th className="py-2.5 px-2 border-r border-rule-line w-[6%] max-w-[6%]">
                 <button onClick={() => handleSort('places_visited')} className="flex items-center hover:text-on-surface">
                   Route <SortIcon col="places_visited" />
                 </button>
@@ -1322,7 +1361,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Econ</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Balance</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Page</th>
-              <th className="py-2.5 px-2">⋯</th>
+              <th className="py-2.5 px-2 w-10 min-w-[40px] text-center bg-paper-gutter sticky right-0 z-10">⋯</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-rule-line font-body-sm text-sm text-on-surface">
@@ -1340,6 +1379,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const tripFuel = tripFuelMap.get(t.id);
                 const fuel = tripFuel ?? fuelMap.get(t.date);
                 const isEarliest = earliestDate === t.date;
+                const dayInfo = getDayTypeInfo(t.date, leaveDates);
+                const holiday = getHoliday(t.date);
                 const tripName = (t.places_visited ?? '').trim().toLowerCase();
                 const isDummyOrPrivateTrip = tripName === 'dummy' || tripName === 'private';
                 const isPrivateType = t.trip_type === 'Private';
@@ -1368,6 +1409,17 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                       {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
                     </span>
                   </td>
+                  <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line text-[11px]" title={holiday ? `${holiday.name} (${holiday.kinds.join('/')})${dayInfo.isLeave ? ` • Leave: ${leaveDates.has(t.date) ? 'personal' : ''}` : ''}` : dayInfo.label}>
+                    {dayInfo.isLeave ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 border border-orange-300 text-orange-700 font-semibold"><span className="w-2 h-2 rounded-full bg-orange-500" />Leave</span>
+                    ) : holiday?.isPoya ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-100 border border-yellow-300 text-yellow-800 font-semibold"><span className="w-2 h-2 rounded-full bg-yellow-500" />Poya</span>
+                    ) : holiday || dayInfo.isWeekend ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 border border-red-300 text-red-700 font-semibold"><span className="w-2 h-2 rounded-full bg-red-500" />{holiday ? (holiday.kinds.includes('M') ? 'Mercantile' : holiday.kinds.includes('P') ? 'Public' : 'Bank') : dayInfo.dayOfWeek.slice(0,3)}</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 font-semibold"><span className="w-2 h-2 rounded-full bg-green-500" />Weekday</span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
                     {renderEditableCell(t, 'start_time', t.start_time || '-')}
                   </td>
@@ -1395,10 +1447,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-right font-odometer-sm text-xs font-bold text-slate-surface border-r border-rule-line">
                     {Math.round(t.trip_distance).toLocaleString()}
                   </td>
-                  <td className="py-2 px-1 border-r border-rule-line">
-                    {renderEditableCell(t, 'trip_type', t.trip_type)}
-                  </td>
-                  <td className="py-2 px-2 max-w-[22%] w-[22%] border-r border-rule-line truncate" title={t.places_visited}>
+                  <td className="py-2 px-2 max-w-[6%] w-[6%] border-r border-rule-line truncate text-xs" title={t.places_visited}>
                     {renderEditableCell(t, 'places_visited', t.places_visited)}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
@@ -1422,11 +1471,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-xs font-mono border-r border-rule-line">
                     {t.page_id.replace('page-', 'P')}
                   </td>
-                  <td className="py-2 px-1 text-center relative">
+                  <td className="py-2 px-1 text-center relative w-10 min-w-[40px] bg-inherit sticky right-0">
                     <button
                       data-testid={`row-menu-${t.id}`}
                       onClick={() => setOpenMenuId(openMenuId === t.id ? null : t.id)}
-                      className="px-2 py-1 text-xs font-bold rounded hover:bg-paper-gutter"
+                      className="px-2 py-1.5 text-xs font-bold rounded bg-paper-sheet border border-rule-line shadow-sm hover:bg-paper-gutter"
                       aria-label="Actions"
                     >
                       ⋯

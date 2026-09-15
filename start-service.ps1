@@ -21,6 +21,8 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 Set-Location -LiteralPath $WorkDir
 
+Write-Host ("-- attempting to start service at {0} on {1}" -f (Get-Date -Format "HH:mm"), (Get-Date -Format "dd-MM-yyyy")) -ForegroundColor Cyan
+
 # --- Stop any ongoing web server (fresh start, data preserved) ---
 $TaskName = "LocalRunningCharterService"
 Write-Host "Stopping any ongoing web server on port $Port (data preserved)..." -ForegroundColor Cyan

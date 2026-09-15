@@ -14,6 +14,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { label: 'Dashboard & Analytics', href: '/', icon: 'dashboard' },
     { label: 'Physical Book Ledger (Dual-Page)', href: '/ledger', icon: 'auto_stories' },
     { label: 'All Trips Master Table', href: '/trips', icon: 'table_chart' },
+    { label: 'Holiday Calendar & Leaves', href: '/calendar', icon: 'calendar' },
     { label: 'Quick Trip Data Entry', href: '/trips/new', icon: 'add_circle' },
     { label: 'Vehicle Profile & Settings', href: '/settings/vehicle', icon: 'settings' },
   ];
@@ -50,7 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                       : 'text-paper-ledger hover:bg-primary hover:text-on-primary'
                   }`}
                 >
-                  <span className="text-lg">{item.icon === 'dashboard' ? '📊' : item.icon === 'auto_stories' ? '📖' : item.icon === 'table_chart' ? '📋' : item.icon === 'add_circle' ? '➕' : '⚙️'}</span>
+                  <span className="text-lg">{item.icon === 'dashboard' ? '📊' : item.icon === 'auto_stories' ? '📖' : item.icon === 'table_chart' ? '📋' : item.icon === 'calendar' ? '📅' : item.icon === 'add_circle' ? '➕' : '⚙️'}</span>
                   <span>{item.label}</span>
                 </Link>
               );
