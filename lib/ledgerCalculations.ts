@@ -259,6 +259,96 @@ export function computePageSeq(dayGroups: DayGroup[]): number[] {
 }
 
 /**
+ * Trip-level fuel info with economy applied only after the pumped trip.
+ * A pumped trip still uses the previous economy; the next trip uses the next segment's economy.
+ * In-Tank is added at the first trip of each date. Balances are per-trip using
+ * Position (balance before trip) -> Consumed -> +Drawn -> next Position.
+ * Used by All Trips Master Table and Trend graph for intra-day pump splits.
+ */
+export interface TripFuelInfo {
+  position: number;
+  economy: number;
+  balance: number;
+  pumped: number;
+  inTank: number;
+  drawn: number;
+}
+
+export function computeTripFuelMap(params: {
+  trips: Trip[];
+  pages: BookPage[];
+  dateEconomy: Map<string, number>;
+  dateInTank?: Map<string, number>;
+  openingFuel: number;
+}): Map<string, TripFuelInfo> {
+  const { trips, dateEconomy, dateInTank, openingFuel } = params;
+  const sorted = [...trips].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
+    return a.start_km - b.start_km;
+  });
+  const distinctDates = Array.from(new Set(sorted.map(t => t.date))).sort();
+  const result = new Map<string, TripFuelInfo>();
+  if (sorted.length === 0) return result;
+  let balance = roundToOneDecimal(openingFuel);
+  // current economy starts as economy of first trip's date
+  let currentEconomy = dateEconomy.get(sorted[0].date) ?? DEFAULT_FUEL_ECONOMY;
+  const dateFirstSeen = new Set<string>();
+  for (let i = 0; i < sorted.length; i++) {
+    const t = sorted[i];
+    // add In-Tank at first trip of each date (once per date, not per trip)
+    let inTankForTrip = 0;
+    if (!dateFirstSeen.has(t.date)) {
+      dateFirstSeen.add(t.date);
+      inTankForTrip = roundToOneDecimal(dateInTank?.get(t.date) ?? 0);
+      if (inTankForTrip) balance = roundToOneDecimal(balance + inTankForTrip);
+    }
+    const position = roundToOneDecimal(balance);
+    const economy = roundToOneDecimal(currentEconomy);
+    const distance = roundToIntegerKm(t.trip_distance);
+    const consumed = calculateConsumed(distance, economy);
+    const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
+    const afterConsumed = roundToOneDecimal(balance - consumed);
+    const newBalance = roundToOneDecimal(afterConsumed + pumped);
+    // For display, drawn is pumped of this trip; balance is after
+    result.set(t.id, {
+      position,
+      economy,
+      balance: newBalance,
+      pumped,
+      inTank: inTankForTrip,
+      drawn: pumped,
+    });
+    balance = newBalance;
+    // After this trip, if it was a pumped trip, switch economy for next trip to next distinct date's economy
+    if (pumped > 0 && i + 1 < sorted.length) {
+      const currIdx = distinctDates.indexOf(t.date);
+      let nextEconomy: number | null = null;
+      for (let j = currIdx + 1; j < distinctDates.length; j++) {
+        const nd = distinctDates[j];
+        if (dateEconomy.has(nd)) { nextEconomy = dateEconomy.get(nd)!; break; }
+      }
+      // If pumped trip is not on last date, jump to next date's economy (covers intra-day split)
+      // If pumped trip is on same date as next trip, this still jumps to next date's economy.
+      // If no next distinct date (single date book), keep current economy (no new value available)
+      if (nextEconomy !== null) {
+        currentEconomy = nextEconomy;
+      } else {
+        // No next date: keep current, but if next trip is same date, economy stays same (unable to represent split without extra slot)
+      }
+    } else if (pumped === 0 && i + 1 < sorted.length) {
+      // Even without pump, if next trip date differs, economy should follow dateEconomy
+      const nextDate = sorted[i + 1].date;
+      if (nextDate !== t.date) {
+        const nextDateEcon = dateEconomy.get(nextDate);
+        if (nextDateEcon !== undefined) currentEconomy = nextDateEcon;
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Global Chronological Sequence: Map<tripId, seq> for cross-Book traceability.
  * Sorts all trips by date, then trip_index, then start_km, assigns 1..T.
  */

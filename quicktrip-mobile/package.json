@@ -1,0 +1,23 @@
+{
+  "name": "quicktrip-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "QuickTrip Mobile PWA — Buffer Sheet staging (ADR 0014)",
+  "scripts": {
+    "dev": "next dev --webpack -p 3001",
+    "build": "next build --webpack",
+    "start": "next start -p 3001",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19"
+  }
+}

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import type { BookPage, Trip } from '@/types';
 import { getPages } from '@/lib/pageStore';
 import { getTrips } from '@/lib/tripStore';
@@ -9,17 +10,17 @@ import { AllTripsMasterTable } from '@/components/dashboard/AllTripsMasterTable'
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ContinuityAlertBanner } from '@/components/ContinuityAlertBanner';
 
-export default function TripsMasterPage() {
+function TripsMasterPageContent() {
+  const searchParams = useSearchParams();
+  const initialFocusId = searchParams.get('focus');
   const [pages, setPages] = useState<BookPage[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
 
   const refresh = useCallback(() => {
     Promise.all([getPages(), getTrips()]).then(([p, t]) => {
       setPages(p);
       setTrips(t);
-      setRefreshKey((k) => k + 1);
     });
   }, []);
 
@@ -65,8 +66,16 @@ export default function TripsMasterPage() {
             </Link>
           </div>
         )}
-        <AllTripsMasterTable key={refreshKey} trips={trips} pages={pages} compact={false} onDataChanged={refresh} />
+        <AllTripsMasterTable trips={trips} pages={pages} compact={false} onDataChanged={refresh} initialFocusId={initialFocusId} />
       </div>
     </ProtectedRoute>
+  );
+}
+
+export default function TripsMasterPage() {
+  return (
+    <React.Suspense fallback={<div className="p-8 text-center text-on-surface-variant">Loading trips...</div>}>
+      <TripsMasterPageContent />
+    </React.Suspense>
   );
 }

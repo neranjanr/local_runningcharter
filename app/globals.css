@@ -10,6 +10,10 @@
   --color-paper-ledger: #F8FAFC;
   --color-paper-gutter: #F1F5F9;
   --color-slate-surface: #1E293B;
+  --color-cluster-dark: #0a0d14;
+  --color-cluster-bezel: #121722;
+  --color-cluster-panel: #181f2c;
+  --color-cluster-border: #263147;
   --color-telemetry-cyan: #0EA5E9;
   --color-trip-official: #059669;
   --color-trip-private: #D97706;

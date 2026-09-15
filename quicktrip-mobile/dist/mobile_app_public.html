@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="theme-color" content="#0f172a"/>
+<title>QuickTrip Mobile — Buffer Sheet</title>
+<style>
+*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+body{margin:0;background:#f1f5f9;color:#0f172a}
+header{background:#0f172a;color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10}
+header h1{font-size:14px;margin:0;line-height:1}
+header p{margin:2px 0 0;font-size:11px;color:#cbd5e1}
+.card{max-width:720px;margin:12px auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+.badge{font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:999px}
+.badge-amber{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
+.badge-zinc{background:#e2e8f0;color:#475569}
+.form{padding:14px;display:grid;gap:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+@media(max-width:520px){.grid3{grid-template-columns:1fr}}
+label{font-size:11px;font-weight:700;color:#334155;display:block;margin-bottom:4px}
+input,select{width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff}
+input:focus{outline:2px solid #0ea5e9;border-color:#0ea5e9}
+.hint{font-size:10px;color:#64748b;margin-top:4px}
+.group{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px}
+.group h3{margin:0 0 8px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b}
+.btn{width:100%;padding:13px;border:0;border-radius:12px;background:#0f172a;color:#fff;font-weight:800;font-size:15px}
+.btn:disabled{opacity:.5}
+.msg{margin:10px 14px 0;padding:10px;border-radius:10px;font-size:13px}
+.msg-ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+.msg-err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;background:#f1f5f9;padding:6px 6px;font-size:11px}
+td{padding:7px 6px;border-top:1px solid #f1f5f9;vertical-align:top}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.top-actions{display:flex;gap:8px}
+.top-actions button{padding:7px 10px;border-radius:10px;border:1px solid #334155;background:#1e293b;color:#fff;font-size:12px;font-weight:700}
+.settings{margin:10px 14px 0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;display:none}
+.settings.open{display:block}
+small{font-size:11px;color:#64748b}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>QuickTrip Mobile <span style="font-weight:400;color:#7dd3fc">• Buffer Sheet</span></h1>
+    <p id="statusLine">Works offline — no login • <span id="queueInfo">0 queued</span> • <span id="onlineInfo"></span></p>
+  </div>
+  <div class="top-actions"><button id="settingsBtn">Settings</button><button id="refreshBtn">↻</button></div>
+</header>
+
+<div class="card">
+  <div id="settingsPanel" class="settings">
+    <label>Apps Script Web App URL (…/exec) — paste once</label>
+    <input id="scriptUrlInput" placeholder="https://script.google.com/macros/s/AKfy.../exec"/>
+    <p class="hint">Bound Script deployed as <b>Anyone with the link</b> (no Google login). This URL is the only secret — keep it private. Saved in this phone's localStorage.</p>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button id="saveSettingsBtn" style="flex:1;padding:9px;border-radius:10px;border:0;background:#0ea5e9;color:#fff;font-weight:800">Save</button>
+      <button id="flushBtn" style="padding:9px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-weight:700">Flush queue</button>
+    </div>
+    <small>Edit <code>SCRIPT_URL_DEFAULT</code> at top of this file to hard-code and skip this step. Public template: <code>mobile_app_public.html</code> has no URL — run <code>npm run build:mobile</code> or <code>start-service.ps1</code> to generate <code>Mobile_with_url_private.html</code> with your private URL (gitignored, written by PS1).</small>
+  </div>
+
+  <div id="msgBox"></div>
+
+  <form id="tripForm" class="form" novalidate>
+    <div class="grid2">
+      <div><label>Date</label><input id="date" type="date" required/><div id="dow" class="hint" style="color:#0ea5e9;font-weight:800;letter-spacing:.06em;text-transform:uppercase"></div></div>
+      <div><label>Trip Type</label>
+        <div style="display:flex;gap:12px;margin-top:6px"><label style="font-weight:600;display:flex;gap:6px;align-items:center"><input type="radio" name="tripType" value="Official" checked/> Official</label><label style="font-weight:600;display:flex;gap:6px;align-items:center"><input type="radio" name="tripType" value="Private"/> Private</label></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>Odometer — Start + Distance = End (Integer KM)</h3>
+      <div class="grid3">
+        <div><label>Start KM</label><input id="startKm" type="number" step="1" inputmode="numeric" required/><div id="startBadge" class="hint"><span class="badge badge-amber">Auto from last End</span></div></div>
+        <div><label>End KM</label><input id="endKm" type="number" step="1" inputmode="numeric" placeholder="End"/><div class="hint">or fill Distance → auto End</div></div>
+        <div><label>Distance (KM)</label><input id="distance" type="number" step="1" inputmode="numeric" placeholder="Distance"/></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h3>Time — End − Duration = Start • Estimated Start</h3>
+      <div class="grid3">
+        <div><label>Start <span style="color:#94a3b8;font-weight:400">Opt</span></label><div style="display:flex;gap:6px"><input id="startTime" type="time" style="flex:1"/><button type="button" id="autoBtn" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-weight:800;font-size:11px">AUTO</button></div><div class="hint">Auto: End − (Distance/speed) tiered &lt;10→15 &lt;20→20 &lt;40→25 ≤60→30 &gt;60→35 ceil 5 min</div></div>
+        <div><label>End Time *</label><input id="endTime" type="time" required/><div class="hint" style="color:#0ea5e9;font-weight:700">defaults to now</div></div>
+        <div><label>Duration HH:MM</label><input id="duration" type="text" placeholder="00:55" inputmode="numeric"/><div class="hint">Enter to compute Start</div></div>
+      </div>
+    </div>
+
+    <div><label>Places Visited / Route & Purpose *</label><input id="places" type="text" placeholder="HQ Fleet Yard → Regional Port Customs" required/></div>
+    <div class="grid2">
+      <div><label>Fuel Pumped (L) <span style="color:#94a3b8">Opt</span></label><input id="fuelPumped" type="number" step="0.1" inputmode="decimal" placeholder="35.0"/></div>
+      <div><label>Fuel Order No <span style="color:#94a3b8">Opt</span></label><input id="fuelOrderNo" type="text" placeholder="#FO-88912"/></div>
+    </div>
+
+    <button class="btn" id="saveBtn" type="submit">Save to Buffer Sheet</button>
+    <small style="text-align:center;display:block">File: <code>mobile_app_public.html</code> — copy phone file <code>Mobile_with_url_private.html</code> (generated via <code>start-service.ps1</code> / <code>npm run build:mobile</code>) to phone, open in Chrome → Add to Home Screen. Public template has no URL.</small>
+  </form>
+
+  <div style="padding:14px;border-top:1px solid #e2e8f0">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3 style="margin:0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#64748b">Last 10 in Buffer Sheet</h3><small id="last10Info"></small></div>
+    <div id="last10Wrap" style="overflow:auto"><table id="last10Table"><thead><tr><th>Date</th><th>KM</th><th>Dist</th><th>Places</th></tr></thead><tbody id="last10Body"><tr><td colspan="4" style="color:#94a3b8">No records yet — check Settings.</td></tr></tbody></table></div>
+    <div id="queueNote" style="margin-top:8px;font-size:12px;color:#d97706;display:none"></div>
+  </div>
+</div>
+
+<script>
+// ====== CONFIG — paste your Script URL here to hard-code (skips Settings) ======
+const SCRIPT_URL_DEFAULT = ""; // public template — no secret; generate private file via start-service.ps1 / npm run build:mobile (reads PS1 $ScriptUrl or config/sheet.local.json)
+// ============================================================================
+
+const QUEUE_KEY="mobile.queue";
+const $=id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,"0");
+function todayISO(){const d=new Date();return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`}
+function nowHM(){const d=new Date();return `${pad(d.getHours())}:${pad(d.getMinutes())}`}
+function dayOfWeek(iso){const[ y,m,d]=iso.split("-").map(Number);const dt=new Date(y,m-1,d);return ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][dt.getDay()]}
+function roundInt(n){return Math.round(Number(n))}
+function round1(n){return Math.round(Number(n)*10)/10}
+function parseIntKm(s){const n=parseFloat(s);return isNaN(n)?NaN:Math.round(n)}
+function calcDist(s,e){return Math.round(e-s)}
+function calcEnd(s,d){return Math.round(s+d)}
+function parseTimeToMin(t){if(!t||!t.includes(":")) return 0;const [h,m]=t.split(":").map(Number);return (h||0)*60+(m||0)}
+function minToHM(min){const n=((min%1440)+1440)%1440;return `${pad(Math.floor(n/60))}:${pad(n%60)}`}
+function calcDurationMin(s,e){const a=parseTimeToMin(s),b=parseTimeToMin(e);let d=b-a;if(d<0)d+=1440;return d}
+function calcStartFromEndDur(end,dur){return minToHM(parseTimeToMin(end)-dur)}
+function parseDurToMin(s){if(!s||!s.trim()) return 0;const t=s.trim();if(t.includes(":")){const [h,m]=t.split(":").map(x=>parseInt(x,10)||0);return h*60+m}const n=Number(t);return isNaN(n)?0:Math.round(n)}
+function formatDur(min){min=Math.max(0,min);return `${pad(Math.floor(min/60))}:${pad(min%60)}`}
+function getSpeedForDistance(distanceKm){ if(distanceKm < 10) return 15; if(distanceKm < 20) return 20; if(distanceKm < 40) return 25; if(distanceKm <= 60) return 30; return 35; }
+function estMinutes(dist){if(!dist||dist<=0||!isFinite(dist)) return null;const speed=getSpeedForDistance(dist);const raw=(dist/speed)*60;const ceiled=Math.ceil(raw/5)*5;return ceiled>0?ceiled:null}
+function estStart(end,dist){const mins=estMinutes(dist);if(mins==null||!end||!end.includes(":")) return null;return calcStartFromEndDur(end,mins)}
+
+function getScriptUrl(){
+  const ls=localStorage.getItem("mobile.scriptUrl")||"";
+  if(ls) return ls;
+  if(SCRIPT_URL_DEFAULT) return SCRIPT_URL_DEFAULT;
+  return "";
+}
+function isOnline(){return navigator.onLine}
+function updateOnlineInfo(){
+  $("onlineInfo").textContent=isOnline()?"Online":"Offline";
+  $("queueInfo").textContent=`${getQueue().length} queued`;
+}
+function getQueue(){try{return JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]")}catch{return []}}
+function setQueue(q){localStorage.setItem(QUEUE_KEY,JSON.stringify(q));updateOnlineInfo()}
+function queueTrip(trip){const q=getQueue();q.push({...trip,_queuedAt:new Date().toISOString()});setQueue(q)}
+function msg(t,m){const b=$("msgBox");b.innerHTML=`<div class="msg ${t==="ok"?"msg-ok":"msg-err"}">${m}</div>`;if(t==="ok") setTimeout(()=>b.innerHTML="",3500)}
+function setBadgeAuto(isAuto){$("startBadge").innerHTML=isAuto?`<span class="badge badge-amber">Auto from last End</span>`:`<span class="badge badge-zinc">Manual override</span>`}
+
+// init
+$("date").value=todayISO();$("dow").textContent=dayOfWeek($("date").value);$("endTime").value=nowHM();
+if(SCRIPT_URL_DEFAULT && !localStorage.getItem("mobile.scriptUrl")) localStorage.setItem("mobile.scriptUrl",SCRIPT_URL_DEFAULT);
+if(getScriptUrl()) {$("scriptUrlInput").value=getScriptUrl();}
+
+let isAutoStart=true;
+function setStartFromLastEnd(endKmVal){$("startKm").value=String(roundInt(endKmVal));isAutoStart=true;setBadgeAuto(true)}
+
+async function fetchLast10(){
+  const url=getScriptUrl();if(!url){$("last10Info").textContent="Set Script URL in Settings";return}
+  $("last10Info").textContent="Loading…";
+  try{
+    const full=url+(url.includes("?")?"&":"?")+"action=last10";
+    const r=await fetch(full,{method:"GET",redirect:"follow"});
+    if(!r.ok) throw new Error(r.status);
+    const j=await r.json();
+    const rows=(j.rows||j.trips||[]);
+    renderLast10(rows);
+    if(rows.length>0){const last=rows[rows.length-1];setStartFromLastEnd(last.end_km)}
+    $("last10Info").textContent=`${rows.length} row(s)`;
+  }catch(e){$("last10Info").textContent="Offline or Script error";renderLast10([])}
+  updateOnlineInfo();
+}
+function renderLast10(rows){
+  const last10=rows.slice(-10).reverse();
+  const body=$("last10Body");
+  if(last10.length===0){body.innerHTML=`<tr><td colspan="4" style="color:#94a3b8">No records yet</td></tr>`;$("queueNote").style.display="none";return}
+  body.innerHTML=last10.map(r=>`<tr><td class="mono">${r.date}</td><td class="mono">${r.start_km}→${r.end_km}</td><td class="mono">${r.trip_distance}</td><td>${(r.places_visited||"").slice(0,40)} ${r.trip_type==="Private"?`<span style="background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:999px;font-size:10px;font-weight:800">PRI</span>`:""}</td></tr>`).join("");
+  const qlen=getQueue().length;
+  if(qlen>0){$("queueNote").style.display="block";$("queueNote").textContent=`${qlen} trip(s) queued locally — will sync when online. Tap Flush queue.`}
+  else $("queueNote").style.display="none";
+}
+async function flushQueue(){
+  const q=getQueue();if(q.length===0){msg("ok","Nothing queued");return}
+  const url=getScriptUrl();if(!url){msg("err","Set Script URL first");return}
+  let flushed=0;const remain=[];let failed=false;
+  for(const item of q){
+    if(failed){remain.push(item);continue}
+    const {_queuedAt,...trip}=item;
+    try{
+      const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"appendTrip",trip}),redirect:"follow"});
+      const j=await r.json().catch(()=>({ok:true}));
+      if(j.ok===false) throw new Error(j.error||"rejected");
+      if(!r.ok) throw new Error("http "+r.status);
+      flushed++;
+    }catch{remain.push(item);failed=true}
+  }
+  setQueue(remain);
+  if(flushed>0){msg("ok",`Synced ${flushed} queued trip(s)`);fetchLast10()} else msg("err","Flush failed — still offline or Script error");
+}
+
+// events
+$("settingsBtn").onclick=()=>$("settingsPanel").classList.toggle("open");
+$("refreshBtn").onclick=fetchLast10;
+$("saveSettingsBtn").onclick=()=>{
+  const v=$("scriptUrlInput").value.trim();
+  if(!v){msg("err","Paste Script URL (.../exec)");return}
+  localStorage.setItem("mobile.scriptUrl",v);
+  $("settingsPanel").classList.remove("open");
+  msg("ok","Settings saved — fetching…");
+  fetchLast10();
+};
+$("flushBtn").onclick=flushQueue;
+$("date").addEventListener("change",e=>{$("dow").textContent=dayOfWeek(e.target.value)});
+
+function maybeAuto(nextDist,nextEnd,curStart){
+  if(curStart!=="") return;
+  const d=parseIntKm(nextDist);if(isNaN(d)||d<=0) return;
+  if(!nextEnd||!nextEnd.includes(":")) return;
+  const est=estStart(nextEnd,d);if(!est) return;
+  $("startTime").value=est;
+  $("duration").value=formatDur(calcDurationMin(est,nextEnd));
+}
+
+$("startKm").addEventListener("input",e=>{
+  isAutoStart=false;setBadgeAuto(false);
+  const s=parseIntKm(e.target.value);if(isNaN(s)) return;
+  const eKm=parseIntKm($("endKm").value), dist=parseIntKm($("distance").value);
+  if(!isNaN(eKm)){$("distance").value=String(calcDist(s,eKm));maybeAuto(String(calcDist(s,eKm)),$("endTime").value,$("startTime").value)}
+  else if(!isNaN(dist)){$("endKm").value=String(calcEnd(s,dist))}
+});
+$("endKm").addEventListener("input",e=>{
+  const en=parseIntKm(e.target.value), st=parseIntKm($("startKm").value);
+  if(!isNaN(en)&&!isNaN(st)){const d=calcDist(st,en);$("distance").value=String(d);maybeAuto(String(d),$("endTime").value,$("startTime").value)}
+  else if(e.target.value==="") $("distance").value="";
+});
+$("distance").addEventListener("input",e=>{
+  const d=parseIntKm(e.target.value), st=parseIntKm($("startKm").value);
+  if(!isNaN(d)&&!isNaN(st)){$("endKm").value=String(calcEnd(st,d));maybeAuto(e.target.value,$("endTime").value,$("startTime").value)}
+});
+$("startTime").addEventListener("change",e=>{
+  const v=e.target.value,et=$("endTime").value;
+  if(v&&et) $("duration").value=formatDur(calcDurationMin(v,et));
+});
+$("endTime").addEventListener("change",e=>{
+  const v=e.target.value,st=$("startTime").value;
+  if(v&&st) $("duration").value=formatDur(calcDurationMin(st,v));
+  else if(v&&$("duration").value){const dm=parseDurToMin($("duration").value);$("startTime").value=calcStartFromEndDur(v,dm)}
+  else maybeAuto($("distance").value,v,st);
+});
+$("duration").addEventListener("change",e=>{
+  const dm=parseDurToMin(e.target.value),et=$("endTime").value;
+  if(et) $("startTime").value=calcStartFromEndDur(et,dm);
+});
+$("autoBtn").onclick=()=>{
+  const d=parseIntKm($("distance").value),et=$("endTime").value;
+  if(isNaN(d)||d<=0||!et.includes(":")){msg("err","Enter Distance and End Time to estimate Start");return}
+  const est=estStart(et,d);if(!est){msg("err","Cannot estimate");return}
+  $("startTime").value=est;$("duration").value=formatDur(calcDurationMin(est,et));
+};
+
+$("tripForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const places=$("places").value.trim();if(!places){msg("err","Places visited is required");return}
+  const sKm=parseIntKm($("startKm").value),eKm=parseIntKm($("endKm").value),dist=parseIntKm($("distance").value);
+  const date=$("date").value,endTime=$("endTime").value;
+  if(isNaN(sKm)||isNaN(eKm)||isNaN(dist)){msg("err","Provide valid odometer values");return}
+  if(!date||!endTime){msg("err","Date and End Time required");return}
+  if(eKm < sKm){msg("err","End KM cannot be < Start KM");return}
+  const url=getScriptUrl();if(!url){msg("err","Set Script URL in Settings first");$("settingsPanel").classList.add("open");return}
+  const tripType=document.querySelector('input[name="tripType"]:checked').value;
+  const trip={
+    date, start_km:roundInt(sKm), end_km:roundInt(eKm), trip_distance:roundInt(dist),
+    start_time:$("startTime").value||"", end_time:endTime, trip_type:tripType,
+    places_visited:places,
+    fuel_pumped_amount:$("fuelPumped").value?round1(parseFloat($("fuelPumped").value)):0,
+    fuel_order_no:$("fuelOrderNo").value||""
+  };
+  $("saveBtn").disabled=true;$("saveBtn").textContent="Saving…";
+  try{
+    if(!isOnline()) throw new Error("offline");
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"appendTrip",trip}),redirect:"follow"});
+    const j=await r.json().catch(()=>({ok:true}));
+    if(j.ok===false) throw new Error(j.error||"rejected");
+    if(!r.ok) throw new Error("http "+r.status);
+    msg("ok","Saved to Buffer Sheet ✓");
+    fetchLast10();
+  }catch(err){
+    queueTrip(trip);
+    msg("ok", String(err).includes("offline")?"Offline — queued locally, will sync when online":"Queued locally (sheet unreachable) — will sync. "+String(err).slice(0,120));
+  }finally{
+    // reset for next entry keep continuity
+    const prevEnd=eKm;
+    $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("startTime").value="";$("duration").value="";
+    $("endTime").value=nowHM();
+    setStartFromLastEnd(prevEnd);
+    $("saveBtn").disabled=false;$("saveBtn").textContent="Save to Buffer Sheet";
+  }
+});
+
+window.addEventListener("online",()=>{updateOnlineInfo();flushQueue()});
+window.addEventListener("offline",updateOnlineInfo);
+setInterval(()=>{if(isOnline()&&getQueue().length>0) flushQueue()},30000);
+fetchLast10();updateOnlineInfo();
+</script>
+</body>
+</html>

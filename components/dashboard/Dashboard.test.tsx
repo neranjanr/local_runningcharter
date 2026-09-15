@@ -63,9 +63,9 @@ describe('Dashboard components', () => {
     expect(screen.getByTestId('metric-official')).toHaveTextContent('121 KM');
     expect(screen.getByTestId('metric-private')).toHaveTextContent('30 KM');
     expect(screen.getByTestId('metric-total')).toHaveTextContent('151 KM');
-    expect(screen.getByTestId('metric-official')).toHaveTextContent('Official Distance (This Month)');
-    expect(screen.getByTestId('metric-private')).toHaveTextContent('Private Mileage (This Month)');
-    expect(screen.getByTestId('metric-total')).toHaveTextContent('Total (This Month)');
+    expect(screen.getByTestId('metric-official')).toHaveTextContent('Official');
+    expect(screen.getByTestId('metric-private')).toHaveTextContent('Private');
+    expect(screen.getByTestId('metric-total')).toHaveTextContent('Total');
     expect(screen.getByTestId('metric-fuel')).toHaveTextContent('48.3 L');
     expect(screen.getByTestId('metric-fuel')).toHaveTextContent('60.4%');
     expect(screen.getByTestId('metric-odo')).toHaveTextContent('123,456 KM');

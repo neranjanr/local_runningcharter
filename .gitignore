@@ -44,4 +44,10 @@ next-env.d.ts
 *.db
 *.db-journal
 
+# sheet secrets — gitignored local config (see config/sheet.example.json)
+config/sheet.local.json
+sheet.local.json
+# mobile private build — single-file with hard-coded Script URL for phone (gitignored)
+quicktrip-mobile/dist/Mobile_with_url_private.html
+
 .vercel

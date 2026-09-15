@@ -162,6 +162,10 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
 
   return (
     <div className="flex flex-col">
+      {/* Print-only vehicle reg header — top right */}
+      <div className="hidden print:flex print:justify-end print:mb-2 print:text-xs print:font-bold print:text-black">
+        {vehicle?.registration_no && <span>Vehicle: {vehicle.registration_no}</span>}
+      </div>
       <PageNavigation
         pages={sortedPages}
         currentPage={currentPage}
@@ -177,24 +181,28 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
         <ExcelExportButton pages={sortedPages} trips={trips} vehicle={vehicle} />
       </div>
 
-      {/* Full-Width Stack: T1 on top, T2 and T3 stacked below */}
-      <div className="flex flex-col gap-6">
-        <Side1TripsLog pageNumber={currentPage.page_number} month={currentPage.month} dayGroups={dayGroups} grandTotals={grandTotals} pageSeq={pageSeq} />
-        <Side2FuelTables
-          pageNumber={currentPage.page_number}
-          ledgerDays={ledgerDays}
-          summary={summary}
-          vehicleTankCapacity={vehicle?.tank_capacity ?? 65}
-          rawEconomies={rawEconomies}
-          rawInTanks={rawInTanks}
-          onEconomyChange={handleEconomyChange}
-          onInTankChange={handleInTankChange}
-          pageGaps={pageGaps}
-          dayGroupFuelGaps={dayGroupFuelGaps}
-        />
+      {/* Print: Page 1 = Side1 (Table 1), Page 2 = Side2 Tables side-by-side */}
+      <div className="flex flex-col gap-6 print:gap-0">
+        <div className="print:break-after-page">
+          <Side1TripsLog pageNumber={currentPage.page_number} month={currentPage.month} dayGroups={dayGroups} grandTotals={grandTotals} pageSeq={pageSeq} />
+        </div>
+        <div className="print:break-before-page">
+          <Side2FuelTables
+            pageNumber={currentPage.page_number}
+            ledgerDays={ledgerDays}
+            summary={summary}
+            vehicleTankCapacity={vehicle?.tank_capacity ?? 65}
+            rawEconomies={rawEconomies}
+            rawInTanks={rawInTanks}
+            onEconomyChange={handleEconomyChange}
+            onInTankChange={handleInTankChange}
+            pageGaps={pageGaps}
+            dayGroupFuelGaps={dayGroupFuelGaps}
+          />
+        </div>
       </div>
 
-      {/* Print helper style */}
+      {/* Print helper style — dual-page: Side1 page1, Side2 tables side-by-side page2 */}
       <style>{`
         @media print {
           @page { size: landscape; margin: 0.5cm; }
@@ -202,6 +210,7 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
           aside, header { display: none !important; }
           main { padding: 0 !important; max-width: none !important; }
           tr.font-semibold { font-weight: 600 !important; }
+          [data-testid="continuity-alert-banner"] { display: none !important; }
         }
       `}</style>
     </div>

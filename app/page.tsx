@@ -94,8 +94,8 @@ export default function DashboardPage() {
 
         <ContinuityAlertBanner pages={pages} trips={trips} compact />
 
-      {/* Metric cards — This + Previous Month in one tile + Vehicle cluster */}
-      <MetricCards metrics={metrics} prevMetrics={prevMetrics} thisMonthLabel={`This Month (${curLabel})`} prevMonthLabel={`Previous Month (${prevLabel})`} />
+      {/* Metric cards — dark Monthly Distances + Digital Vehicle Cluster (vehicle identity in visor) */}
+      <MetricCards metrics={metrics} prevMetrics={prevMetrics} thisMonthLabel={`This Month (${curLabel})`} prevMonthLabel={`Previous Month (${prevLabel})`} vehicle={vehicle} />
 
       {/* Fuel Economy Trend (70%) + Fuel IN Summary (30%) — horizontal scroll, latest at right, gaps = odometer loss */}
       {hasData && (
@@ -109,18 +109,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Vehicle context strip */}
-      {vehicle && (
-        <div className="flex flex-wrap items-center gap-3 text-xs bg-paper-sheet border border-rule-line rounded-lg px-4 py-2.5">
-          <span className="font-bold text-on-surface">
-            {vehicle.brand} {vehicle.model}
-          </span>
-          <span className="text-on-surface-variant">{vehicle.vehicle_type} • {vehicle.fuel_type}</span>
-          <span className="ml-auto font-mono text-on-surface-variant">
-            Odo: <span className="font-bold text-on-surface">{Math.round(vehicle.current_odometer)} KM</span> • Tank: <span className="font-bold text-on-surface">{vehicle.tank_capacity.toFixed(1)} L</span>
-          </span>
-        </div>
-      )}
+
 
       {!hasData ? (
         <div className="bg-paper-sheet rounded-xl border border-rule-line p-12 text-center flex flex-col items-center gap-3">

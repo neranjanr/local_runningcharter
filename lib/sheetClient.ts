@@ -29,9 +29,9 @@ export interface BufferTrip {
   fuel_order_no?: string;
 }
 
-export const DEFAULT_SHEET_ID = '1-TxFy4NfeAVO1C9iKBkqwp12XOs3Skr0jG3cQ174a9E';
-export const DEFAULT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1-TxFy4NfeAVO1C9iKBkqwp12XOs3Skr0jG3cQ174a9E/edit?gid=0#gid=0';
-export const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyf8U5JKR2br4vjfeSblOUcGlNGfowJgjDneFp1HfpzhJdgJIGCjCAaclQq_0vHin_Fpg/exec';
+// Defaults loaded from gitignored config/sheet.local.json via lib/sheetConfig.ts (see config/sheet.example.json)
+import { DEFAULT_SHEET_ID, DEFAULT_SHEET_URL, DEFAULT_SCRIPT_URL } from './sheetConfig';
+export { DEFAULT_SHEET_ID, DEFAULT_SHEET_URL, DEFAULT_SCRIPT_URL };
 
 export function getSheetSettings(): { sheetId: string; scriptUrl: string } {
   if (typeof window === 'undefined') return { sheetId: DEFAULT_SHEET_ID, scriptUrl: DEFAULT_SCRIPT_URL };

@@ -29,6 +29,8 @@ export interface BufferTrip {
   fuel_order_no?: string;
 }
 
+// Defaults mirrored from gitignored config/sheet.local.json (see config/sheet.example.json / lib/sheetConfig.ts)
+// Keep duplicate for standalone PWA build; consider importing from ../../lib/sheetConfig in monorepo.
 export const DEFAULT_SHEET_ID = '1-TxFy4NfeAVO1C9iKBkqwp12XOs3Skr0jG3cQ174a9E';
 export const DEFAULT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1-TxFy4NfeAVO1C9iKBkqwp12XOs3Skr0jG3cQ174a9E/edit?gid=0#gid=0';
 export const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyf8U5JKR2br4vjfeSblOUcGlNGfowJgjDneFp1HfpzhJdgJIGCjCAaclQq_0vHin_Fpg/exec';

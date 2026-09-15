@@ -1,0 +1,13 @@
+{
+  "name": "QuickTrip Mobile",
+  "short_name": "QuickTrip",
+  "description": "Offline trip capture to Buffer Sheet (ADR 0014)",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0ea5e9",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

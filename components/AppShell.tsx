@@ -8,7 +8,7 @@ import { useAuth } from '@/lib/authContext';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { user, isSuperAdmin } = useAuth();
+  const { user } = useAuth();
 
   const navItems = [
     { label: 'Dashboard & Analytics', href: '/', icon: 'dashboard' },
@@ -16,7 +16,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { label: 'All Trips Master Table', href: '/trips', icon: 'table_chart' },
     { label: 'Quick Trip Data Entry', href: '/trips/new', icon: 'add_circle' },
     { label: 'Vehicle Profile & Settings', href: '/settings/vehicle', icon: 'settings' },
-    ...(isSuperAdmin ? [{ label: 'Access — Allow-list', href: '/settings/access', icon: 'admin' } as const] : []),
   ];
 
   return (

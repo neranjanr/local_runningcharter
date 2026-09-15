@@ -24,13 +24,22 @@ export function calculateStartKm(endKm: number, distance: number): number {
 }
 
 /**
- * Estimated Start Time engine (Phase 2):
- * Suggests Start Time as End Time − (Trip Distance / 20 km/h), ceiled to nearest 5 minutes.
+ * Estimated Start Time engine (tiered by distance, ADR-0018):
+ * Speed table: <10→15, <20→20, <40→25, ≤60→30, >60→35 km/h; ceiled to nearest 5 min.
  * Returns null for zero/negative distance or missing endTime.
  */
+export function getSpeedForDistance(distanceKm: number): number {
+  if (distanceKm < 10) return 15;
+  if (distanceKm < 20) return 20;
+  if (distanceKm < 40) return 25;
+  if (distanceKm <= 60) return 30;
+  return 35;
+}
+
 export function calculateEstimatedMinutes(distanceKm: number): number | null {
   if (!distanceKm || distanceKm <= 0 || !Number.isFinite(distanceKm)) return null;
-  const rawMinutes = (distanceKm / 20) * 60; // distance * 3
+  const speed = getSpeedForDistance(distanceKm);
+  const rawMinutes = (distanceKm / speed) * 60;
   const ceiled = Math.ceil(rawMinutes / 5) * 5;
   if (ceiled <= 0) return null;
   return ceiled;

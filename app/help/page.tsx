@@ -17,8 +17,8 @@ const sections = [
   },
   {
     id: 'time-estimation',
-    title: '3. Time Estimation (End − Distance/20, ceil 5 min)',
-    content: `Estimated Start Time = End Time − (Distance / 20 km/h) ceiled to nearest 5 minutes: estimatedMinutes = ceil((distance/20)*60 /5)*5. Auto-fills only when Start Time is empty and End Time + Distance are present. The explicit "Auto" button recomputes even when Start Time is already filled, so edits to distance or End Time can be re-estimated. Manual override is always allowed and never auto-clobbered. End Time defaults to now (present time) on form load and remains overrideable to any HH:MM; Start Time may be left empty (null/"") and the Trip still saves.`,
+    title: '3. Time Estimation (tiered speed, ceil 5 min)',
+    content: `Estimated Start Time = End Time − (Distance / speed) ceiled to nearest 5 minutes: speed tier <10 km→15 km/h, <20→20, <40→25, ≤60→30, >60→35; estimatedMinutes = ceil((distance/speed)*60 /5)*5. Auto-fills only when Start Time is empty and End Time + Distance are present. The explicit "Auto" button recomputes even when Start Time is already filled, so edits to distance or End Time can be re-estimated. Manual override is always allowed and never auto-clobbered. End Time defaults to now (present time) on form load and remains overrideable to any HH:MM; Start Time may be left empty (null/"") and the Trip still saves.`,
   },
   {
     id: 'all-trips-workbook',
@@ -57,8 +57,8 @@ const sections = [
   },
   {
     id: 'auth-roles',
-    title: '11. Auth Roles (Landing, Super Admin, Allow-list)',
-    content: `Unauthenticated visitors see only Landing — a login page showing Super Admin password login (username Neranjan, hashed SupAd@2000, forced change on first login) and Google SSO. Google SSO is gated by the Super Admin's Gmail allow-list managed at /settings/access (one or many addresses, CRUD only for Super Admin). Allowed Gmail users can SSO and see Dashboard, Ledger, Trips, and Help. Non-allowed Gmail is rejected with "Not authorized — contact admin" and stays on Landing. All ledger routes are behind an authenticated guard except Landing; Help at /help is authenticated and linked from the header (?) icon. Successful Trip save shows a "Trip Added" toast (~2s) then redirects to Dashboard; import success shows "N trips added" then redirects.`,
+    title: '11. Auth Roles (Landing, Super Admin)',
+    content: `System is single-operator — Super Admin (Neranjan) only. Unauthenticated visitors see only Landing — a login page showing Super Admin password login (username Neranjan, hashed, forced change on first login) plus TOTP (Google Authenticator) and single-use Recovery Code at /recovery. No Gmail allow-list or Google SSO (removed ADR-0010/0019, /settings/access deleted). All ledger routes are behind an authenticated Landing Gate except Landing and /recovery; Help at /help is authenticated and linked from the header (?) icon. Successful Trip save shows a "Trip Added" toast (~2s) then redirects to Dashboard; import success shows "N trips added" then redirects.`,
   },
   {
     id: 'private-bold',
@@ -113,7 +113,7 @@ export default function HelpPage() {
         </div>
 
         <p className="mt-6 text-xs text-on-surface-variant">
-          Domain glossary: Book, Page, Trip, Vehicle, Book Opening, Fuel Economy/Position/In-Tank/Drawn/Consumed/Closing Balance, Adjusted Fuel Economy, Page-Wide Trip Sequence, Integer KM, Continuity Alert, All Trips Workbook, Ledger Full-Width Stack, Super Admin, Allowed Email, Landing, Help Page, Trip Import, Estimated Start Time, Continuity Break, Transposed Side 2, Focused Trip, Sheet Pull Import, Sheet Push (Export to Google Sheet), Push Preview, Sheet Settings (mobile.lastSheetPullAt/mobile.lastSheetPushAt), Import Preview, Sheet Proxy (GET allRows/last10, POST appendTrip/rewriteSheet + LockService).
+          Domain glossary: Book, Page, Trip, Vehicle, Book Opening, Fuel Economy/Position/In-Tank/Drawn/Consumed/Closing Balance, Adjusted Fuel Economy, Page-Wide Trip Sequence, Integer KM, Continuity Alert, All Trips Workbook, Ledger Full-Width Stack, Super Admin, TOTP, Recovery Code, Landing, Help Page, Trip Import, Estimated Start Time, Continuity Break, Transposed Side 2, Focused Trip, Sheet Pull Import, Sheet Push (Export to Google Sheet), Push Preview, Sheet Settings (mobile.lastSheetPullAt/mobile.lastSheetPushAt), Import Preview, Sheet Proxy (GET allRows/last10, POST appendTrip/rewriteSheet + LockService), Digital Vehicle Cluster, Fuel Economy Trend, Monthly Distances Tile.
         </p>
       </div>
     </ProtectedRoute>

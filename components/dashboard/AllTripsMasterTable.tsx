@@ -9,7 +9,7 @@ import {
   type SortDirection,
   computeFilteredSums,
 } from '@/lib/dashboardCalculations';
-import { computeGlobalSeq, computeLedgerDays, computeLedgerSummary } from '@/lib/ledgerCalculations';
+import { computeGlobalSeq, computeLedgerDays, computeLedgerSummary, computeTripFuelMap } from '@/lib/ledgerCalculations';
 import { detectTripGaps, detectPageGaps, detectDayGroupFuelGaps } from '@/lib/continuityAlerts';
 import { updateTrip, deleteTrip, type TripUpdateFields } from '@/lib/tripStore';
 import {
@@ -42,6 +42,7 @@ interface Props {
   title?: string;
   compact?: boolean;
   onDataChanged?: () => void;
+  initialFocusId?: string | null;
 }
 
 type EditableField = 'start_km' | 'end_km' | 'start_time' | 'end_time' | 'trip_type' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited' | 'fuel_position' | 'in_tank' | 'fuel_economy';
@@ -60,7 +61,7 @@ interface GapPair {
   delta: number;
 }
 
-export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Table', compact = false, onDataChanged }: Props) {
+export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Table', compact = false, onDataChanged, initialFocusId }: Props) {
   const [search, setSearch] = useState('');
   const [tripType, setTripType] = useState<'All' | 'Official' | 'Private'>('All');
   const [month, setMonth] = useState<string>('All');
@@ -90,6 +91,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [focusedTripId, setFocusedTripId] = useState<string | null>(null);
   const [importedIds, setImportedIds] = useState<Set<string>>(new Set());
   const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const preserveScrollRef = useRef(false);
+  const savedScrollTopRef = useRef<number | null>(null);
 
   // Sheet Pull state
   const [showSheetSettings, setShowSheetSettings] = useState(false);
@@ -171,10 +175,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   }, [trips]);
 
   // Fuel ledger per date — continuous chain: page N start = previous page computed balance (auto-count for continuous range)
-  const fuelMap = useMemo(() => {
+  const { fuelMap, tripFuelMap } = useMemo(() => {
     const map = new Map<string, { position: number; inTank: number; pumped: number; economy: number; balance: number }>();
+    const dateEconomy = new Map<string, number>();
+    const dateInTank = new Map<string, number>();
     const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
     let runningFuelPos: number | null = null;
+    let openingFuel = sortedPages.length > 0 ? sortedPages[0].start_fuel_balance : 10;
     for (const page of sortedPages) {
       try {
         const economies = getFuelEconomiesForPage(page.id);
@@ -184,12 +191,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         const days = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks });
         for (const d of days) {
           if (!map.has(d.date)) map.set(d.date, { position: d.fuelPosition, inTank: d.inTank, pumped: d.drawn, economy: d.fuelEconomy, balance: d.balance });
+          if (!dateEconomy.has(d.date)) dateEconomy.set(d.date, d.fuelEconomy);
+          if (!dateInTank.has(d.date)) dateInTank.set(d.date, d.inTank);
         }
         if (days.length > 0) runningFuelPos = days[days.length - 1].balance;
         else if (runningFuelPos === null) runningFuelPos = page.start_fuel_balance;
       } catch {}
     }
-    return map;
+    // Trip-level map with economy after pumped trip (intra-day split)
+    let tripFuelMap = new Map<string, { position: number; economy: number; balance: number; pumped: number; inTank: number; drawn: number }>();
+    try {
+      tripFuelMap = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel });
+    } catch {}
+    return { fuelMap: map, tripFuelMap };
   }, [trips, pages]);
 
   const focusTrip = useCallback((tripId: string | null, opts?: { clearFilter?: boolean }) => {
@@ -226,10 +240,43 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     return () => clearTimeout(t);
   }, [importedIds]);
 
+  // Preserve scroll position for inline edits — stay on same row instead of jumping to top
+  React.useEffect(() => {
+    if (preserveScrollRef.current && savedScrollTopRef.current !== null && tableContainerRef.current) {
+      const top = savedScrollTopRef.current;
+      requestAnimationFrame(() => {
+        if (tableContainerRef.current) tableContainerRef.current.scrollTop = top;
+      });
+      preserveScrollRef.current = false;
+      savedScrollTopRef.current = null;
+    }
+  }, [trips]);
+
+  // Deep-link focus from Continuity banner (?focus=tripId)
+  React.useEffect(() => {
+    if (!initialFocusId || trips.length === 0) return;
+    const exists = trips.some((t) => t.id === initialFocusId);
+    if (exists) {
+      focusTrip(initialFocusId, { clearFilter: true });
+    } else {
+      // fallback: nearest ODO/trip
+      const sorted = [...trips].sort((a, b) => a.date.localeCompare(b.date) || a.start_km - b.start_km);
+      const fallback = sorted[0]?.id;
+      if (fallback) focusTrip(fallback, { clearFilter: true });
+    }
+  }, [initialFocusId, trips]);
+
   const notifyDataChanged = useCallback(() => {
     onDataChanged?.();
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('fleetledger:data-changed'));
   }, [onDataChanged]);
+
+  const preserveTableScroll = useCallback(() => {
+    if (tableContainerRef.current) {
+      savedScrollTopRef.current = tableContainerRef.current.scrollTop;
+      preserveScrollRef.current = true;
+    }
+  }, []);
 
   const handleSort = (col: SortColumn) => {
     if (sortColumn === col) {
@@ -307,7 +354,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           })();
         });
       }
+      preserveTableScroll();
       setEditState(null);
+      // highlight edited row without scrolling away
+      setFocusedTripId(tripId);
+      setTimeout(() => setFocusedTripId(null), 2200);
       notifyDataChanged();
       return;
     }
@@ -355,15 +406,20 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   const doSave = async () => {
     if (!confirmSave) return;
+    const savedId = confirmSave.tripId;
+    preserveTableScroll();
     await updateTrip(confirmSave.tripId, confirmSave.fields);
     setConfirmSave(null);
     // Run gap detection and alert
-    const gaps = detectTripGaps([...trips.filter(t=>t.id!==confirmSave.tripId), {...trips.find(t=>t.id===confirmSave.tripId)!, ...confirmSave.fields} as Trip]);
+    const gaps = detectTripGaps([...trips.filter(t=>t.id!==savedId), {...trips.find(t=>t.id===savedId)!, ...confirmSave.fields} as Trip]);
     if (gaps.length > 0) {
       const kmGaps = gaps.filter(g=>g.kind==='km').length;
       const fuelGaps = gaps.filter(g=>g.kind==='fuel').length;
       if (kmGaps || fuelGaps) setImportMsg(`Gap detected after edit: ${kmGaps} KM gaps, ${fuelGaps} fuel gaps — check ledger continuity`);
     }
+    // stay on same row — highlight without scrolling away
+    setFocusedTripId(savedId);
+    setTimeout(() => setFocusedTripId(null), 2200);
     notifyDataChanged();
   };
 
@@ -1221,9 +1277,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </div>
       </div>
 
-      {/* Table - scrollable with visible scrollbars */}
-      <div className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-x-auto overflow-y-auto scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
-        <table className="w-full min-w-[1180px] text-left border-collapse">
+      {/* Table - scrollable with visible scrollbars: desktop no horizontal scroll, only vertical */}
+      <div ref={tableContainerRef} className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-y-auto overflow-x-auto lg:overflow-x-hidden scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
+        <table className="w-full min-w-[960px] lg:min-w-0 lg:w-full text-left border-collapse">
           <thead className="sticky top-0 bg-paper-gutter z-10">
             <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
@@ -1281,7 +1337,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const hasKmGap = tripKmGapIds.has(t.id);
                 const groupIdx = dateGroups.get(t.date) ?? 0;
                 const isAltDay = groupIdx % 2 === 0;
-                const fuel = fuelMap.get(t.date);
+                const tripFuel = tripFuelMap.get(t.id);
+                const fuel = tripFuel ?? fuelMap.get(t.date);
                 const isEarliest = earliestDate === t.date;
                 const tripName = (t.places_visited ?? '').trim().toLowerCase();
                 const isDummyOrPrivateTrip = tripName === 'dummy' || tripName === 'private';
@@ -1292,12 +1349,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const predGap = predecessorGapMap.get(t.id);
                 const isFocused = focusedTripId === t.id;
                 const isJustImported = importedIds.has(t.id);
+                const isFuelPumped = (t.fuel_pumped_amount ?? 0) > 0;
                 return (
                 <tr
                   key={t.id}
                   data-testid={`trip-row-${t.id}`}
                   ref={(el) => { if (el) rowRefs.current.set(t.id, el); else rowRefs.current.delete(t.id); }}
-                  className={`transition-colors border-b border-rule-line/60 ${isFocused ? 'ring-2 ring-telemetry-cyan bg-cyan-50' : isJustImported ? 'bg-cyan-50' : rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange && !isFocused && !isJustImported ? '' : 'hover:bg-amber-50/40'}`}
+                  className={`transition-colors border-b border-rule-line/60 ${isFocused ? 'ring-2 ring-telemetry-cyan bg-cyan-50' : isJustImported ? 'bg-cyan-50' : rowBg} ${isFuelPumped ? 'text-blue-900' : ''} ${shouldOrange && !isFocused && !isJustImported ? '' : 'hover:bg-amber-50/40'}`}
                 >
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
                     <span className="inline-flex items-center justify-center gap-0.5">
@@ -1340,7 +1398,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-1 border-r border-rule-line">
                     {renderEditableCell(t, 'trip_type', t.trip_type)}
                   </td>
-                  <td className="py-2 px-2 max-w-[30%] w-[30%] border-r border-rule-line truncate" title={t.places_visited}>
+                  <td className="py-2 px-2 max-w-[22%] w-[22%] border-r border-rule-line truncate" title={t.places_visited}>
                     {renderEditableCell(t, 'places_visited', t.places_visited)}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">

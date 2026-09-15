@@ -182,8 +182,11 @@ function estimatePrevEconomyFallback(): number {
 }
 
 /**
- * Estimate economies for all segments, using ledger to get per-day positions and inTanks.
- * Falls back to simple date-aggregates if ledger unavailable.
+ * Estimate economies for all segments using trip-level logic:
+ * Economy changes only AFTER the pumped trip (not the pumped date).
+ * Fuel pumped on trip k is available only for trips k+1 onward.
+ * Each fuel-in segment after a pump covers trips [pumpIdx+1 .. nextPumpIdx] inclusive of the next pump's distance.
+ * Brute-force 0.1 step search keeps balance in [1, tankCapacity] after each trip.
  */
 export function estimateFuelEconomies(params: {
   trips: Trip[];
@@ -195,170 +198,216 @@ export function estimateFuelEconomies(params: {
   const { trips, pages, vehicle, prevEconomies } = params;
   const tankCapacity = params.tankCapacityOverride ?? (vehicle?.tank_capacity ?? 75);
   const minFuel = 1;
-  const segments = buildFuelInSegments({ trips });
-  if (segments.length === 0) return [];
 
-  // Need per-date ledger details to get position and inTank per day
-  // Build a map date -> { pos, inTank, dist } by running ledgerDays across pages ordered by page_number
-  const dateLedger = new Map<string, { pos: number; inTank: number; dist: number }>();
+  if (trips.length === 0) return [];
+
+  const sortedTrips = [...trips].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
+    return a.start_km - b.start_km;
+  });
+
+  const pumpIndices: number[] = [];
+  sortedTrips.forEach((t, idx) => {
+    if ((t.fuel_pumped_amount ?? 0) > 0) pumpIndices.push(idx);
+  });
+
+  if (pumpIndices.length === 0) return [];
+
   const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
-  // To get pos/inTank/dist per date, compute ledgerDays for each page (economies/inTanks from stores or defaults doesn't affect distances, but pos does propagate)
-  // For estimation, we need actual pos chain with current economies? We approximate using provided prevEconomies propagation else fallback.
-  // Simplify: use computeLedgerDays with given prevEconomies approximated? Instead derive pos as cumulative fuel logic with unknown E -> we iterate.
-  // We'll instead build per-date inTank and dist independent of economy, and simulate pos chain using our own suggested Es sequentially.
-  const dateInfo = new Map<string, { dist: number; inTank: number; drawn: number }>();
-  // collect per-date inTank from ledger if available via Import: we don't have global store here, so default 0; caller can inject via trips? For now 0
-  // Use trips per date for dist/drawn
-  for (const seg of segments) {
-    // dates slice will be recomputed later with successor logic; just ensure map filled
-  }
-  const allSortedDates = Array.from(new Set(trips.map(t => t.date))).sort();
-  for (const d of allSortedDates) {
-    const dayTrips = trips.filter(t => t.date === d);
-    const dist = roundToIntegerKm(dayTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
-    // Try to get inTank from any page's stored inTanks: we need page lookup
-    // Find page for date
-    const sampleTrip = dayTrips[0];
-    let inTank = 0;
-    if (sampleTrip) {
-      // This is best-effort; real inTank may be stored per page; we default 0 if not found
-      // Attempt to compute via ledgerDays if possible (import side doesn't have access to localStorage in node)
-      // So keep 0
-    }
-    const drawn = roundToOneDecimal(dayTrips.reduce((s, t) => s + roundToOneDecimal(t.fuel_pumped_amount ?? 0), 0));
-    dateInfo.set(d, { dist, inTank, drawn });
-  }
-
-  // Opening fuel position is start_fuel_balance of first page sorted
   let runningPos = sortedPages.length > 0 ? roundToOneDecimal(sortedPages[0].start_fuel_balance) : 10;
-  // If pages empty, use vehicle fallback
   if (sortedPages.length === 0 && vehicle) runningPos = roundToOneDecimal((vehicle as unknown as Record<string, unknown>).current_fuel_level as number ?? 10);
 
-  const results: SegmentEstimate[] = [];
   let prevEconomy: number | null = null;
-  // Seed prev from last explicit before first segment if provided
   if (prevEconomies && prevEconomies.length > 0) {
     const lastExplicit = [...prevEconomies].reverse().find(v => v !== null && v !== undefined && Number(v) > 0) as number | undefined;
     if (lastExplicit) prevEconomy = roundToOneDecimal(lastExplicit);
   }
   if (prevEconomy === null) prevEconomy = estimatePrevEconomyFallback();
 
-  // For each segment, build per-day array for its date slice
-  const fuelInDates = segments.map(s => s.fromDate);
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    const nextFuelDate = fuelInDates[i + 1];
-    const sliceDates = allSortedDates.filter(d => d >= seg.fromDate && (nextFuelDate ? d < nextFuelDate : true));
-    const perDay = sliceDates.map(d => ({ dist: dateInfo.get(d)?.dist ?? 0, inTank: dateInfo.get(d)?.inTank ?? 0 }));
-    const totalDist = perDay.reduce((s, x) => s + x.dist, 0);
+  // Build date -> inTank map (default 0). For now 0; could be extended to read from stores.
+  const dateInTank = new Map<string, number>();
+
+  // Helper to simulate segment with candidate economy and return max violation
+  const simulateMaxViolation = (segmentTrips: Trip[], startPos: number, economy: number): number => {
+    let bal = roundToOneDecimal(startPos);
+    const seenDates = new Set<string>();
+    let maxViolation = 0;
+    for (const t of segmentTrips) {
+      if (!seenDates.has(t.date)) {
+        seenDates.add(t.date);
+        const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0);
+        if (it) bal = roundToOneDecimal(bal + it);
+      }
+      const consumed = roundToOneDecimal(roundToIntegerKm(t.trip_distance) / economy);
+      const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
+      bal = roundToOneDecimal(bal - consumed + pumped);
+      if (bal < minFuel) maxViolation = Math.max(maxViolation, minFuel - bal);
+      else if (bal > tankCapacity) maxViolation = Math.max(maxViolation, bal - tankCapacity);
+    }
+    return maxViolation;
+  };
+
+  const simulateFinalBalance = (segmentTrips: Trip[], startPos: number, economy: number): number => {
+    let bal = roundToOneDecimal(startPos);
+    const seenDates = new Set<string>();
+    for (const t of segmentTrips) {
+      if (!seenDates.has(t.date)) {
+        seenDates.add(t.date);
+        const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0);
+        if (it) bal = roundToOneDecimal(bal + it);
+      }
+      const consumed = roundToOneDecimal(roundToIntegerKm(t.trip_distance) / economy);
+      const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
+      bal = roundToOneDecimal(bal - consumed + pumped);
+    }
+    return bal;
+  };
+
+  // Initial segment before first pump: trips [0 .. pumpIndices[0]] inclusive, uses prevEconomy, no estimation needed but we need to advance runningPos through it
+  const firstPumpIdx = pumpIndices[0];
+  const initialTrips = sortedTrips.slice(0, firstPumpIdx + 1);
+  // Simulate initial segment with prevEconomy to get startPos for first post-pump segment
+  // If initial distance 0, keep runningPos as is
+  if (initialTrips.length > 0) {
+    // Use prevEconomy for initial segment; no suggestion generated for it, but we advance runningPos
+    runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy);
+  }
+
+  const results: SegmentEstimate[] = [];
+
+  // Post-pump segments: for each pump i, segment = trips [pump_i +1 .. pump_{i+1}] inclusive of next pump, last segment goes to end
+  for (let segIdx = 0; segIdx < pumpIndices.length; segIdx++) {
+    const pumpIdx = pumpIndices[segIdx];
+    const nextPumpIdx = pumpIndices[segIdx + 1];
+    const segStart = pumpIdx + 1;
+    const segEnd = nextPumpIdx !== undefined ? nextPumpIdx : sortedTrips.length - 1;
+    if (segStart > segEnd) {
+      // No trips after this pump (pump was last trip) -> no segment to estimate, but still need to account? Create zero-distance segment for completeness
+      const fuelFed = roundToOneDecimal(sortedTrips[pumpIdx].fuel_pumped_amount ?? 0);
+      const fromDate = sortedTrips[pumpIdx].date;
+      results.push({
+        fromDate,
+        toDate: fromDate,
+        distance: 0,
+        fuelFed,
+        orderNo: sortedTrips[pumpIdx].fuel_order_no ?? '',
+        orderDate: fromDate,
+        prevEconomy,
+        suggested: roundToOneDecimal(prevEconomy),
+        feasible: true,
+        feasibleMin: 0.1,
+        feasibleMax: 50,
+        warning: '0 km — no trips after this pump',
+      });
+      // runningPos already includes this pump's fuel from initial simulation? For subsequent, we already advanced through initial; for consecutive pumps where segStart>segEnd (pumps adjacent), the next segment has zero trips, we still need to keep runningPos (already includes pump fuel)
+      continue;
+    }
+    const segmentTrips = sortedTrips.slice(segStart, segEnd + 1);
+    const totalDist = roundToIntegerKm(segmentTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
+    const fuelFed = roundToOneDecimal(sortedTrips[pumpIdx].fuel_pumped_amount ?? 0);
+    const orderNo = sortedTrips[pumpIdx].fuel_order_no ?? '';
+    const fromDate = segmentTrips[0].date;
+    const toDate = segmentTrips[segmentTrips.length - 1].date;
     const prev = prevEconomy;
 
     if (totalDist === 0) {
-      const suggested = prev ?? estimatePrevEconomyFallback();
       results.push({
-        fromDate: seg.fromDate,
-        toDate: seg.toDate,
-        distance: totalDist,
-        fuelFed: seg.fuelFed,
-        orderNo: seg.orderNo,
-        orderDate: seg.fromDate,
+        fromDate,
+        toDate,
+        distance: 0,
+        fuelFed,
+        orderNo,
+        orderDate: sortedTrips[pumpIdx].date,
         prevEconomy: prev,
-        suggested: roundToOneDecimal(suggested),
+        suggested: roundToOneDecimal(prev),
         feasible: true,
         feasibleMin: 0.1,
         feasibleMax: 50,
         warning: '0 km — no distance in segment',
       });
-      // advance runningPos: no consumption
-      runningPos = roundToOneDecimal(runningPos + seg.fuelFed);
-      prevEconomy = roundToOneDecimal(suggested);
+      prevEconomy = roundToOneDecimal(prev);
+      // advance runningPos (no consumption)
+      // runningPos already at start of segment, but we need to simulate with prev economy (no consumption)
       continue;
     }
 
-    const interval = feasibleIntervalForSegment({ pos: runningPos, drawn: seg.fuelFed, perDay, tankCapacity, minFuel });
-    let suggested: number;
-    let feasible = interval.feasible;
-    let warning: string | undefined;
+    // Brute force search for best economy
+    const candidatePrev = prev ?? estimatePrevEconomyFallback();
+    let bestE = candidatePrev;
+    let bestViolation = Infinity;
+    let bestScore = Infinity;
+    let foundFeasible = false;
+    let feasibleMin: number | null = null;
+    let feasibleMax: number | null = null;
 
-    if (interval.feasible && interval.min !== null && interval.max !== null) {
-      suggested = snapToOneDecimalFeasible(prev ?? estimatePrevEconomyFallback(), interval.min, interval.max);
-      // If interval empty after rounding? Check brute
-      // Ensure suggested feasible at 1-dec granularity via brute validate
-      const consumed = roundToOneDecimal(totalDist / suggested);
-      // Quick validate all prefixes with suggested (approx total only) — for thorough check re-validate per prefix with discrete balance steps rounded?
-      // We do full per-prefix validation using real balances rounded per day?
-      // For now accept
-    } else {
-      // Infeasible: brute search minimal violation
-      feasible = false;
-      const candidatePrev = prev ?? estimatePrevEconomyFallback();
-      // Brute 0.1..50 to find minimal max violation (distance to keep balance in range)
-      let bestE = candidatePrev;
-      let bestScore = Infinity;
-      let bestMinViolation: number | null = null;
-      let bestMaxViolation: number | null = null;
-      for (let e10 = 1; e10 <= 500; e10++) {
-        const e = e10 / 10;
-        let maxViolation = 0;
-        let sumD = 0;
-        let sumIT = 0;
-        for (const day of perDay) {
-          sumD += day.dist;
-          sumIT += day.inTank;
-          const A = runningPos + sumIT + seg.fuelFed;
-          const B = A - sumD / e;
-          if (B < minFuel) maxViolation = Math.max(maxViolation, minFuel - B);
-          else if (B > tankCapacity) maxViolation = Math.max(maxViolation, B - tankCapacity);
-        }
-        const stepPenalty = Math.abs(e - candidatePrev) * 0.01; // tiny weight to prefer near prev
-        const score = maxViolation + stepPenalty;
-        if (score < bestScore - 1e-9) {
-          bestScore = score;
+    // First pass to find feasible range bounds
+    const feasibleEs: number[] = [];
+    for (let e10 = 1; e10 <= 500; e10++) {
+      const e = e10 / 10;
+      const v = simulateMaxViolation(segmentTrips, runningPos, e);
+      if (v < 1e-9) {
+        feasibleEs.push(e);
+        if (feasibleMin === null || e < feasibleMin) feasibleMin = e;
+        if (feasibleMax === null || e > feasibleMax) feasibleMax = e;
+      }
+    }
+
+    if (feasibleEs.length > 0) {
+      foundFeasible = true;
+      // pick closest to prev among feasible
+      let bestDist = Infinity;
+      for (const e of feasibleEs) {
+        const d = Math.abs(e - candidatePrev);
+        if (d < bestDist - 1e-9) {
+          bestDist = d;
           bestE = e;
         }
       }
-      suggested = roundToOneDecimal(bestE);
-      warning = `No 1-dec economy keeps fuel in [${minFuel}, ${tankCapacity}]L — nearest ${suggested.toFixed(1)} km/L suggested (check KM/fuel gaps)`;
-    }
-
-    if (!feasible) {
-      // keep warning as above
-    } else if (interval.min !== null && interval.max !== null) {
-      // If suggested is at boundary far from prev, add gentle warning
-      const distFromPrev = Math.abs(suggested - (prev ?? estimatePrevEconomyFallback()));
-      if (distFromPrev > 3) {
-        warning = `Large step from ${prev?.toFixed(1) ?? '—'} to ${suggested.toFixed(1)} to stay feasible`;
+      // If multiple at same distance, prefer one closest to prev rounded? Already
+    } else {
+      // No feasible: brute for minimal violation
+      for (let e10 = 1; e10 <= 500; e10++) {
+        const e = e10 / 10;
+        const v = simulateMaxViolation(segmentTrips, runningPos, e);
+        const stepPenalty = Math.abs(e - candidatePrev) * 0.01;
+        const score = v + stepPenalty;
+        if (score < bestScore - 1e-9) {
+          bestScore = score;
+          bestE = e;
+          bestViolation = v;
+        }
       }
     }
 
+    const suggested = roundToOneDecimal(bestE);
+    let warning: string | undefined;
+    let feasible = foundFeasible;
+    if (!foundFeasible) {
+      warning = `No 1-dec economy keeps fuel in [${minFuel}, ${tankCapacity}]L — nearest ${suggested.toFixed(1)} km/L suggested (check KM/fuel gaps)`;
+    } else if (feasibleMin !== null && feasibleMax !== null) {
+      const distFromPrev = Math.abs(suggested - candidatePrev);
+      if (distFromPrev > 3) warning = `Large step from ${candidatePrev.toFixed(1)} to ${suggested.toFixed(1)} to stay feasible`;
+    }
+
     results.push({
-      fromDate: seg.fromDate,
-      toDate: seg.toDate,
+      fromDate,
+      toDate,
       distance: totalDist,
-      fuelFed: seg.fuelFed,
-      orderNo: seg.orderNo,
-      orderDate: seg.fromDate,
+      fuelFed,
+      orderNo,
+      orderDate: sortedTrips[pumpIdx].date,
       prevEconomy: prev,
-      suggested: roundToOneDecimal(suggested),
+      suggested,
       feasible,
-      feasibleMin: interval.min,
-      feasibleMax: interval.max,
+      feasibleMin,
+      feasibleMax,
       warning,
     });
 
-    // Update runningPos for next segment: B_last with suggested economy (using sum)
-    // Need actual consumed = totalDist / suggested (rounded 1-dec per day? For chain, use precise then round)
-    // Use per-day consumption rounded per day sum for closer to ledger
-    let totalConsumed = 0;
-    for (const day of perDay) {
-      totalConsumed += roundToOneDecimal(day.dist / suggested);
-    }
-    totalConsumed = roundToOneDecimal(totalConsumed);
-    const inTankSum = perDay.reduce((s, d) => s + d.inTank, 0);
-    runningPos = roundToOneDecimal(runningPos + inTankSum + seg.fuelFed - totalConsumed);
-    // Clamp runningPos to [1, cap] for next interval start? Keep as computed even if negative/capped to show propagation; but for feasibility we clamp within? Let it be computed (negative will make next interval infeasible — which is correct to surface)
-    // However ensure we keep at least 1 for next? We keep as is to propagate error visibility
-    prevEconomy = roundToOneDecimal(suggested);
+    // Advance runningPos for next segment using suggested economy
+    runningPos = simulateFinalBalance(segmentTrips, runningPos, suggested);
+    prevEconomy = suggested;
   }
 
   return results;

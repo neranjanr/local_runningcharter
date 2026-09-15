@@ -60,25 +60,23 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
       </div>
 
       {/* Side-by-side Tables 2 & 3 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* TABLE 1 — Transposed: days as columns (read-only here, edit in All Trips - inputs kept for backward compat, disabled) */}
-      <div>
-        <div className="flex items-center justify-between bg-primary-container text-on-primary px-2 py-1 rounded-t">
+      <div className="grid grid-cols-1 lg:grid-cols-2 print:grid-cols-2 gap-4 items-stretch">
+      {/* TABLE 1 — Fuel Economy (read-only, edit in All Trips) */}
+      <div className="flex flex-col h-full">
+        <div className="flex items-center bg-primary-container text-on-primary px-2 py-1 rounded-t">
           <div className="flex items-center gap-1.5">
             <span className="text-sm text-telemetry-cyan">◈</span>
             <span className="text-[10px] font-bold tracking-widest uppercase text-paper-sheet">TABLE 1 • FUEL ECONOMY & CONSUMPTION ANALYSIS</span>
           </div>
-          <span className="text-[10px] font-semibold tracking-widest uppercase text-surface-container-highest">Transposed — Days as Columns</span>
         </div>
-        <div className="overflow-x-auto w-full border border-rule-line-strong rounded-b">
+        <div className="overflow-x-auto w-full border border-rule-line-strong rounded-b flex-1">
           <table className="w-full text-left text-on-surface border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-surface-container-high text-on-surface">
                 <th className="py-2 px-3 text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high sticky left-0 z-20 min-w-[140px]">Metric</th>
                 {ledgerDays.map((d) => (
                   <th key={d.date} className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]">
-                    Day {d.dayIndex}
-                    <span className="block text-[10px] font-mono normal-case tracking-normal text-on-surface-variant">{d.dayLabel}</span>
+                    DAY {d.dayIndex}
                   </th>
                 ))}
                 <th className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]">Total</th>
@@ -90,6 +88,14 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 {ledgerDays.map((d) => (
                   <td key={d.date} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{formatAuditDate(d.date)}</td>
                 ))}
+                <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px] tracking-widest">—</td>
+              </tr>
+              <tr className="bg-paper-ledger">
+                <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">DAY</td>
+                {ledgerDays.map((d) => {
+                  const ddd = new Date(d.date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short' });
+                  return <td key={d.date} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{ddd}</td>;
+                })}
                 <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px] tracking-widest">—</td>
               </tr>
               <tr className="bg-paper-ledger">
@@ -115,21 +121,10 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               </tr>
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Fuel Economy (km/L)</td>
-                {ledgerDays.map((d, idx) => (
+                {ledgerDays.map((d) => (
                   <td key={d.date} className="py-2 px-3 text-center border border-rule-line">
                     <div className="flex flex-col items-center gap-1">
-                      <input
-                        aria-label={`Fuel Economy Day ${d.dayIndex}`}
-                        type="number"
-                        step="0.1"
-                        placeholder={d.fuelEconomy.toFixed(1)}
-                        value={rawEconomies[idx] !== null && rawEconomies[idx] !== undefined ? String(rawEconomies[idx]) : ''}
-                        onChange={(e) => onEconomyChange(idx, e.target.value)}
-                        disabled
-                        title="Edit in All Trips table"
-                        className="w-20 px-1.5 py-0.5 border border-rule-line rounded text-center font-mono text-sm focus:ring-1 focus:ring-telemetry-cyan focus:outline-none bg-paper-gutter opacity-60 cursor-not-allowed"
-                      />
-                      <span className="text-[11px] font-mono text-on-surface">{d.fuelEconomy.toFixed(1)}</span>
+                      <span className="text-[11px] font-mono text-on-surface font-bold">{d.fuelEconomy.toFixed(1)}</span>
                       <span className={`text-[9px] font-bold tracking-widest uppercase px-1 rounded ${d.economySource === 'explicit' ? 'bg-surface-container-highest text-telemetry-cyan' : 'text-on-surface-variant'}`}>
                         {d.economySource === 'explicit' ? 'Adjusted' : d.economySource === 'inherited' ? '(Inh.)' : '(Def.)'}
                       </span>
@@ -143,16 +138,15 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
         </div>
       </div>
 
-      {/* TABLE 2 — Position & Balance (read-only, In-Tank now edited in All Trips) */}
-      <div>
-        <div className="flex items-center justify-between bg-primary-container text-on-primary px-2 py-1 rounded-t">
+      {/* TABLE 2 — Position & Balance (read-only, In-Tank edited in All Trips) */}
+      <div className="flex flex-col h-full">
+        <div className="flex items-center bg-primary-container text-on-primary px-2 py-1 rounded-t">
           <div className="flex items-center gap-1.5">
             <span className="text-sm text-trip-official">●</span>
             <span className="text-[10px] font-bold tracking-widest uppercase text-paper-sheet">TABLE 2 • FUEL POSITION & BALANCE ACCOUNT</span>
           </div>
-          <span className="text-[10px] font-semibold tracking-widest uppercase text-surface-container-highest">Closing = Pos + In-Tank + Drawn − Consumed (1 Dec.)</span>
         </div>
-        <div className="overflow-x-auto w-full border border-rule-line-strong rounded-b">
+        <div className="overflow-x-auto w-full border border-rule-line-strong rounded-b flex-1">
           <table className="w-full text-left text-on-surface border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-surface-container-high text-on-surface">
@@ -178,20 +172,9 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               </tr>
               <tr className="bg-paper-ledger">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">In-Tank (L)</td>
-                {ledgerDays.map((d, idx) => (
+                {ledgerDays.map((d) => (
                   <td key={d.date} className="py-2 px-3 text-center border border-rule-line">
-                    <input
-                      aria-label={`In-Tank Day ${d.dayIndex}`}
-                      type="number"
-                      step="0.1"
-                      placeholder="0.0"
-                      value={rawInTanks[idx] !== null && rawInTanks[idx] !== undefined ? String(rawInTanks[idx]) : ''}
-                      onChange={(e) => onInTankChange(idx, e.target.value)}
-                      disabled
-                      title="Edit in All Trips table"
-                      className="w-20 px-1.5 py-0.5 border border-rule-line rounded text-center font-mono text-sm focus:ring-1 focus:ring-telemetry-cyan focus:outline-none bg-paper-gutter opacity-60 cursor-not-allowed"
-                    />
-                    <span className="block text-[11px] font-mono text-on-surface-variant">{d.inTank.toFixed(1)}</span>
+                    <span className="block text-[11px] font-mono text-on-surface-variant font-bold">{d.inTank.toFixed(1)}</span>
                   </td>
                 ))}
                 <td className="py-2.5 px-3 text-right font-mono text-sm border border-rule-line-strong bg-surface-container-low">{roundToOneDecimal(ledgerDays.reduce((s, d) => s + d.inTank, 0)).toFixed(1)}</td>
@@ -255,14 +238,13 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
           <div className="h-full bg-telemetry-cyan rounded-full" style={{ width: `${Math.min(100, fuelLevelPercent)}%` }} />
         </div>
         <div className="flex items-center justify-between mt-1 text-on-surface-variant text-[10px] font-semibold tracking-widest uppercase">
-          <span>Reserve Limit: 10.0 L</span>
           <span>Formula: Closing = Position + In-Tank + Drawn − Consumed</span>
           <span>Avail: {(vehicleTankCapacity - summary.finalBalance).toFixed(1)} L</span>
         </div>
       </div>
 
-      {/* Continuity Stamp */}
-      <div className="mt-auto p-3 bg-slate-surface text-on-primary rounded shadow-md flex flex-col gap-2 print:bg-white print:text-black print:border print:border-slate-400">
+      {/* Continuity Stamp — hidden in print */}
+      <div className="mt-auto p-3 bg-slate-surface text-on-primary rounded shadow-md flex flex-col gap-2 print:hidden">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <span className="text-trip-official">✔</span>

@@ -57,11 +57,18 @@ export function PageNavigation({ pages, currentPage, onSelectPage, onPrevPage, o
               <span>‹</span>
               <span>PG {currentNumber - 1}</span>
             </button>
-            <div className="px-3 py-1 bg-slate-surface text-on-primary rounded flex items-center gap-2">
-              <span className="text-telemetry-cyan text-sm">📖</span>
-              <span className="font-mono text-sm font-bold">PAGE {currentNumber} / {totalPages}</span>
-              <span className="text-[10px] font-semibold tracking-widest uppercase text-surface-container-highest hidden md:inline">• {currentPage.month} (4-DAY SPREAD)</span>
-            </div>
+            <select
+              aria-label="Select Page"
+              value={currentNumber}
+              onChange={(e) => onSelectPage(parseInt(e.target.value, 10))}
+              className="px-3 py-1 bg-slate-800 text-white border border-slate-700 rounded text-sm font-mono font-bold focus:ring-1 focus:ring-telemetry-cyan focus:outline-none cursor-pointer"
+            >
+              {pages.map((p) => (
+                <option key={p.id} value={p.page_number} className="bg-slate-800 text-white">
+                  Page {p.page_number} — {p.month} ({p.start_km.toFixed(1)} → {p.end_km.toFixed(1)} KM)
+                </option>
+              ))}
+            </select>
             <button
               aria-label="Next Page"
               onClick={onNextPage}
@@ -86,29 +93,11 @@ export function PageNavigation({ pages, currentPage, onSelectPage, onPrevPage, o
             </button>
           </div>
 
-          {/* Page selector dropdown */}
-          <select
-            aria-label="Select Page"
-            value={currentNumber}
-            onChange={(e) => onSelectPage(parseInt(e.target.value, 10))}
-            className="px-2 py-1 border border-rule-line rounded bg-paper-sheet text-on-surface text-sm font-mono focus:ring-1 focus:ring-telemetry-cyan focus:outline-none"
-          >
-            {pages.map((p) => (
-              <option key={p.id} value={p.page_number}>
-                Page {p.page_number} — {p.month} ({p.start_km.toFixed(1)} → {p.end_km.toFixed(1)} KM)
-              </option>
-            ))}
-          </select>
-
           {vehicleLabel && (
             <div className="flex items-center gap-2 bg-surface-container-low px-3 py-1 rounded">
-              <span className="text-[10px] font-semibold tracking-widest uppercase text-on-surface-variant">CAB-8842</span>
               <span className="text-xs font-semibold text-on-surface">{vehicleLabel}</span>
             </div>
           )}
-        </div>
-
-        <div className="flex items-center gap-2">
           <button
             onClick={() => window.print()}
             type="button"

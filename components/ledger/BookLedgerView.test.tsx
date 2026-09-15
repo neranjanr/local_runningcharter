@@ -106,8 +106,10 @@ describe('BookLedgerView - Full-Width Stack Ledger (Phase 3 #03)', () => {
     expect(screen.getByLabelText('Next Page')).toBeInTheDocument();
     expect(screen.getByLabelText('Previous Month')).toBeInTheDocument();
     expect(screen.getByLabelText('Next Month')).toBeInTheDocument();
-    // Current page indicator
-    expect(screen.getByText(/PAGE 2 \/ 2/i)).toBeInTheDocument();
+    // Current page indicator is now the Page Select dropdown (darker blue bg)
+    const select = screen.getByLabelText('Select Page') as HTMLSelectElement;
+    expect(select.value).toBe('2');
+    expect(select.className).toContain('bg-slate-800');
   });
 
   it('allows moving between pages via Prev/Next', () => {
@@ -121,11 +123,11 @@ describe('BookLedgerView - Full-Width Stack Ledger (Phase 3 #03)', () => {
     ];
     render(<BookLedgerView pages={pages} trips={trips} vehicle={vehicle} />);
     // Initially last page (2)
-    expect(screen.getByText(/PAGE 2 \/ 2/i)).toBeInTheDocument();
+    expect((screen.getByLabelText('Select Page') as HTMLSelectElement).value).toBe('2');
     fireEvent.click(screen.getByLabelText('Previous Page'));
-    expect(screen.getByText(/PAGE 1 \/ 2/i)).toBeInTheDocument();
+    expect((screen.getByLabelText('Select Page') as HTMLSelectElement).value).toBe('1');
     fireEvent.click(screen.getByLabelText('Next Page'));
-    expect(screen.getByText(/PAGE 2 \/ 2/i)).toBeInTheDocument();
+    expect((screen.getByLabelText('Select Page') as HTMLSelectElement).value).toBe('2');
   });
 
   it('computes daily fuel economy propagation and consumption/balance rounded to 1 decimal', () => {
@@ -145,7 +147,7 @@ describe('BookLedgerView - Full-Width Stack Ledger (Phase 3 #03)', () => {
     expect(screen.getAllByText('54.2 L').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('propagates overridden economy to subsequent days', async () => {
+  it('propagates overridden economy to subsequent days (read-only display, no inputs)', async () => {
     const page = makePage({ id: 'page-14', page_number: 1, month: '2024-10', start_km: 100, end_km: 200, start_fuel_balance: 31.4, end_fuel_balance: 48.3 });
     const trips: Trip[] = [
       makeTrip({ date: '2024-10-21', page_id: 'page-14', trip_index: 1, start_km: 100, end_km: 162.6, trip_distance: 62.6 }),
@@ -153,15 +155,11 @@ describe('BookLedgerView - Full-Width Stack Ledger (Phase 3 #03)', () => {
       makeTrip({ date: '2024-10-23', page_id: 'page-14', trip_index: 1, start_km: 227.8, end_km: 252.4, trip_distance: 24.6 }),
     ];
     render(<BookLedgerView pages={[page]} trips={trips} vehicle={vehicle} />);
-    // Initially all default 10.5 inherited. Find economy inputs.
-    const inputs = screen.getAllByLabelText(/Fuel Economy Day/i);
-    expect(inputs.length).toBe(3);
-    // Change Day 1 economy to 10.8
-    fireEvent.change(inputs[0], { target: { value: '10.8' } });
-    // Day 2 and 3 should now show inherited 10.8 — displayed as "Adjusted 10.8" or "(Inh.) 10.8"
-    // Use a function matcher to find any element containing 10.8 substring
-    const occurrences = await screen.findAllByText((content, element) => Boolean(element?.textContent?.includes('10.8')));
-    expect(occurrences.length).toBeGreaterThanOrEqual(1);
+    // Inputs removed — ledger is read-only, editing in All Trips
+    expect(screen.queryByLabelText(/Fuel Economy Day/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/In-Tank Day/i)).not.toBeInTheDocument();
+    // Default economy still rendered as text
+    expect(screen.getAllByText('10.5').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows print button that triggers window.print', () => {
@@ -192,9 +190,9 @@ describe('BookLedgerView - Full-Width Stack Ledger (Phase 3 #03)', () => {
     ];
     render(<BookLedgerView pages={pages} trips={trips} vehicle={vehicle} />);
     // Start on last page (3) which is Oct
-    expect(screen.getByText(/PAGE 3 \/ 3/i)).toBeInTheDocument();
+    expect((screen.getByLabelText('Select Page') as HTMLSelectElement).value).toBe('3');
     fireEvent.click(screen.getByLabelText('Previous Month'));
     // Should jump to first page of Sep (page 1)
-    expect(screen.getByText(/PAGE 1 \/ 3/i)).toBeInTheDocument();
+    expect((screen.getByLabelText('Select Page') as HTMLSelectElement).value).toBe('1');
   });
 });

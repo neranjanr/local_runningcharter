@@ -16,10 +16,10 @@ export function GoogleLoginButton() {
 
   if (user) {
     return (
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded text-xs text-on-surface">
+      <div className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded text-xs text-white">
         <div className="flex items-center gap-2 truncate">
           <span className="w-2 h-2 rounded-full bg-green-500"></span>
-          <span className="truncate font-medium">{user.user_metadata?.full_name || user.email || 'Signed In'}</span>
+          <span className="truncate font-medium text-white">{user.user_metadata?.full_name || user.email || 'Signed In'}</span>
         </div>
         <button
           onClick={() => signOut()}

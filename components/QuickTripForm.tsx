@@ -430,12 +430,12 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
                   aria-label="Auto"
                   onClick={handleAutoEstimate}
                   className="px-3 py-2 text-xs font-bold uppercase tracking-wider border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-600 transition-colors"
-                  title="Estimate Start Time as End − (Distance/20 km/h) ceiled to 5 min"
+                  title="Estimate Start Time as End − (Distance/speed) tiered <10→15 <20→20 <40→25 ≤60→30 >60→35 ceiled to 5 min"
                 >
                   Auto
                 </button>
               </div>
-              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase tracking-wider">Auto: End − (Distance/20) ceil 5 min • Empty allowed</span>
+              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase tracking-wider">Auto: End − (Distance/speed) tiered ceil 5 min • Empty allowed</span>
             </div>
 
             <div>
@@ -471,7 +471,7 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
             </div>
           </div>
           <p className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase tracking-wider font-semibold">
-            Formula: Estimated Start = End − ceil((Distance/20)*60 /5)*5 • Supports overnight wrap • Only auto-fills when Start empty
+            Formula: Estimated Start = End − ceil((Distance/speed)*60 /5)*5 • speed &lt;10→15 &lt;20→20 &lt;40→25 ≤60→30 &gt;60→35 • Supports overnight wrap • Only auto-fills when Start empty
           </p>
         </div>
 

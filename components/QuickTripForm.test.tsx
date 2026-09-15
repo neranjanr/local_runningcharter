@@ -215,11 +215,11 @@ describe('QuickTripForm', () => {
     // Ensure Start Time is empty
     const startTime = screen.getByLabelText(/Start Time/i) as HTMLInputElement;
     expect(startTime.value).toBe('');
-    // Enter distance 9 km => 27 min ceiled to 30 => with end 09:30 => start 09:00
+    // Enter distance 9 km => <10→15 => 36 min ceiled to 40 => with end 09:30 => start 08:50
     const distance = screen.getByLabelText(/Trip Distance/i) as HTMLInputElement;
     fireEvent.change(distance, { target: { value: '9' } });
     await waitFor(() => {
-      expect(screen.getByLabelText(/Start Time/i)).toHaveValue('09:00');
+      expect(screen.getByLabelText(/Start Time/i)).toHaveValue('08:50');
     });
   });
 

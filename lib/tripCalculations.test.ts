@@ -5,6 +5,7 @@ import {
   calculateTripDistance,
   calculateEndKm,
   calculateStartKm,
+  getSpeedForDistance,
   calculateEstimatedMinutes,
   estimateStartTime,
   getDayOfWeek,
@@ -178,31 +179,30 @@ describe('Time reciprocal engine: End - Duration = Start', () => {
   });
 });
 
-describe('Estimated Start Time engine (20 km/h, ceil 5 min)', () => {
+describe('Estimated Start Time engine (tiered speed, ceil 5 min)', () => {
   it('ceil 27 minutes to 30 (distance 9 km)', () => {
-    // distance 9 => 27 min => ceil to 30
-    expect(calculateEstimatedMinutes(9)).toBe(30);
-    expect(estimateStartTime('09:30', 9)).toBe('09:00');
+    // distance 9 => <10→15 km/h => 36 min => ceil to 40 (tiered)
+    expect(calculateEstimatedMinutes(9)).toBe(40);
+    expect(estimateStartTime('09:30', 9)).toBe('08:50');
   });
 
   it('exact 20 minutes stays 20 (distance with exact multiple of 5)', () => {
-    // distance 6.666... but use integer: distance 20 km => 60 min? Let's use distance where raw =20 exactly -> distance = 6.666 not integer
-    // For integer: distance 10 km => 30 min exact => stays 30
+    // distance 10 km => <20→20 km/h => 30 min exact => stays 30
     expect(calculateEstimatedMinutes(10)).toBe(30);
     expect(estimateStartTime('09:30', 10)).toBe('09:00');
-    // distance 20/3? Instead test distance that yields exact 20: distance = 20 * (20/60) => 6.666 -> use 20km => 60 min exact
-    expect(calculateEstimatedMinutes(20)).toBe(60);
-    expect(estimateStartTime('09:00', 20)).toBe('08:00');
+    // distance 20 => <40→25 km/h => 48 min => ceil 50
+    expect(calculateEstimatedMinutes(20)).toBe(50);
+    expect(estimateStartTime('09:00', 20)).toBe('08:10');
   });
 
   it('returns 5-min ceiling cases', () => {
-    // distance 1 km => 3 min => ceil to 5
+    // distance 1 km => <10→15 => 4 min => ceil to 5
     expect(calculateEstimatedMinutes(1)).toBe(5);
     expect(estimateStartTime('09:05', 1)).toBe('09:00');
-    // distance 5 km => 15 min exact
-    expect(calculateEstimatedMinutes(5)).toBe(15);
-    // distance 6 km => 18 min => ceil to 20
-    expect(calculateEstimatedMinutes(6)).toBe(20);
+    // distance 5 km => <10→15 => 20 min exact
+    expect(calculateEstimatedMinutes(5)).toBe(20);
+    // distance 6 km => <10→15 => 24 min => ceil to 25
+    expect(calculateEstimatedMinutes(6)).toBe(25);
   });
 
   it('returns null for 0 distance (no estimate)', () => {
@@ -212,12 +212,24 @@ describe('Estimated Start Time engine (20 km/h, ceil 5 min)', () => {
   });
 
   it('wraps around midnight correctly', () => {
-    // 20 km => 60 min, end 00:10 => start 23:10 previous day
-    expect(estimateStartTime('00:10', 20)).toBe('23:10');
+    // 20 km => <40→25 => 50 min, end 00:10 => start 23:20 previous day
+    expect(estimateStartTime('00:10', 20)).toBe('23:20');
   });
 
   it('returns null for missing endTime', () => {
     expect(estimateStartTime('', 10)).toBeNull();
     expect(estimateStartTime('invalid', 10)).toBeNull();
+  });
+
+  it('tiered speed table boundaries', () => {
+    expect(getSpeedForDistance(9)).toBe(15);
+    expect(getSpeedForDistance(10)).toBe(20);
+    expect(getSpeedForDistance(19)).toBe(20);
+    expect(getSpeedForDistance(20)).toBe(25);
+    expect(getSpeedForDistance(39)).toBe(25);
+    expect(getSpeedForDistance(40)).toBe(30);
+    expect(getSpeedForDistance(60)).toBe(30);
+    expect(getSpeedForDistance(61)).toBe(35);
+    expect(getSpeedForDistance(100)).toBe(35);
   });
 });
