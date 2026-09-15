@@ -87,7 +87,7 @@ _Avoid_: Guide, docs
 **Trip Import**: Bulk creation of Trips from an Excel file validated pre-flight against essential fields and pagination rules before any write.
 _Avoid_: Data import, upload
 
-**Estimated Start Time**: Suggested Start Time derived as End Time − (Distance / 20 km/h), ceiled to the nearest 5 minutes; auto-filled only when Start Time is empty and editable.
+**Estimated Start Time**: Suggested Start Time derived as End Time − (Distance / speed), ceiled to the nearest 5 minutes, where speed is tiered by distance (`<10 km→15 km/h, <20→20, <40→25, ≤60→30, >60→35`); auto-filled only when Start Time is empty and editable, also used to condition empty Start Time on Import and Sheet Pull.
 _Avoid_: Calculated start, inferred start
 
 **Global Search**: (Removed) Header search that previously live-filtered all Trips. Search is now available only within the All Trips Master Table section.
@@ -108,20 +108,32 @@ _Avoid_: Rotated tables, flipped view
 **Ledger Full-Width Stack**: Ledger Page View layout where Table 1 (Trips Log) occupies full width on top, with Table 2 (Fuel Economy & Consumption) and Table 3 (Fuel Position & Balance) stacked full-width beneath it, replacing the dual-column Side 1 / Side 2 folio; print and responsive rules preserve this stack.
 _Avoid_: Side-by-side folio, two-column ledger
 
-**Fuel-In Segment**: Contiguous Day Groups from a fuel-in date (Drawn>0 aggregated per date) inclusive to the day before the next fuel-in date; the final segment ends at the Book's last Day Group. One Fuel Economy value applies uniformly across the segment.
+**Fuel-In Segment**: Contiguous Trips from the trip after a fuel-in Trip (Drawn>0 per Trip, `fuel_pumped_amount`) inclusive to the next fuel-in Trip inclusive; the final segment ends at the Book's last Trip. Economy changes only after the pumped Trip completes, not at the pumped date boundary — e.g., pump on 3rd Trip of a date, Trips 1-3 use previous economy, Trip 4 onward uses new economy. One Fuel Economy value applies uniformly across the segment; intermediate balances (per-Trip, In-Tank at first Trip of each date) must stay in [1, tankCapacity] where tankCapacity is `Vehicle.tank_capacity`.
 _Avoid_: Fill interval, refuel block
 
-**Estimated Fuel Economy**: Calibrated km/L for a Fuel-In Segment suggested by the estimator, chosen as the 1-decimal value within the feasible interval that keeps every intermediate Closing Balance in [1, tankCapacity] closest to the previous segment's economy (or practical seed 7.8 km/L for the first segment). If no feasible value exists, the nearest infeasible boundary is suggested with a warning.
+**Estimated Fuel Economy**: Calibrated km/L for a Fuel-In Segment (trip-level) suggested by the estimator via brute-force 0.1 km/L search, chosen as the value within the feasible interval (per-Trip balances in [1, tankCapacity]) closest to the previous segment's economy (or practical seed 7.8 km/L for the first segment). If no feasible value exists, the nearest infeasible value is suggested with a warning and the estimator prefers keeping below tankCapacity while allowing the physical max when pump timing is uncertain.
 _Avoid_: Calculated economy, guessed economy
 
 **Fuel-IN Summary**: Dashboard table listing fuel-in dates with aggregated Fuel IN (L) and Fuel Order No, sorted newest-first; 6 rows shown scrollable with MORE opening a full-list popup; in the 70:30 dashboard split it occupies the 30% pane beside Fuel Economy Trend.
 _Avoid_: Refuel log, fuel history
 
-**Fuel Economy Trend**: Dashboard graph in the 70% pane beside Fuel-IN Summary (70:30 split), showing per-DayGroup km/L (from `computeLedgerDays` `LedgerDay.fuelEconomy`) chronologically; X = DayGroup date, Y = km/L; horizontally scrollable with latest at right by default (scrollWidth), gaps where an Odometer loss (KM Gap) exists are rendered as a RED hatched gap column with “gap N km” label — calendar idle months without an ODO gap are not shown as gaps.
+**Fuel Economy Trend**: Dashboard graph in the 70% pane beside Fuel-IN Summary (70:30 split), showing km/L chronologically from `computeTripFuelMap`; X = DayGroup date (two stems drawn for a single date when it contains both pre- and post-pump economies, label `DD Mon` per stem), Y = km/L; bars use `trip-official` green (#059669) on `paper-gutter` track, horizontally scrollable with latest at right via middle-mouse drag plus year-filter and chevron scroll, with dashed `14 km/L` max and `10 km/L` baseline references; gaps where an Odometer loss (KM Gap) exists are rendered as a RED hatched Gap Span column with “gap N km” pill — calendar idle months without an ODO gap are not shown. A dedicated sticky year footer row inside the scroll container is interrupted by blank Gap Span cells; each Year Track’s Sticky Year Label stays pinned so 1–3 year labels remain visible under their correct date ranges while scrolling, each year in a distinct tint.
 _Avoid_: Mileage chart, consumption graph
 
-**Monthly Distances Tile**: Dashboard tile that shows two virtual rows inside one “Monthly Distances” container: row 1 “This Month Stats” (`Official Mileage | Private Mileage | Total` for the current calendar month via `computeThisMonthMetrics`), row 2 “Previous Month Stats” (`Official | Private | Total` for the calendar month immediately before now via `computeMetricsForMonth` with previous `YYYY-MM`). Zero shown as `0 KM` when no trips; integer KM per ADR 0002.
+**Year Track**: Contiguous horizontal band in Fuel Economy Trend’s sticky year footer representing one calendar year’s date range; tinted distinctly per year (cycle slate/amber/emerald/sky/violet) and split by blank Gap Spans.
+_Avoid_: Year bar, year segment
+
+**Sticky Year Label**: Year number inside a Year Track that stays pinned to the track’s visible edge via CSS `position:sticky` so relevant year(s) remain in viewport during horizontal scroll.
+_Avoid_: Fixed year, floating header
+
+**Gap Span**: Striped RED column in Fuel Economy Trend’s stems, dates, and year footer rows marking an odometer-loss KM Gap; the year footer’s Gap Span is blank (no Year Track or Sticky Year Label).
+_Avoid_: Gap column blank, gap marker
+
+**Monthly Distances Tile**: Dashboard dark card (`bg-slate-900/90`, `lg:col-span-4` in 12-col grid) that shows two virtual rows inside one “Monthly Distances” container: row 1 “This Month (MMM YYYY) • In Progress”, row 2 “Previous Month (MMM YYYY) • Audited”; each row shows `Official | Private | Total` (integer KM, zero as `0 KM`, per ADR 0002) with trip counts and a Business/Private progress bar.
 _Avoid_: This-month card, last-month widget
+
+**Digital Vehicle Cluster**: Dark automotive cluster (`bg-cluster-bezel`, `lg:col-span-8` in 12-col grid) whose visor shows vehicle identity (`Brand Model` + `Type • Fuel Type • Tank Capacity` with `Registration No` plate badge), left ODO barrel (`lastOdo` as at `DD-MM-YYYY`) and right fuel gauge (level `toFixed(1) L` + `%`, semicircular arc and level bar); ODO not duplicated in visor.
+_Avoid_: Vehicle card, car widget
 
 **Dashboard Auto-Refresh**: After any ledger mutation (Excel Import, Sheet Pull Import, inline edit, Delete/Remove & Shift, Gap Fill, Insert After, Rebuild Ledger, Estimated Economy apply) the originating component dispatches `fleetledger:data-changed` and the Dashboard page listens (`fleetledger:data-changed` + `storage`) to refresh `vehicle/pages/trips` so This/Previous Month Stats, Fuel IN, and Fuel Economy Trend update without manual reload.
 _Avoid_: Polling, manual refresh
@@ -129,8 +141,14 @@ _Avoid_: Polling, manual refresh
 **Trip Type**: Enumerated category of a Trip, restricted to Official or Private; validated as a select list in All Trips, New Trip, and import.
 _Avoid_: Category, purpose type
 
-**Private Trip (Bold Row)**: A Trip with `Trip Type = Private`; rendered as a fully bold row weight in both Ledger (`Side1TripsLog`) and All Trips Master Table (preserving `bg-orange-200` background, RED gap cell `bg-red-100` wins on Start KM). Print retains bold.
+**Private Trip (Orange Row)**: A Trip with `Trip Type = Private`; rendered with `bg-orange-200` background (no bold) in both Ledger (`Side1TripsLog`) and All Trips Master Table (RED gap cell `bg-red-100` wins on Start KM). When a Private Trip also has `Fuel Pumped >0`, the dark-blue fuel-pumped text color layers on top of the orange background.
 _Avoid_: Partial bold, badge-only
+
+**Fuel-Pumped Trip (Dark Blue)**: Any Trip with `fuel_pumped_amount > 0`; rendered with dark-blue text (`text-blue-900`) in All Trips Master Table, layered on top of Private orange or alternating day backgrounds. The ⛽ icon appears in the # column.
+_Avoid_: Blue highlight, fuel badge
+
+**All Trips Master Table (Desktop Layout)**: Master table with Route column reduced to ~22% width and desktop viewport fitting (`w-full lg:min-w-0 lg:overflow-x-hidden`, `min-w-[960px]` only on mobile) so only vertical scroll appears on desktop; footer sums and continuity chips remain.
+_Avoid_: Horizontal scroll, full-width route
 
 **Gap Fill Trip**: A Trip inserted solely to close a detected **KM Gap** (`Trip N End KM ≠ Trip N+1 Start KM`); the dialog auto-fills `Start KM = predecessor End KM`, `End KM = successor Start KM`, `Distance = End − Start`, `Date = predecessor Date` (editable within `[predecessor Date, successor Date]`), `Trip Type = Official` default; no downstream shift — it consumes the gap extent exactly and is surfaced only in All Trips via an inline `+ Fill Gap` chip and row ⋯ menu when a KM Gap exists.
 _Avoid_: Gap patch, gap insert
@@ -147,7 +165,7 @@ _Avoid_: Selected row, active row
 **Sheet Pull Import**: Direct pull from the Buffer Sheet via `GET scriptUrl?action=allRows` using the same Sheet Proxy as QuickTrip Mobile, compared by Odo Key (`date|start_km|end_km` integer) into New / Changed (same odo, diff fields) / Skipped (exact duplicate) buckets, previewed with consent, validated by the same `validateNoOverlap`/`validatePaginationForImport` pipeline and persisted via `importTripsFromWorkbook` + bulk `/api/import` (localStorage fallback), focusing the earliest newly added Trip (`date||start_km` order) and flashing all imported rows `bg-cyan-50`; triggered manually by "Import from Google Sheet" (formerly "Pull from Google Sheet") next to Import from Excel.
 _Avoid_: Sheet sync, auto-pull
 
-**Sheet Settings**: Persisted Buffer Sheet identity (`mobile.sheetId` extracted from full Sheet URL + `mobile.scriptUrl` Apps Script URL) shared between `QuickTrip Mobile` and All Trips header, editable via a shared dialog that probes `?action=allRows`; last successful pull time stored as `mobile.lastSheetPullAt` and push time as `mobile.lastSheetPushAt`.
+**Sheet Settings**: Persisted Buffer Sheet identity (`mobile.sheetId` extracted from full Sheet URL + `mobile.scriptUrl` Apps Script URL) shared between `QuickTrip Mobile` and All Trips header, editable via a shared dialog that probes `?action=allRows`; defaults are stored in gitignored `config/sheet.local.json` (see `config/sheet.example.json`, loaded via `lib/sheetConfig.ts`) and runtime overrides remain `localStorage mobile.sheetId/mobile.scriptUrl` and `NEXT_PUBLIC_*` env; last successful pull time stored as `mobile.lastSheetPullAt` and push time as `mobile.lastSheetPushAt`.
 _Avoid_: Sheet config, path
 
 **Import Preview**: Modal shown before a Sheet Pull commit, listing New Trips (checked by default) and Changed rows (unchecked, with `old→new` diff such as `places: "A"→"B"`), supporting select/deselect all, blocking Confirm until at least one row is checked and until overlap/pagination pre-flight passes.
@@ -161,7 +179,7 @@ _Avoid_: Export dialog, confirm screen
 
 ### Mobile Capture
 
-**QuickTrip Mobile**: Installable PWA for Android that mirrors QuickTripForm entry (Date, Integer KM reciprocals, Estimated Start Time, Trip Type, Places Visited, Drawn Fuel) but writes to a Buffer Sheet, not the deployment DB; lives in `quicktrip-mobile/` sibling folder (or `app/mobile/` route) and is usable while deployment is unreachable.
+**QuickTrip Mobile**: Installable PWA for Android that mirrors QuickTripForm entry (Date, Integer KM reciprocals, Estimated Start Time (tiered <10→15 <20→20 <40→25 ≤60→30 >60→35 ceil 5 min, flat 20 km/h deprecated), Trip Type, Places Visited, Drawn Fuel) but writes to a Buffer Sheet, not the deployment DB; lives in `quicktrip-mobile/` sibling folder (or `app/mobile/` route) and is usable while deployment is unreachable; distribution is `quicktrip-mobile/dist/mobile_app_public.html` (tracked public template, no secret) vs `quicktrip-mobile/dist/Mobile_with_url_private.html` (gitignored private build generated via `start-service.ps1` `$ScriptUrl` or `npm run build:mobile` from `config/sheet.local.json` `scriptUrl`, single-file standalone for phone).
 _Avoid_: Mobile app, trip app
 
 **Buffer Sheet**: A dedicated Google Sheet (QuickTrip Buffer) with the identical All Trips Workbook header row (`Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No`) used as offline staging; rows are later imported into the Book via Trip Import (manual .xlsx download or future direct pull).
