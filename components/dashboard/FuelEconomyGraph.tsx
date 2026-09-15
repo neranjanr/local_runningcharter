@@ -25,12 +25,23 @@ const YEAR_PALETTE: Array<{ group: string; track: string; text: string; border: 
   { group: 'bg-violet-50/50', track: 'bg-violet-50/80', text: 'text-violet-900/80', border: 'border-violet-200' },
 ];
 
+const ECONOMY_SHADES = ['bg-emerald-300', 'bg-emerald-500', 'bg-emerald-600', 'bg-emerald-700'] as const;
+
+function getEconomyShade(economy: number, min: number, max: number): string {
+  if (max <= min) return ECONOMY_SHADES[2];
+  const t = (economy - min) / (max - min);
+  if (t < 0.25) return ECONOMY_SHADES[0];
+  if (t < 0.5) return ECONOMY_SHADES[1];
+  if (t < 0.75) return ECONOMY_SHADES[2];
+  return ECONOMY_SHADES[3];
+}
+
 export function FuelEconomyGraph({ trips, pages }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ active: boolean; startX: number; startScroll: number }>({ active: false, startX: 0, startScroll: 0 });
   const [activeYear, setActiveYear] = useState<string | null>(null);
 
-  const { days, gapsByDate, maxEconomy, sortedYears, distinctDateCount } = useMemo(() => {
+  const { days, gapsByDate, maxEconomy, minEconomy, sortedYears, distinctDateCount } = useMemo(() => {
     const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
     const dateEconomy = new Map<string, number>();
     const dateInTank = new Map<string, number>();
@@ -88,6 +99,7 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
       for (const v of tmp) allDays.push({ ...v, key: v.date });
     }
     const max = allDays.length ? Math.max(...allDays.map(d => d.fuelEconomy), 10) : 10;
+    const min = allDays.length ? Math.min(...allDays.map(d => d.fuelEconomy)) : 10;
     const tripGaps = detectTripGaps(trips).filter(g => g.kind === 'km');
     const gapsByDate = new Map<string, { expected: number; actual: number; delta: number }>();
     for (const g of tripGaps) {
@@ -104,7 +116,7 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
     for (const d of allDays) yearSet.add(d.date.slice(0, 4));
     const sortedYears = Array.from(yearSet).sort();
     const distinctDateCount = new Set(allDays.map(d => d.date)).size;
-    return { days: allDays, gapsByDate, maxEconomy: Math.ceil(max), sortedYears, distinctDateCount };
+    return { days: allDays, gapsByDate, maxEconomy: Math.ceil(max), minEconomy: min, sortedYears, distinctDateCount };
   }, [trips, pages]);
 
   // map year -> palette index
@@ -424,12 +436,13 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
                   >
                     {g.stems.map(d => {
                       const barPct = maxEconomy > 0 ? (d.fuelEconomy / maxEconomy) * 100 : 0;
+                      const shade = getEconomyShade(d.fuelEconomy, minEconomy, maxEconomy);
                       return (
                         <div key={d.key} className="group relative flex flex-col items-center w-8 shrink-0">
                           <span className="text-[11px] font-mono font-medium text-slate-600 mb-1">{d.fuelEconomy.toFixed(1)}</span>
                           <div className="w-5 bg-slate-100 rounded-t-sm h-48 flex items-end">
                             <div
-                              className="w-full bg-emerald-600 rounded-t-sm hover:brightness-110 transition-all"
+                              className={`w-full rounded-t-sm hover:brightness-110 transition-all ${shade}`}
                               style={{ height: `${Math.max(6, barPct)}%` }}
                               title={`${d.date}: ${d.fuelEconomy.toFixed(1)} km/L`}
                             />

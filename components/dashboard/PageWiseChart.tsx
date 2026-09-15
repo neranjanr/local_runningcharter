@@ -33,38 +33,47 @@ export function PageWiseChart({ data }: Props) {
         </span>
       </div>
 
-      <div className="flex items-end gap-1.5 h-40 px-1 overflow-x-auto">
+      <div className="flex flex-col gap-3">
         {displayed.map((p) => {
-          const heightPct = (p.distance / maxDistance) * 100;
+          const barWidth = (p.distance / maxDistance) * 100;
+          const officialWidth = p.distance > 0 ? (p.officialKm / p.distance) * 100 : 0;
+          const privateWidth = p.distance > 0 ? (p.privateKm / p.distance) * 100 : 0;
           return (
-            <div key={p.pageNumber} data-testid={`page-bar-${p.pageNumber}`} className="flex flex-col items-center gap-1 min-w-[40px] flex-1">
-              <span className="text-[10px] font-mono font-bold text-on-surface">{Math.round(p.distance)}</span>
-              <div className="w-full flex flex-col justify-end items-center gap-0" style={{ height: '100px' }}>
-                <div
-                  className="w-full rounded-t bg-slate-surface flex flex-col overflow-hidden"
-                  style={{ height: `${Math.max(6, heightPct)}%` }}
-                  title={`Page ${p.pageNumber} • ${p.monthLabel} • Total ${Math.round(p.distance)} KM (Off ${Math.round(p.officialKm)} / Priv ${Math.round(p.privateKm)}) • ${p.tripCount} trips`}
-                >
-                  {p.privateKm > 0 && p.distance > 0 && (
-                    <div className="w-full bg-trip-private" style={{ height: `${(p.privateKm / p.distance) * 100}%` }} />
-                  )}
-                  {p.officialKm > 0 && p.distance > 0 && (
-                    <div className="w-full bg-trip-official flex-1" />
-                  )}
-                  {p.distance === 0 && <div className="w-full h-full bg-paper-gutter border border-dashed border-rule-line" />}
-                </div>
+            <div key={p.pageNumber} data-testid={`page-bar-${p.pageNumber}`} className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-on-surface">P{p.pageNumber} • {p.monthLabel}</span>
+                <span className="text-[11px] font-mono font-semibold text-on-surface-variant">
+                  {Math.round(p.distance)} KM • {p.tripCount} trips
+                </span>
               </div>
-              <span className="text-[10px] font-bold text-on-surface">P{p.pageNumber}</span>
-              <span className="text-[9px] font-semibold tracking-widest uppercase text-on-surface-variant">{p.monthLabel}</span>
+              <div className="w-full h-5 bg-paper-gutter rounded-full overflow-hidden flex" style={{ width: `${Math.max(20, barWidth)}%` }}>
+                {p.officialKm > 0 && (
+                  <div
+                    className="h-full bg-trip-official flex items-center justify-center"
+                    style={{ width: `${officialWidth}%` }}
+                    title={`Page ${p.pageNumber} • ${p.monthLabel} • Official ${Math.round(p.officialKm)} KM`}
+                  >
+                    {officialWidth > 18 && <span className="text-[9px] font-bold text-white tracking-widest">OFF {Math.round(p.officialKm)}</span>}
+                  </div>
+                )}
+                {p.privateKm > 0 && (
+                  <div
+                    className="h-full bg-trip-private flex items-center justify-center"
+                    style={{ width: `${privateWidth}%` }}
+                    title={`Page ${p.pageNumber} • ${p.monthLabel} • Private ${Math.round(p.privateKm)} KM`}
+                  >
+                    {privateWidth > 18 && <span className="text-[9px] font-bold text-white tracking-widest">PRIV {Math.round(p.privateKm)}</span>}
+                  </div>
+                )}
+                {p.distance === 0 && <div className="w-full h-full bg-paper-gutter border border-dashed border-rule-line" />}
+              </div>
+              <div className="flex items-center gap-3 text-[10px] font-semibold tracking-widest uppercase text-on-surface-variant">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-trip-official inline-block" /> Off {Math.round(p.officialKm)}</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-trip-private inline-block" /> Priv {Math.round(p.privateKm)}</span>
+              </div>
             </div>
           );
         })}
-      </div>
-
-      <div className="flex items-center gap-4 justify-center text-[10px] font-semibold tracking-widest uppercase text-on-surface-variant">
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-trip-official inline-block" /> Official</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-trip-private inline-block" /> Private</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-slate-surface inline-block" /> Total stacked</span>
       </div>
 
       {hasMore && (
