@@ -178,13 +178,14 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
     if (sortedYears.length && !activeYear) setActiveYear(sortedYears[sortedYears.length - 1]);
   }, [days, sortedYears, activeYear]);
 
-  // middle-mouse drag only
+  // middle-mouse drag only — robust (prevent autoscroll) + wheel -> horizontal
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 1) return;
       e.preventDefault();
+      e.stopPropagation();
       dragRef.current = { active: true, startX: e.clientX, startScroll: el.scrollLeft };
       el.style.cursor = 'grabbing';
       el.style.userSelect = 'none';
@@ -192,29 +193,94 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragRef.current.active) return;
       const dx = e.clientX - dragRef.current.startX;
-      el.scrollLeft = dragRef.current.startScroll - dx;
+      el.scrollLeft = dragRef.current.startScroll - dx * 1.5;
     };
     const onMouseUp = (e: MouseEvent) => {
-      if (e.button === 1 || dragRef.current.active) {
+      if (dragRef.current.active) {
         dragRef.current.active = false;
         el.style.cursor = '';
         el.style.userSelect = '';
       }
     };
     const onAuxClick = (e: MouseEvent) => {
-      if (e.button === 1) e.preventDefault();
+      if (e.button === 1) { e.preventDefault(); e.stopPropagation(); }
     };
+    const onWheel = (e: WheelEvent) => {
+      // wheel vertical -> horizontal pan when container overflows
+      if (el.scrollWidth <= el.clientWidth) return;
+      if (Math.abs((e as WheelEvent).deltaY) > Math.abs((e as WheelEvent).deltaX)) {
+        e.preventDefault();
+        el.scrollLeft += (e as WheelEvent).deltaY;
+      }
+    };
+    // pointer + mouse for broad compat
     el.addEventListener('mousedown', onMouseDown);
+    el.addEventListener('auxclick', onAuxClick);
+    el.addEventListener('wheel', onWheel as unknown as EventListener, { passive: false } as AddEventListenerOptions);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
-    el.addEventListener('auxclick', onAuxClick);
+    // also handle pointerup outside
+    window.addEventListener('auxclick', onAuxClick);
     return () => {
       el.removeEventListener('mousedown', onMouseDown);
+      el.removeEventListener('auxclick', onAuxClick);
+      el.removeEventListener('wheel', onWheel as unknown as EventListener);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
-      el.removeEventListener('auxclick', onAuxClick);
+      window.removeEventListener('auxclick', onAuxClick);
     };
   }, []);
+
+  // keep year labels strictly inside visible window (viewport) — never outside graph
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const scrollLeft = el.scrollLeft;
+        const viewportWidth = el.clientWidth;
+        const tracks = el.querySelectorAll<HTMLElement>('[data-year-track]');
+        const chartTrack = el.querySelector<HTMLElement>('#chart-track');
+        const chartOffset = chartTrack ? chartTrack.offsetLeft : 0;
+        tracks.forEach(track => {
+          const label = track.querySelector<HTMLElement>('[data-year-label]');
+          if (!label) return;
+          // trackLeft in scroll-content coords (including chart-track offset)
+          const trackLeft = chartOffset + track.offsetLeft;
+          const trackWidth = track.offsetWidth;
+          const trackRight = trackLeft + trackWidth;
+          const visibleLeft = Math.max(trackLeft, scrollLeft);
+          const visibleRight = Math.min(trackRight, scrollLeft + viewportWidth);
+          const visibleWidth = visibleRight - visibleLeft;
+          if (visibleWidth < 28) {
+            label.style.opacity = '0';
+            return;
+          }
+          label.style.opacity = '1';
+          const labelWidth = label.offsetWidth || 48;
+          const visibleCenter = (visibleLeft + visibleRight) / 2;
+          const desiredLeft = visibleCenter - trackLeft - labelWidth / 2;
+          const clamped = Math.max(4, Math.min(desiredLeft, trackWidth - labelWidth - 4));
+          label.style.left = `${clamped}px`;
+          label.style.right = 'auto';
+        });
+      });
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    requestAnimationFrame(() => requestAnimationFrame(update));
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      ro.disconnect();
+    };
+  }, [upperGroups, footerSegments]);
 
   const scrollToYear = useCallback((year: string) => {
     const el = scrollRef.current;
@@ -250,13 +316,13 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
         .gap-stripe-bg {
           background: repeating-linear-gradient(45deg, rgba(254,226,226,0.4), rgba(254,226,226,0.4) 8px, rgba(254,242,242,0.2) 8px, rgba(254,242,242,0.2) 16px);
         }
-        .sticky-year-label {
-          position: sticky;
-          left: 24px;
-          right: 24px;
-          display: inline-block;
-          width: fit-content;
-          margin: 0 auto;
+        .pinned-year-label {
+          position: absolute;
+          top: 50%;
+          transform: translateY(-50%);
+          white-space: nowrap;
+          pointer-events: none;
+          will-change: left;
         }
       `}</style>
 
@@ -402,27 +468,27 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
               })}
             </div>
 
-            {/* BOTTOM ROW: sticky year footer interrupted by gaps - labels use position:sticky per track */}
-            <div className="flex items-stretch text-xs font-bold border-t border-slate-200 sticky bottom-0 z-10 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.04)]" data-purpose="sticky-year-footer-row">
+            {/* BOTTOM ROW: pinned year footer — labels JS-clamped strictly inside viewport window */}
+            <div className="flex items-stretch text-xs font-bold border-t border-slate-200 bg-white shrink-0" data-purpose="sticky-year-footer-row">
               {footerSegments.map((seg, idx) => {
                 if (seg.kind === 'gap') {
                   return (
                     <div key={`f-gap-${idx}`} className="w-24 bg-rose-50/40 border-r border-slate-200 py-1.5 flex items-center justify-center shrink-0 mx-1">
-                      {/* intentionally blank */}
+                      {/* intentionally blank — no year */}
                     </div>
                   );
                 }
                 const pal = yearColor.get(seg.year) ?? YEAR_PALETTE[0];
                 const totalStems = seg.stems.length;
-                // width: 32 per stem + 6 per inter-stem gap + 8 px-1 padding
                 const widthPx = totalStems * 32 + Math.max(0, totalStems - 1) * 6 + 8;
                 return (
                   <div
                     key={`f-year-${seg.year}-${idx}`}
-                    className={`relative ${pal.track} ${pal.border} border-r py-1.5 px-3 flex items-center justify-center overflow-hidden shrink-0`}
-                    style={{ width: `${widthPx}px` }}
+                    data-year-track={seg.year}
+                    className={`relative ${pal.track} ${pal.border} border-r py-1.5 px-3 shrink-0 overflow-hidden`}
+                    style={{ width: `${widthPx}px`, height: '32px' }}
                   >
-                    <span className={`sticky-year-label ${pal.text} font-mono tracking-widest text-[13px]`}>{seg.year}</span>
+                    <span data-year-label={seg.year} className={`pinned-year-label ${pal.text} font-mono tracking-widest text-[13px]`}>{seg.year}</span>
                   </div>
                 );
               })}
