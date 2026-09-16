@@ -47,9 +47,33 @@ export function SheetSettingsDialog({ open, onClose, onSaved }: Props) {
     onSaved?.();
   };
 
-  const handleUseDefaults = () => {
-    setSheetId(DEFAULT_SHEET_ID);
-    setScriptUrl(DEFAULT_SCRIPT_URL);
+  const handleUseDefaults = async () => {
+    setTesting(true);
+    setTestMsg(null);
+    try {
+      const r = await fetch('/api/sheet-config');
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const j = await r.json();
+      // j: { sheetId, sheetUrl, scriptUrl, source }
+      const id = (j.sheetId || '').trim();
+      const url = (j.sheetUrl || '').trim();
+      const su = (j.scriptUrl || '').trim();
+      // Prefer URL for sheetId field so user sees full URL if available, else id
+      setSheetId(url || id || DEFAULT_SHEET_ID);
+      setScriptUrl(su || DEFAULT_SCRIPT_URL);
+      if (!id && !su) {
+        setTestMsg({ ok: false, msg: 'No defaults found in config/sheet.local.json or env — paste values manually.' });
+      } else {
+        setTestMsg({ ok: true, msg: `Loaded defaults from ${j.source} — ${id ? 'Sheet ' + id.slice(0, 8) + '…' : 'no sheet'} — press Save & Test to apply` });
+      }
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e);
+      setTestMsg({ ok: false, msg: `Failed to load defaults: ${m}` });
+    }
+    setTesting(false);
   };
 
   const isDefault = sheetId.trim() === DEFAULT_SHEET_ID && scriptUrl.trim() === DEFAULT_SCRIPT_URL;
@@ -60,8 +84,8 @@ export function SheetSettingsDialog({ open, onClose, onSaved }: Props) {
         <h3 className="text-sm font-bold text-on-surface mb-1">Buffer Sheet Settings</h3>
         <p className="text-xs text-on-surface-variant mb-3">Paste Buffer Sheet URL (or ID) and Apps Script Web App URL. Same values as QuickTrip Mobile — stored locally. Default is pre-configured.</p>
         <div className="flex gap-2 mb-3">
-          <button onClick={handleUseDefaults} className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-colors ${isDefault ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-paper-gutter text-on-surface-variant border-rule-line hover:bg-emerald-50 hover:text-emerald-700'}`} data-testid="sheet-use-defaults">
-            {isDefault ? '✓ Using defaults' : 'Use defaults'}
+          <button onClick={handleUseDefaults} disabled={testing} className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-50 ${isDefault ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-paper-gutter text-on-surface-variant border-rule-line hover:bg-emerald-50 hover:text-emerald-700'}`} data-testid="sheet-use-defaults">
+            {testing ? 'Loading defaults…' : isDefault ? '✓ Using defaults' : 'Use defaults'}
           </button>
           <span className="text-[11px] text-on-surface-variant self-center">Default Sheet: 1-TxFy…174a9E</span>
         </div>
