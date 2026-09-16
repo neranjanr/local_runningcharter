@@ -61,13 +61,32 @@ export function SheetSettingsDialog({ open, onClose, onSaved }: Props) {
       const id = (j.sheetId || '').trim();
       const url = (j.sheetUrl || '').trim();
       const su = (j.scriptUrl || '').trim();
-      // Prefer URL for sheetId field so user sees full URL if available, else id
-      setSheetId(url || id || DEFAULT_SHEET_ID);
-      setScriptUrl(su || DEFAULT_SCRIPT_URL);
+      const nextSheetId = url || id || DEFAULT_SHEET_ID;
+      const nextScriptUrl = su || DEFAULT_SCRIPT_URL;
+      setSheetId(nextSheetId);
+      setScriptUrl(nextScriptUrl);
       if (!id && !su) {
         setTestMsg({ ok: false, msg: 'No defaults found in config/sheet.local.json or env — paste values manually.' });
       } else {
-        setTestMsg({ ok: true, msg: `Loaded defaults from ${j.source} — ${id ? 'Sheet ' + id.slice(0, 8) + '…' : 'no sheet'} — press Save & Test to apply` });
+        // Live-apply immediately so Export is unblocked without extra rebuild; also persist
+        saveSheetSettings(nextSheetId, nextScriptUrl);
+        // probe live
+        if (nextScriptUrl) {
+          try {
+            const probeUrl = nextScriptUrl + (nextScriptUrl.includes('?') ? '&' : '?') + 'action=allRows';
+            const pr = await fetch(probeUrl, { method: 'GET' });
+            if (!pr.ok) throw new Error(`HTTP ${pr.status}`);
+            const pj = await pr.json().catch(() => ({}));
+            if (pj.ok === false) throw new Error(pj.error || 'Sheet rejected');
+            setTestMsg({ ok: true, msg: `Defaults applied from ${j.source} — ${id ? 'Sheet ' + id.slice(0, 8) + '…' : ''} — Connected (${(pj.rows||[]).length} rows). Saved.` });
+          } catch (pe: unknown) {
+            const pm = pe instanceof Error ? pe.message : String(pe);
+            setTestMsg({ ok: true, msg: `Defaults loaded from ${j.source} and saved — probe: ${pm}. Verify Apps Script is "Anyone with link".` });
+          }
+        } else {
+          setTestMsg({ ok: true, msg: `Loaded defaults from ${j.source} — ${id ? 'Sheet ' + id.slice(0, 8) + '…' : 'no sheet'} — saved.` });
+        }
+        onSaved?.();
       }
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e);
