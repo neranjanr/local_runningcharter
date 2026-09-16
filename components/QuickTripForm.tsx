@@ -478,9 +478,31 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
         {/* Places & Fuel */}
         <div className="space-y-4">
           <div>
-            <label htmlFor="places-visited" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Places Visited / Route & Purpose <span className="text-red-500">*</span>
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label htmlFor="places-visited" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                Places Visited / Route & Purpose <span className="text-red-500">*</span>
+              </label>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  data-testid="quick-places-home-office"
+                  onClick={() => setPlacesVisited('Home - Office')}
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${placesVisited === 'Home - Office' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-zinc-50 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-sky-50 dark:hover:bg-zinc-700 hover:border-sky-300'}`}
+                  title="Fill Places Visited with Home - Office"
+                >
+                  Home - Office
+                </button>
+                <button
+                  type="button"
+                  data-testid="quick-places-office-home"
+                  onClick={() => setPlacesVisited('Office - Home')}
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${placesVisited === 'Office - Home' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-zinc-50 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-sky-50 dark:hover:bg-zinc-700 hover:border-sky-300'}`}
+                  title="Fill Places Visited with Office - Home"
+                >
+                  Office - Home
+                </button>
+              </div>
+            </div>
             <input
               id="places-visited"
               aria-label="Places Visited"
@@ -491,6 +513,7 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
               required
               className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
             />
+            <p className="mt-1 text-[11px] text-zinc-500">Tap a chip to fill — you can still edit freely after.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

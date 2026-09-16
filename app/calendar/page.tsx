@@ -35,6 +35,7 @@ export default function CalendarPage() {
   const [showNoTripPopup, setShowNoTripPopup] = useState(false);
   const [leaveHistoryYear, setLeaveHistoryYear] = useState<string>('all');
   const [contextMenu, setContextMenu] = useState<{ date: string; x: number; y: number } | null>(null);
+  const [confirmClearDate, setConfirmClearDate] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [lv, tr] = await Promise.all([getLeaves(), getTrips()]);
@@ -97,10 +98,14 @@ export default function CalendarPage() {
 
   const handleShowTripsForDate = (date: string) => {
     const first = trips.filter(t => t.date === date).sort((a,b) => a.start_km - b.start_km)[0];
-    if (first) router.push(`/trips?focus=${encodeURIComponent(first.id)}`);
-    else router.push('/trips');
+    const url = first ? `/trips?focus=${encodeURIComponent(first.id)}` : '/trips';
+    if (typeof window !== 'undefined') {
+      const win = window.open(url, '_blank', 'noopener');
+      if (win) win.focus();
+      else window.open(url, '_blank');
+    }
     setContextMenu(null);
-    setEditingDate(null);
+    // keep Calendar in place; do not clear editingDate so dialog stays if opened from warning bar
   };
 
   // close context menu on click/scroll/esc
@@ -143,15 +148,24 @@ export default function CalendarPage() {
     setMsg(`Leave saved ${editingDate}`);
     setTimeout(()=>setMsg(null),2000);
   };
-  const handleClearLeave = async () => {
+  const handleClearLeave = () => {
     if (!editingDate) return;
-    await deleteLeave(editingDate);
+    setConfirmClearDate(editingDate);
+  };
+  const doConfirmClearLeave = async () => {
+    const date = confirmClearDate;
+    if (!date) return;
+    await deleteLeave(date);
     await refresh();
     window.dispatchEvent(new CustomEvent('fleetledger:data-changed'));
-    setMsg(`Leave cleared ${editingDate}`);
+    setMsg(`Leave cleared ${date}`);
     setTimeout(()=>setMsg(null),2000);
+    setConfirmClearDate(null);
     setEditingDate(null);
     setEditNote('');
+  };
+  const handleHistoryClearClick = (date: string) => {
+    setConfirmClearDate(date);
   };
 
   if (loading) return <div className="p-8 text-center text-on-surface-variant">Loading calendar...</div>;
@@ -334,7 +348,7 @@ export default function CalendarPage() {
                         <td className="py-2 text-xs max-w-[240px] truncate" title={l.note ?? ''}>{l.note ? l.note : <span className="text-on-surface-variant">—</span>}</td>
                         <td className="py-2 text-right flex gap-1 justify-end">
                           <button onClick={()=>{ setEditingDate(l.date); setEditNote(l.note ?? ''); }} className="px-2 py-1 text-xs rounded border border-rule-line hover:bg-paper-gutter">Edit</button>
-                          <button onClick={async()=>{ await deleteLeave(l.date); await refresh(); window.dispatchEvent(new CustomEvent('fleetledger:data-changed')); setMsg(`Leave cleared ${l.date}`); setTimeout(()=>setMsg(null),2000); }} className="px-2 py-1 text-xs rounded border border-rose-300 bg-rose-50 text-rose-700">Clear</button>
+                          <button onClick={()=>handleHistoryClearClick(l.date)} className="px-2 py-1 text-xs rounded border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100">Clear</button>
                         </td>
                       </tr>
                     );
@@ -345,64 +359,165 @@ export default function CalendarPage() {
           )}
         </div>
 
-        {/* Edit leave dialog: Mark as Leave / Clear Leave */}
+        {/* Edit leave dialog: redesigned like leavesample.html — grouped presets, gradient bar, rounded-2xl */}
         {editingDate && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={()=>setEditingDate(null)}>
-            <div className="bg-paper-sheet rounded-xl border border-rule-line p-5 w-full max-w-md shadow-xl" onClick={e=>e.stopPropagation()}>
-              <h3 className="font-bold text-on-surface">Leave — {editingDate} <span className="font-normal text-xs text-on-surface-variant">({getDayTypeInfo(editingDate, new Set()).dayOfWeek})</span></h3>
-              {getHoliday(editingDate) && <p className="text-xs text-rose-700 mt-1">{getHoliday(editingDate)!.name} ({getHoliday(editingDate)!.kinds.join('/')})</p>}
-              {tripDateSet.has(editingDate) && (
-                <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs font-semibold text-amber-800">⚠ {tripCountByDate.get(editingDate)} trip(s) on this date</p>
-                  <button
-                    type="button"
-                    data-testid="leave-show-trips-btn"
-                    onClick={() => handleShowTripsForDate(editingDate!)}
-                    className="shrink-0 px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 border border-slate-700"
-                    title="Open All Trips and focus this date"
-                  >
-                    Show Trips →
+          <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4" onClick={()=>setEditingDate(null)}>
+            <div
+              aria-labelledby="modal-headline"
+              aria-modal="true"
+              role="dialog"
+              className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200/80 overflow-hidden transform transition-all duration-200 ease-out"
+              onClick={e=>e.stopPropagation()}
+            >
+              <div className="h-1.5 w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500" />
+              <div className="p-6 sm:p-7">
+                <header className="flex items-start justify-between pb-4 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <h2 id="modal-headline" className="text-xl font-bold text-slate-900 tracking-tight">
+                      Leave — {editingDate} <span className="font-normal text-sm text-slate-500">({getDayTypeInfo(editingDate, new Set()).dayOfWeek})</span>
+                    </h2>
+                    {getHoliday(editingDate) && <p className="text-xs text-rose-700 font-medium">{getHoliday(editingDate)!.name} ({getHoliday(editingDate)!.kinds.join('/')})</p>}
+                    <p className="text-xs sm:text-sm text-slate-500 font-normal leading-relaxed">
+                      {isEditingLeave ? 'Edit note or clear this leave. ' : 'Add a note (max 200) and mark as leave. '}
+                      Tap a preset to fill the box, or type freely.
+                    </p>
+                  </div>
+                  <button aria-label="Close modal" onClick={()=>setEditingDate(null)} className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1.5 rounded-lg transition-colors -mr-1 -mt-1" type="button">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path d="M6 18L18 6M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </button>
-                </div>
-              )}
-              <p className="text-xs text-on-surface-variant mt-2">{isEditingLeave ? 'Edit note or clear this leave.' : 'Add a note (max 200) and mark as leave.'} <span className="text-on-surface-variant">Tap a preset to fill the box, or type freely.</span></p>
-              <div className="mt-3 flex flex-wrap gap-1.5" data-testid="leave-preset-buttons">
-                {LEAVE_PRESETS.map(preset => (
-                  <button
-                    key={preset}
-                    type="button"
-                    data-testid={`leave-preset-${preset.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`}
-                    onClick={() => setEditNote(preset)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${editNote === preset ? 'bg-sky-600 border-sky-600 text-white' : 'bg-paper-gutter border-rule-line text-on-surface hover:bg-sky-50 hover:border-sky-300'}`}
-                    title={`Fill note with "${preset}"`}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <input
-                value={editNote}
-                onChange={e=>setEditNote(e.target.value)}
-                maxLength={200}
-                placeholder="e.g. Annual Leave, Casual Leave..."
-                data-testid="leave-note-input"
-                className="mt-2 w-full px-3 py-2 border border-rule-line rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500"
-              />
-              <div className="text-[11px] text-on-surface-variant text-right mt-1">{editNote.length}/200</div>
-              <div className="flex justify-between gap-2 mt-4">
-                <div>
-                  {isEditingLeave && (
-                    <button onClick={handleClearLeave} className="px-4 py-2 rounded-lg border border-rose-300 bg-rose-50 text-rose-700 text-sm font-semibold">Clear Leave</button>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={()=>setEditingDate(null)} className="px-4 py-2 rounded-lg border border-rule-line text-sm">Cancel</button>
-                  {isEditingLeave ? (
-                    <button onClick={handleSaveNote} className="px-4 py-2 rounded-lg bg-sky-600 text-white text-sm font-semibold">Save</button>
-                  ) : (
-                    <button onClick={handleMarkLeave} className="px-4 py-2 rounded-lg bg-sky-600 text-white text-sm font-semibold">Mark as Leave</button>
-                  )}
-                </div>
+                </header>
+
+                {tripDateSet.has(editingDate) && (
+                  <div className="mt-4 flex items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+                    <p className="text-xs font-semibold text-amber-800">⚠ {tripCountByDate.get(editingDate)} trip(s) on this date</p>
+                    <button
+                      type="button"
+                      data-testid="leave-show-trips-btn"
+                      onClick={() => handleShowTripsForDate(editingDate!)}
+                      className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 border border-slate-700 transition-colors"
+                      title="Open All Trips and focus this date in new tab"
+                    >
+                      Show Trips →
+                    </button>
+                  </div>
+                )}
+
+                <main className="py-5 space-y-5">
+                  <section className="space-y-3.5" data-testid="leave-preset-buttons">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">Presets</label>
+                      <span className="text-xs text-slate-400 font-medium">Click to fill</span>
+                    </div>
+                    {/* Group 1: Standard Leave */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Standard Leave</span>
+                        <div className="h-px flex-1 bg-slate-100" />
+                      </div>
+                      <div aria-label="Standard leave options" className="flex flex-wrap gap-2 text-xs font-medium" role="radiogroup">
+                        {(['Annual Leave','Casual Leave','Medical Leave'] as const).map(preset => {
+                          const active = editNote === preset;
+                          return (
+                            <button
+                              key={preset}
+                              type="button"
+                              role="radio"
+                              aria-checked={active}
+                              data-testid={`leave-preset-${preset.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`}
+                              onClick={() => setEditNote(preset)}
+                              className={`preset-chip group inline-flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all border font-medium ${active ? 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-500/20' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/90'}`}
+                              title={`Fill note with "${preset}"`}
+                            >
+                              <svg className={`w-3.5 h-3.5 check-icon ${active ? 'text-white' : 'hidden'}`} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                <path d="M4.5 12.75l6 6 9-13.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              <span>{preset}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* Group 2: Duty & Overseas */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Duty & Overseas</span>
+                        <div className="h-px flex-1 bg-slate-100" />
+                      </div>
+                      <div aria-label="Duty and overseas leave options" className="flex flex-wrap gap-2 text-xs font-medium" role="radiogroup">
+                        {(['Duty Leave','Duty Leave (Overseas)','Private Overseas'] as const).map(preset => {
+                          const active = editNote === preset;
+                          return (
+                            <button
+                              key={preset}
+                              type="button"
+                              role="radio"
+                              aria-checked={active}
+                              data-testid={`leave-preset-${preset.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`}
+                              onClick={() => setEditNote(preset)}
+                              className={`preset-chip group inline-flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all border font-medium ${active ? 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-500/20' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/90'}`}
+                              title={`Fill note with "${preset}"`}
+                            >
+                              <svg className={`w-3.5 h-3.5 check-icon ${active ? 'text-white' : 'hidden'}`} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                <path d="M4.5 12.75l6 6 9-13.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              <span>{preset}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label htmlFor="leave-note-input" className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">Note / Reason</label>
+                      <span className={`text-xs font-medium tabular-nums ${editNote.length >= 190 ? 'text-amber-500 font-semibold' : 'text-slate-400'}`}>{editNote.length} / 200</span>
+                    </div>
+                    <div className="relative">
+                      <textarea
+                        id="leave-note-input"
+                        data-testid="leave-note-input"
+                        value={editNote}
+                        onChange={e=>setEditNote(e.target.value)}
+                        maxLength={200}
+                        placeholder="Enter note or select preset..."
+                        className="w-full px-3.5 py-2.5 bg-slate-50/60 hover:bg-slate-50 focus:bg-white text-sm text-slate-800 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all placeholder:text-slate-400 resize-none h-24"
+                      />
+                    </div>
+                  </section>
+                </main>
+
+                <footer className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <div>
+                    {isEditingLeave && (
+                      <button onClick={handleClearLeave} className="px-4 py-2 text-sm font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 active:bg-rose-100 border border-rose-200 rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-rose-300" type="button">
+                        Clear Leave
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={()=>setEditingDate(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-200 rounded-xl transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300" type="button">
+                      Cancel
+                    </button>
+                    {isEditingLeave ? (
+                      <button onClick={handleSaveNote} className="inline-flex items-center justify-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-md shadow-blue-500/25 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 hover:shadow-lg" type="button">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span>Save</span>
+                      </button>
+                    ) : (
+                      <button onClick={handleMarkLeave} className="inline-flex items-center justify-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-md shadow-blue-500/25 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 hover:shadow-lg" type="button">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span>Mark as Leave</span>
+                      </button>
+                    )}
+                  </div>
+                </footer>
               </div>
             </div>
           </div>
@@ -504,6 +619,24 @@ export default function CalendarPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* Clear Leave confirmation — styled modal (grilled Q2) */}
+        {confirmClearDate && (
+          <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-[60] p-4" onClick={()=>setConfirmClearDate(null)}>
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-sm overflow-hidden" onClick={e=>e.stopPropagation()}>
+              <div className="h-1.5 w-full bg-gradient-to-r from-rose-500 via-red-500 to-orange-400" />
+              <div className="p-6">
+                <h3 className="text-base font-bold text-slate-900">Clear leave?</h3>
+                <p className="text-sm text-slate-500 mt-1">Remove leave for <span className="font-semibold text-slate-800">{confirmClearDate}</span> ({getDayTypeInfo(confirmClearDate, new Set()).dayOfWeek})? This cannot be undone.</p>
+                {leaveMap.get(confirmClearDate)?.note && <p className="text-xs text-slate-600 mt-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg truncate">Note: {leaveMap.get(confirmClearDate)!.note}</p>}
+                <div className="flex justify-end gap-2 mt-5">
+                  <button onClick={()=>setConfirmClearDate(null)} className="px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">Cancel</button>
+                  <button onClick={doConfirmClearLeave} className="px-5 py-2 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm">Clear Leave</button>
+                </div>
+              </div>
             </div>
           </div>
         )}

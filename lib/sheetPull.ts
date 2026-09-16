@@ -2,8 +2,8 @@
  * Sheet Pull — comparison of Buffer Sheet rows vs DB using Odo Key
  * Identity = Odo Key (date|start|end) per grill Q5 a
  */
-import type { Trip } from '@/types';
-import type { BufferTrip } from './sheetClient';
+import type { Trip, LeaveDay } from '@/types';
+import type { BufferTrip, BufferLeave } from './sheetClient';
 import { estimateStartTime, roundToIntegerKm, roundToOneDecimal } from './tripCalculations';
 import { getOdoKey } from './allTripsWorkbook';
 
@@ -103,4 +103,54 @@ export function compareBufferToDb(params: { bufferRows: BufferTrip[]; existingTr
 
 export function toPartialFromBuffer(b: BufferTrip): Partial<Trip> {
   return toPartial(b);
+}
+
+// --- Leaves ---
+export interface LeavesPullComparison {
+  newRows: BufferLeave[];
+  changedRows: { bufferLeave: BufferLeave; existing: LeaveDay; diff: string }[];
+  skippedRows: BufferLeave[];
+  totalFetched: number;
+}
+
+function buildLeaveDiff(existing: LeaveDay, incoming: BufferLeave): string {
+  return `note: "${existing.note ?? ''}"→"${incoming.note ?? ''}"`;
+}
+
+export function validateLeaveForBuffer(l: BufferLeave): boolean {
+  if (!l.date || !/^\d{4}-\d{2}-\d{2}$/.test(l.date)) return false;
+  const [y, m, d] = l.date.split('-').map(Number);
+  if (y < 2024 || y > 2027) return false;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() + 1 !== m || dt.getDate() !== d) return false;
+  if ((l.note ?? '').length > 200) return false;
+  return true;
+}
+
+export function compareLeavesBufferToDb(params: { bufferLeaves: BufferLeave[]; existingLeaves: LeaveDay[] }): LeavesPullComparison {
+  const { bufferLeaves, existingLeaves } = params;
+  const validRows = bufferLeaves.filter(validateLeaveForBuffer);
+  const leaveMap = new Map<string, LeaveDay>();
+  for (const l of existingLeaves) leaveMap.set(l.date, l);
+  const seen = new Set<string>();
+  const deduped: BufferLeave[] = [];
+  for (const r of validRows) {
+    if (seen.has(r.date)) continue;
+    seen.add(r.date);
+    deduped.push(r);
+  }
+  deduped.sort((a, b) => b.date.localeCompare(a.date));
+  const newRows: BufferLeave[] = [];
+  const changedRows: LeavesPullComparison['changedRows'] = [];
+  const skippedRows: BufferLeave[] = [];
+  for (const b of deduped) {
+    const existing = leaveMap.get(b.date);
+    if (!existing) newRows.push(b);
+    else {
+      const same = (existing.note ?? '') === (b.note ?? '');
+      if (same) skippedRows.push(b);
+      else changedRows.push({ bufferLeave: b, existing, diff: buildLeaveDiff(existing, b) });
+    }
+  }
+  return { newRows, changedRows, skippedRows, totalFetched: bufferLeaves.length };
 }

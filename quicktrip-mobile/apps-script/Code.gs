@@ -1,16 +1,30 @@
 /**
- * Sheet Proxy — Apps Script bound to Buffer Sheet (ADR 0014)
+ * Sheet Proxy — Apps Script bound to Buffer Sheet (ADR 0014, ADR 0023 dual-sheet)
  * Install: Extensions → Apps Script → paste this file → Deploy → Web App → Execute as you, Anyone with link (or restrict).
  * Sheet must have header row exactly: Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No
  * Headers validated order-enforced case-insensitive; Type col accepts alias; Fuel col accepts Fuel Drawn alias.
+ * Second sheet "Leaves" with Date | Note (aliases Notes/Remark/Remarks/Leave Note) is managed for dual-sheet sync.
  */
 const HEADERS = ['Date','Start KM','End KM','Distance','Start Time','End Time','Private / Official','Places Visited','Fuel Pumped','Fuel Order No'];
 const SHEET_NAME = 'All Trips';
+const LEAVES_HEADERS = ['Date','Note'];
+const LEAVES_SHEET_NAME = 'Leaves';
 
 function getSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) sh = ss.getSheets()[0];
+  return sh;
+}
+function getLeavesSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(LEAVES_SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(LEAVES_SHEET_NAME);
+    sh.getRange(1,1,1,LEAVES_HEADERS.length).setValues([LEAVES_HEADERS]);
+    sh.getRange(1,1,1,LEAVES_HEADERS.length).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+    sh.setTabColor('F59E0B');
+  }
   return sh;
 }
 
@@ -42,23 +56,41 @@ function doGet(e){
   if (action === 'allRows') {
     const sh = getSheet_();
     const lastRow = sh.getLastRow();
-    if (lastRow < 2) return json_({ rows: [] });
-    const vals = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
-    const rows = vals.map(r => ({
-      date: formatDate_(r[0]),
-      start_km: roundIntKm_(r[1]),
-      end_km: roundIntKm_(r[2]),
-      trip_distance: roundIntKm_(r[3]),
-      start_time: formatTime_(r[4]),
-      end_time: formatTime_(r[5]),
-      trip_type: String(r[6]).toLowerCase().includes('priv') ? 'Private' : 'Official',
-      places_visited: String(r[7]||''),
-      fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
-      fuel_order_no: String(r[9]||''),
-    }));
-    return json_({ rows });
+    var rows = [];
+    if (lastRow >= 2) {
+      const vals = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+      rows = vals.map(r => ({
+        date: formatDate_(r[0]),
+        start_km: roundIntKm_(r[1]),
+        end_km: roundIntKm_(r[2]),
+        trip_distance: roundIntKm_(r[3]),
+        start_time: formatTime_(r[4]),
+        end_time: formatTime_(r[5]),
+        trip_type: String(r[6]).toLowerCase().includes('priv') ? 'Private' : 'Official',
+        places_visited: String(r[7]||''),
+        fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
+        fuel_order_no: String(r[9]||''),
+      }));
+    }
+    // Leaves sheet
+    var leaves = [];
+    var leavesSheet = null;
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      leavesSheet = ss.getSheetByName(LEAVES_SHEET_NAME);
+    } catch(e0) {}
+    if (leavesSheet) {
+      var lLast = leavesSheet.getLastRow();
+      if (lLast >= 2) {
+        var lVals = leavesSheet.getRange(2, 1, lLast - 1, LEAVES_HEADERS.length).getValues();
+        leaves = lVals.map(function(r){
+          return { date: formatDate_(r[0]), note: String(r[1]||'') };
+        }).filter(function(r){ return !!r.date; });
+      }
+    }
+    return json_({ rows: rows, leaves: leaves });
   }
-  return json_({ ok: true, headers: HEADERS, hint: '?action=last10 or ?action=allRows' });
+  return json_({ ok: true, headers: HEADERS, leavesHeaders: LEAVES_HEADERS, hint: '?action=last10 or ?action=allRows' });
 }
 
 function doPost(e){
@@ -72,6 +104,9 @@ function doPost(e){
       if (!body.rows && e.parameter && e.parameter.rows) {
         try { body.rows = JSON.parse(e.parameter.rows); } catch(_){ body.rows = []; }
       }
+      if (!body.leaves && e.parameter && e.parameter.leaves) {
+        try { body.leaves = JSON.parse(e.parameter.leaves); } catch(_){ body.leaves = []; }
+      }
     } catch(parseErr) {
       // fallback to parameter object
       body = { action: (e.parameter && e.parameter.action) || '' };
@@ -80,7 +115,9 @@ function doPost(e){
     if (body.action === 'rewriteSheet' || body.action === 'pushAll' || body.action === 'rewrite' || body.action === 'export') {
       // accept rows / trips alias (already normalized above)
       const rows = body.rows || body.trips || [];
+      const leaves = body.leaves || [];
       if (!Array.isArray(rows)) return json_({ ok:false, error:'rows must be an array' });
+      if (leaves && !Array.isArray(leaves)) return json_({ ok:false, error:'leaves must be an array' });
       const lock = LockService.getDocumentLock();
       const gotLock = lock.tryLock(30000);
       if (!gotLock) return json_({ ok:false, error:'Could not acquire lock — try again' });
@@ -114,7 +151,23 @@ function doPost(e){
           sh.getRange(2, 2, values.length, 3).setNumberFormat('0');
           sh.getRange(2, 9, values.length, 1).setNumberFormat('0.0');
         }
-        return json_({ ok: true, rows: rows.length });
+        // Leaves sheet rewrite (second sheet)
+        var leavesSheet = getLeavesSheet_();
+        ensureLeavesHeaders_(leavesSheet);
+        leavesSheet.clear();
+        leavesSheet.getRange(1,1,1,LEAVES_HEADERS.length).setValues([LEAVES_HEADERS]);
+        leavesSheet.getRange(1,1,1,LEAVES_HEADERS.length).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+        leavesSheet.setTabColor('F59E0B');
+        if (leaves && leaves.length > 0) {
+          var lVals = leaves.map(function(l){
+            var note = String(l.note||'');
+            if (note.length > 200) note = note.slice(0,200);
+            return [String(l.date||''), note];
+          });
+          leavesSheet.getRange(2,1,lVals.length,LEAVES_HEADERS.length).setValues(lVals);
+          leavesSheet.getRange(2,1,lVals.length,1).setNumberFormat('@');
+        }
+        return json_({ ok: true, rows: rows.length, leaves: leaves ? leaves.length : 0 });
       } finally {
         try { lock.releaseLock(); } catch(e2) {}
       }
@@ -167,6 +220,22 @@ function ensureHeaders_(sh){
   const norm = s=>String(s).toLowerCase().replace(/[^a-z0-9]/g,'');
   const ok = HEADERS.every((exp,i)=> norm(h[i])===norm(exp) || (i===6 && ['type','triptype','privateofficial'].includes(norm(h[i]))) || (i===8 && ['fuelpumped','fueldrawn'].includes(norm(h[i]))));
   if (!ok) throw new Error('Header row mismatch. Expected: ' + HEADERS.join(' | '));
+}
+function ensureLeavesHeaders_(sh){
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(LEAVES_HEADERS);
+    sh.getRange(1,1,1,LEAVES_HEADERS.length).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+    return;
+  }
+  const h = sh.getRange(1,1,1,LEAVES_HEADERS.length).getValues()[0].map(v=>String(v).trim());
+  const norm = s=>String(s).toLowerCase().replace(/[^a-z0-9]/g,'');
+  const ok = LEAVES_HEADERS.every((exp,i)=> {
+    var n = norm(h[i]||'');
+    var e = norm(exp);
+    if (i===1) return n===e || ['notes','remark','remarks','leavenote','leavenotes'].indexOf(n)>=0;
+    return n===e;
+  });
+  if (!ok) throw new Error('Leaves header mismatch. Expected: ' + LEAVES_HEADERS.join(' | '));
 }
 
 function formatDate_(v){

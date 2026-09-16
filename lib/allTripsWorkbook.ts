@@ -28,6 +28,9 @@ export const ALL_TRIPS_HEADERS = [
   'Fuel Order No',
 ];
 
+export const LEAVES_HEADERS = ['Date', 'Note'] as const;
+const LEAVES_NOTE_ALIASES = new Set(['note', 'notes', 'remark', 'remarks', 'leavenote', 'leavenotes']);
+
 export function getAllTripsFileName(vehicle?: { brand: string; model: string } | null, dateStr?: string): string {
   const datePart = dateStr ?? new Date().toISOString().slice(0, 10);
   if (!vehicle) return `AllTrips_${datePart}.xlsx`;
@@ -36,7 +39,11 @@ export function getAllTripsFileName(vehicle?: { brand: string; model: string } |
   return `AllTrips_${safeBrand}_${safeModel}_${datePart}.xlsx`;
 }
 
-export function generateAllTripsWorkbook(trips: Trip[], vehicle?: { brand: string; model: string; registration_no?: string } | null): ExcelJS.Workbook {
+export function generateAllTripsWorkbook(
+  trips: Trip[],
+  vehicle?: { brand: string; model: string; registration_no?: string } | null,
+  leaves?: { date: string; note?: string }[] | null
+): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'FleetLedger';
   workbook.created = new Date();
@@ -106,11 +113,46 @@ export function generateAllTripsWorkbook(trips: Trip[], vehicle?: { brand: strin
     fitToWidth: 1,
   };
 
+  // Leaves sheet — always present, header-only when empty
+  const leavesSheet = workbook.addWorksheet('Leaves', {
+    properties: { tabColor: { argb: 'FFF59E0B' } },
+  });
+  leavesSheet.columns = [
+    { key: 'date', width: 14 },
+    { key: 'note', width: 48 },
+  ];
+  const leavesHeader = leavesSheet.addRow([...LEAVES_HEADERS]);
+  leavesHeader.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } } as ExcelJS.Fill;
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  });
+  leavesHeader.height = 18;
+  const sortedLeaves = [...(leaves ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+  for (const lv of sortedLeaves) {
+    const row = leavesSheet.addRow([lv.date, lv.note ?? '']);
+    row.eachCell((cell, colNum) => {
+      cell.font = { size: 9 };
+      if (colNum === 1) {
+        cell.numFmt = '@';
+        cell.alignment = { horizontal: 'center' };
+      } else {
+        cell.alignment = { horizontal: 'left', wrapText: true, vertical: 'middle' };
+      }
+    });
+    row.height = 14;
+  }
+  leavesSheet.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
+
   return workbook;
 }
 
-export async function generateAllTripsBuffer(trips: Trip[], vehicle?: { brand: string; model: string; registration_no?: string } | null): Promise<ArrayBuffer> {
-  const wb = generateAllTripsWorkbook(trips, vehicle);
+export async function generateAllTripsBuffer(
+  trips: Trip[],
+  vehicle?: { brand: string; model: string; registration_no?: string } | null,
+  leaves?: { date: string; note?: string }[] | null
+): Promise<ArrayBuffer> {
+  const wb = generateAllTripsWorkbook(trips, vehicle, leaves);
   const buf = await wb.xlsx.writeBuffer();
   return buf as ArrayBuffer;
 }
@@ -124,6 +166,8 @@ export interface ImportError {
 export interface ImportParseResult {
   valid: boolean;
   trips: Partial<Trip>[];
+  leaves: { date: string; note?: string }[];
+  leafErrors: ImportError[];
   errors: ImportError[];
 }
 
@@ -236,6 +280,84 @@ export function validateHeaders(rowValues: string[]): boolean {
   });
 }
 
+export function validateLeavesHeaders(rowValues: string[]): boolean {
+  const trimmed = [...rowValues];
+  while (trimmed.length > 0 && String(trimmed[trimmed.length - 1]).trim() === '') {
+    trimmed.pop();
+  }
+  if (trimmed.length !== LEAVES_HEADERS.length) return false;
+  const expectedNorm = (LEAVES_HEADERS as readonly string[]).map(h => normHeader(h));
+  const actualNorm = trimmed.map(v => normHeader(v));
+  return expectedNorm.every((exp, idx) => {
+    if (idx === 1) return actualNorm[idx] === exp || LEAVES_NOTE_ALIASES.has(actualNorm[idx]);
+    return actualNorm[idx] === exp;
+  });
+}
+
+/**
+ * Validate a LeaveDay date (2024-2027 and real date)
+ */
+export function validateLeaveDateForImport(date: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Invalid date format YYYY-MM-DD';
+  const [y, m, d] = date.split('-').map(Number);
+  if (y < 2024 || y > 2027) return 'Leaves allowed only 2024-2027';
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() + 1 !== m || dt.getDate() !== d) return 'Invalid date';
+  return null;
+}
+
+export function validateLeavesForImport(leaves: { date: string; note?: string }[]): ImportError[] {
+  const errors: ImportError[] = [];
+  const seen = new Map<string, number>();
+  leaves.forEach((lv, idx) => {
+    const err = validateLeaveDateForImport(lv.date);
+    if (err) errors.push({ row: idx + 2, field: 'Leaves.Date', message: err });
+    if ((lv.note ?? '').length > 200) errors.push({ row: idx + 2, field: 'Leaves.Note', message: 'Note exceeds 200 characters' });
+    if (seen.has(lv.date)) {
+      // last-wins dedup, but warn via duplicate is not error per spec — silent, so no error
+    }
+    seen.set(lv.date, idx);
+  });
+  return errors;
+}
+
+export function dedupeLeaves(leaves: { date: string; note?: string }[]): { date: string; note?: string }[] {
+  const map = new Map<string, { date: string; note?: string }>();
+  for (const lv of leaves) map.set(lv.date, { date: lv.date, note: lv.note ?? '' });
+  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Import leaves (upsert-only, never delete). Last-wins for duplicate dates inside import.
+ */
+export function importLeavesFromWorkbook(params: {
+  existingLeaves: { date: string; note?: string }[];
+  parsedLeaves: { date: string; note?: string }[];
+}): { leaves: { date: string; note?: string }[]; appendedCount: number; updatedCount: number; skippedDuplicates: number } {
+  const { existingLeaves, parsedLeaves } = params;
+  const deduped = dedupeLeaves(parsedLeaves);
+  const existingMap = new Map(existingLeaves.map(l => [l.date, l] as const));
+  const result = new Map(existingMap);
+  let appended = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const lv of deduped) {
+    const existing = existingMap.get(lv.date);
+    if (!existing) {
+      result.set(lv.date, { date: lv.date, note: lv.note ?? '' });
+      appended++;
+    } else {
+      const same = (existing.note ?? '') === (lv.note ?? '');
+      if (same) skipped++;
+      else {
+        result.set(lv.date, { date: lv.date, note: lv.note ?? '' });
+        updated++;
+      }
+    }
+  }
+  return { leaves: Array.from(result.values()).sort((a, b) => a.date.localeCompare(b.date)), appendedCount: appended, updatedCount: updated, skippedDuplicates: skipped };
+}
+
 /**
  * Generate a duplicate key from trip fields for deduplication.
  */
@@ -255,12 +377,12 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
   try {
     await workbook.xlsx.load(buffer as any);
   } catch {
-    return { valid: false, trips: [], errors: [{ row: 0, field: 'file', message: 'Invalid Excel file format (.xlsx required)' }] };
+    return { valid: false, trips: [], leaves: [], leafErrors: [], errors: [{ row: 0, field: 'file', message: 'Invalid Excel file format (.xlsx required)' }] };
   }
 
   const sheet = workbook.getWorksheet('All Trips') || workbook.worksheets[0];
   if (!sheet) {
-    return { valid: false, trips: [], errors: [{ row: 0, field: 'sheet', message: 'No sheet found in workbook' }] };
+    return { valid: false, trips: [], leaves: [], leafErrors: [], errors: [{ row: 0, field: 'sheet', message: 'No sheet found in workbook' }] };
   }
 
   const errors: ImportError[] = [];
@@ -292,6 +414,8 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     return {
       valid: false,
       trips: [],
+      leaves: [],
+      leafErrors: [],
       errors: [{ row: headerRowIndex, field: 'headers', message: `Invalid header row. Expected: ${ALL_TRIPS_HEADERS.join(', ')}` }],
     };
   }
@@ -384,9 +508,67 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     });
   });
 
+  // Parse Leaves sheet (independent) — absent => 0 leaves, no error (back-compat)
+  const leafErrors: ImportError[] = [];
+  const parsedLeavesRaw: { date: string; note?: string }[] = [];
+  const leavesSheet = workbook.getWorksheet('Leaves');
+  if (leavesSheet) {
+    let leavesHeaderIdx = 0;
+    leavesSheet.eachRow((row, rowIdx) => {
+      if (leavesHeaderIdx > 0) return;
+      const vals: string[] = [];
+      row.eachCell({ includeEmpty: true }, (cell) => vals.push(String(cell.value ?? '')));
+      if (vals.some(v => normHeader(v) === 'date')) leavesHeaderIdx = rowIdx;
+    });
+    if (leavesHeaderIdx === 0) leavesHeaderIdx = 1;
+    const lhRow = leavesSheet.getRow(leavesHeaderIdx);
+    const lhVals: string[] = [];
+    lhRow.eachCell({ includeEmpty: true }, (cell) => lhVals.push(String(cell.value ?? '')));
+    if (!validateLeavesHeaders(lhVals)) {
+      leafErrors.push({ row: leavesHeaderIdx, field: 'Leaves.headers', message: `Invalid Leaves header row. Expected: ${LEAVES_HEADERS.join(', ')}` });
+    } else {
+      // collect raw rows, then dedup last-wins
+      const rawMap = new Map<string, { date: string; note?: string; rowIdx: number }>();
+      leavesSheet.eachRow((row, rowIdx) => {
+        if (rowIdx <= leavesHeaderIdx) return;
+        const getCellStr = (colIdx: number) => {
+          const cell = row.getCell(colIdx);
+          const v: any = cell.value;
+          if (colIdx === 1) return parseExcelDate(v);
+          if (v === null || v === undefined) return '';
+          if (typeof v === 'object' && 'text' in v) return String((v as any).text).trim();
+          if (typeof v === 'object' && 'result' in v) return String((v as any).result ?? '').trim();
+          return String(v).trim();
+        };
+        const dateStr = getCellStr(1);
+        const noteStr = getCellStr(2);
+        if (!dateStr && !noteStr) return;
+        if (!dateStr) {
+          leafErrors.push({ row: rowIdx, field: 'Leaves.Date', message: 'Leaves Date is required (YYYY-MM-DD)' });
+          return;
+        }
+        const dateErr = validateLeaveDateForImport(dateStr);
+        if (dateErr) {
+          leafErrors.push({ row: rowIdx, field: 'Leaves.Date', message: dateErr });
+          return;
+        }
+        if ((noteStr ?? '').length > 200) {
+          leafErrors.push({ row: rowIdx, field: 'Leaves.Note', message: 'Note exceeds 200 characters' });
+          return;
+        }
+        rawMap.set(dateStr, { date: dateStr, note: noteStr ?? '', rowIdx });
+      });
+      for (const v of rawMap.values()) parsedLeavesRaw.push({ date: v.date, note: v.note ?? '' });
+      parsedLeavesRaw.sort((a, b) => a.date.localeCompare(b.date));
+    }
+  }
+
+  const combinedValid = errors.length === 0 && leafErrors.length === 0;
   return {
-    valid: errors.length === 0,
+    valid: combinedValid,
     trips: parsedTrips,
+    leaves: parsedLeavesRaw,
+    leafErrors,
     errors,
   };
 }

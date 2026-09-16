@@ -90,7 +90,17 @@ small{font-size:11px;color:#64748b}
       </div>
     </div>
 
-    <div><label>Places Visited / Route & Purpose *</label><input id="places" type="text" placeholder="HQ Fleet Yard → Regional Port Customs" required/></div>
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+        <label style="margin:0">Places Visited / Route & Purpose *</label>
+        <span style="display:flex;gap:6px">
+          <button type="button" id="quickHomeOffice" style="padding:4px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;font-size:11px;font-weight:800;color:#334155">Home - Office</button>
+          <button type="button" id="quickOfficeHome" style="padding:4px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;font-size:11px;font-weight:800;color:#334155">Office - Home</button>
+        </span>
+      </div>
+      <input id="places" type="text" placeholder="HQ Fleet Yard → Regional Port Customs" required/>
+      <div class="hint">Tap a chip to fill — you can still edit after.</div>
+    </div>
     <div class="grid2">
       <div><label>Fuel Pumped (L) <span style="color:#94a3b8">Opt</span></label><input id="fuelPumped" type="number" step="0.1" inputmode="decimal" placeholder="35.0"/></div>
       <div><label>Fuel Order No <span style="color:#94a3b8">Opt</span></label><input id="fuelOrderNo" type="text" placeholder="#FO-88912"/></div>
@@ -260,6 +270,31 @@ $("autoBtn").onclick=()=>{
   const est=estStart(et,d);if(!est){msg("err","Cannot estimate");return}
   $("startTime").value=est;$("duration").value=formatDur(calcDurationMin(est,et));
 };
+function setPlacesQuick(v){
+  $("places").value=v;
+  // visual feedback — highlight selected pill
+  ["quickHomeOffice","quickOfficeHome"].forEach(id=>{
+    const btn=$(id);
+    const isSel=( (id==="quickHomeOffice"&&v==="Home - Office") || (id==="quickOfficeHome"&&v==="Office - Home") );
+    btn.style.background=isSel?"#0ea5e9":"#f8fafc";
+    btn.style.color=isSel?"#fff":"#334155";
+    btn.style.borderColor=isSel?"#0ea5e9":"#cbd5e1";
+  });
+  $("places").focus();
+}
+$("quickHomeOffice").onclick=()=>setPlacesQuick("Home - Office");
+$("quickOfficeHome").onclick=()=>setPlacesQuick("Office - Home");
+$("places").addEventListener("input",()=>{
+  const v=$("places").value.trim();
+  ["quickHomeOffice","quickOfficeHome"].forEach(id=>{
+    const btn=$(id);
+    const expect=(id==="quickHomeOffice"?"Home - Office":"Office - Home");
+    const isSel=(v===expect);
+    btn.style.background=isSel?"#0ea5e9":"#f8fafc";
+    btn.style.color=isSel?"#fff":"#334155";
+    btn.style.borderColor=isSel?"#0ea5e9":"#cbd5e1";
+  });
+});
 
 $("tripForm").addEventListener("submit",async e=>{
   e.preventDefault();

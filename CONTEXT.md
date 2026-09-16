@@ -15,6 +15,9 @@ _Avoid_: Sheet, paper
 **Trip**: One movement record from Start KM to End KM on a given Date, with Start/End Time, Places Visited, Trip Type, and optional fuel Drawn.
 _Avoid_: Entry, log, row
 
+**Quick Places (Home ↔ Office)**: Two convenience pill buttons shown directly beside the `Places Visited` field on both `New Trip Entry` (`components/QuickTripForm.tsx:481`) and Mobile (`components/mobile/MobileQuickTripForm.tsx:178`, `quicktrip-mobile/dist/mobile_app_public.html:93`, `/mobile` route): `Home - Office` and `Office - Home`. Pressing a pill clears the textbox and fills it with the pill text; the field remains freely editable afterward (`setPlacesVisited(v)` + focus, `data-testid="quick-places-home-office"` / `quick-places-office-home"`). Static PWA template mirrors the same JS (`setPlacesQuick` + `places input` sync) so the private phone file inherits the chips after `npm run build:mobile`.
+_Avoid_: Route shortcut, preset location
+
 **Vehicle**: The tracked asset defined by Brand, Model, Type, Fuel Type, Tank Capacity, and Registration No.
 _Avoid_: Car, fleet unit
 
@@ -99,7 +102,7 @@ _Avoid_: Mismatch, discontinuity error
 **Continuity Alert**: Persistent, non-dismissible banner/drawer listing every KM Gap (RED) and Fuel Gap (AMBER) at Page-to-Page and Trip-to-Trip levels; survives refresh, shows expected vs actual and jump-to-page/trip links, clears only when gaps are fixed or missing records are added to close them (no auto-recalc). Dashboard shows a compact alert bar ("Continuity Gaps Detected") with a "View All Trips" link; All Trips and Ledger pages show the full detailed alert.
 _Avoid_: Toast alert, dismissible warning
 
-**All Trips Workbook**: Excel file named per All Trips table with Sheet "All Trips" and header row `Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No` (`Type` alias accepted case-insensitive, order-enforced); export writes that sheet, import validates pre-flight and appends chronologically without overwriting.
+**All Trips Workbook**: Dual-sheet Excel file (`All Trips` + `Leaves`) named per All Trips table; `All Trips` sheet has header row `Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No` (`Type` alias case-insensitive order-enforced), `Leaves` sheet has `Date | Note` (`Notes|Remark|Remarks|Leave Note` alias, 2024–2027, Note ≤200). Export always writes both sheets (Leaves header-only when empty); import validates each sheet independently and upserts chronologically without implicit delete.
 _Avoid_: Book-Mirror sheet, generic export
 
 **Transposed Side 2**: Side 2 Fuel Economy & Position tables rendered with days as columns to mirror the physical book's landscape layout, matching Side 1 column orientation.
@@ -162,7 +165,7 @@ _Avoid_: Delete, shift-delete
 **Focused Trip**: The ephemeral highlight-and-scroll target after a mutating operation in All Trips; `Inserted Trip`/`Gap Fill Trip` focuses the new row, `Removed Trip`/`Delete` focuses the predecessor (or successor if earliest) after clearing any search/month filter so the row is visible; rendered as `ring-2 ring-telemetry-cyan` + `bg-cyan-50` flash for ~3s and scrolled to center.
 _Avoid_: Selected row, active row
 
-**Sheet Pull Import**: Direct pull from the Buffer Sheet via `GET scriptUrl?action=allRows` using the same Sheet Proxy as QuickTrip Mobile, compared by Odo Key (`date|start_km|end_km` integer) into New / Changed (same odo, diff fields) / Skipped (exact duplicate) buckets, previewed with consent, validated by the same `validateNoOverlap`/`validatePaginationForImport` pipeline and persisted via `importTripsFromWorkbook` + bulk `/api/import` (localStorage fallback), focusing the earliest newly added Trip (`date||start_km` order) and flashing all imported rows `bg-cyan-50`; triggered manually by "Import from Google Sheet" (formerly "Pull from Google Sheet") next to Import from Excel.
+**Sheet Pull Import**: Direct pull from the dual-sheet Buffer Sheet via `GET scriptUrl?action=allRows` using the same Sheet Proxy as QuickTrip Mobile; Trips compared by Odo Key (`date|start_km|end_km` integer) into New / Changed / Skipped buckets validated by `validateNoOverlap`/`validatePaginationForImport`, Leaves compared by `date` into New / Changed (note diff) / Skipped; each sheet previewed with consent and validated independently (one can succeed while other fails), persisted via `importTripsFromWorkbook` + `importLeaves` bulk `/api/import` and `/api/leaves`, focusing earliest new Trip and flashing imported rows `bg-cyan-50`; triggered manually by "Import from Google Sheet" next to Import from Excel.
 _Avoid_: Sheet sync, auto-pull
 
 **Sheet Settings**: Persisted Buffer Sheet identity (`mobile.sheetId` extracted from full Sheet URL + `mobile.scriptUrl` Apps Script URL) shared between `QuickTrip Mobile` and All Trips header, editable via a shared dialog that probes `?action=allRows`; defaults are stored in gitignored `config/sheet.local.json` (see `config/sheet.example.json`, loaded via `lib/sheetConfig.ts`) and runtime overrides remain `localStorage mobile.sheetId/mobile.scriptUrl` and `NEXT_PUBLIC_*` env; last successful pull time stored as `mobile.lastSheetPullAt` and push time as `mobile.lastSheetPushAt`.
@@ -171,7 +174,7 @@ _Avoid_: Sheet config, path
 **Import Preview**: Modal shown before a Sheet Pull commit, listing New Trips (checked by default) and Changed rows (unchecked, with `old→new` diff such as `places: "A"→"B"`), supporting select/deselect all, blocking Confirm until at least one row is checked and until overlap/pagination pre-flight passes.
 _Avoid_: Import dialog, confirm screen
 
-**Sheet Push (Export to Google Sheet)**: Inverse of Sheet Pull Import; manual push that atomically rewrites the Buffer Sheet with all DB Trips sorted `date ASC → start_km ASC` plus header, preserving valid buffer rows whose Odo Key not in DB (appended at bottom in original buffer order, DB wins on same Odo Key); invalid buffer rows ignored; via `POST rewriteSheet` with `LockService`; stores `mobile.lastSheetPushAt`; triggered manually by "Export to Google Sheet" next to Import from Google Sheet.
+**Sheet Push (Export to Google Sheet)**: Inverse of Sheet Pull Import; manual push that atomically rewrites both Buffer sheets with `LockService`; Trips sheet from all DB Trips sorted `date ASC → start_km ASC` plus header, preserving valid unimported buffer Trip rows (Odo Key ∉ DB appended, DB wins on collision); Leaves sheet from all DB Leaves sorted `date ASC` plus header, preserving valid unimported buffer Leave rows (`date` ∉ DB appended, DB wins, invalid ignored); via `POST rewriteSheet {rows, leaves}`; stores `mobile.lastSheetPushAt`; triggered manually by "Export to Google Sheet".
 _Avoid_: Sheet sync, auto-push
 
 **Push Preview**: Modal shown before a Sheet Push commit, showing counts `DB rows N | Preserved M (unimported) | Overwriting K | Invalid ignored X` with expandable preserved-row list, blocking Confirm until settings configured.
@@ -182,10 +185,13 @@ _Avoid_: Export dialog, confirm screen
 **QuickTrip Mobile**: Installable PWA for Android that mirrors QuickTripForm entry (Date, Integer KM reciprocals, Estimated Start Time (tiered <10→15 <20→20 <40→25 ≤60→30 >60→35 ceil 5 min, flat 20 km/h deprecated), Trip Type, Places Visited, Drawn Fuel) but writes to a Buffer Sheet, not the deployment DB; lives in `quicktrip-mobile/` sibling folder (or `app/mobile/` route) and is usable while deployment is unreachable; distribution is `quicktrip-mobile/dist/mobile_app_public.html` (tracked public template, no secret) vs `quicktrip-mobile/dist/Mobile_with_url_private.html` (gitignored private build generated via `start-service.ps1` `$ScriptUrl` or `npm run build:mobile` from `config/sheet.local.json` `scriptUrl`, single-file standalone for phone).
 _Avoid_: Mobile app, trip app
 
-**Buffer Sheet**: A dedicated Google Sheet (QuickTrip Buffer) with the identical All Trips Workbook header row (`Date | Start KM | End KM | Distance | Start Time | End Time | Private / Official | Places Visited | Fuel Pumped | Fuel Order No`) used as offline staging; rows are later imported into the Book via Trip Import (manual .xlsx download or future direct pull).
+**Buffer Sheet**: A dedicated Google Sheet (QuickTrip Buffer) with two sheets mirroring the All Trips Workbook (`All Trips` with identical 10-col header, `Leaves` with `Date | Note`) used as offline staging; rows are later imported via Trip/Leave Import (manual .xlsx download or direct pull).
 _Avoid_: Staging sheet, temp sheet
 
-**Sheet Proxy**: Google Apps Script Web App bound to the Buffer Sheet exposing `POST appendTrip` / `POST rewriteSheet` and `GET last10` / `GET allRows` over HTTPS so the PWA writes/reads without embedding Google credentials; the script re-applies Integer KM and 1-dec fuel rounding, rejects invalid `End < Start`, and uses `LockService` for atomic rewrite.
+**Leaves Sheet**: Second sheet named `Leaves` in both the All Trips Workbook and the Buffer Sheet, with header `Date | Note` (aliases `Notes|Remark|Remarks|Leave Note` accepted, case-insensitive order-enforced), sorted `date ASC`, always present header-only when empty; round-trips only `LeaveDay {date, note}`.
+_Avoid_: Leave tab, holiday sheet
+
+**Sheet Proxy**: Google Apps Script Web App bound to the Buffer Sheet exposing `POST appendTrip` / `POST rewriteSheet` (now `{rows, leaves}` dual-sheet) and `GET last10` / `GET allRows` (now `{rows, leaves}`) over HTTPS so the PWA writes/reads without embedding Google credentials; the script re-applies Integer KM and 1-dec fuel rounding plus `Note ≤200` and `date 2024–2027` for Leaves, rejects invalid `End < Start`, and uses `LockService` for atomic dual-sheet rewrite.
 _Avoid_: Sheet API, backend proxy
 
 **Mobile Queue**: IndexedDB-backed offline buffer in QuickTrip Mobile that stores Trips when offline and retries Sheet Proxy sync when online, preserving sheet truth for Start KM auto-fill.
@@ -199,10 +205,10 @@ _Avoid_: Non-working day (ambiguous), holiday-only
 **Working Day**: Monday–Friday that is not a `SriLankanHoliday` (B/P/M) and not a manual `LeaveDay` and not Weekend; i.e. `isOffDay=false`. The complement of Off-Day.
 _Avoid_: Weekday (overloaded), business day
 
-**LeaveDay (Manual-Only)**: A personal leave record `{date, note?}` persisted via `leaves` table / `fleetledger_leaves` localStorage, created or cleared **only** through the Calendar cell dialog (“Mark as Leave” / “Clear Leave” with optional 200-char note, plus one-click preset buttons `Annual Leave | Casual Leave | Medical Leave | Duty Leave | Duty Leave (Overseas) | Private Overseas` that fill the note box); never seeded from holidays, import, or any auto path. A Leave date is always an Off-Day. `note` holds the preset name when a preset is chosen, or free text otherwise.
+**LeaveDay (Manual-Only)**: A personal leave record `{date, note?}` persisted via `leaves` table / `fleetledger_leaves` localStorage, created or cleared **only** through the Calendar cell dialog (“Mark as Leave” / “Clear Leave” with optional 200-char note, plus one-click preset buttons grouped `Standard Leave: Annual Leave | Casual Leave | Medical Leave` and `Duty & Overseas: Duty Leave | Duty Leave (Overseas) | Private Overseas` that fill the `Note / Reason` textarea); never seeded from holidays, import, or any auto path. A Leave date is always an Off-Day. `note` holds the preset name when a preset is chosen, or free text otherwise. `Clear Leave` requires a styled confirmation modal (both in the dialog and in Leave History) before `deleteLeave` executes. Calendar cell right-click on a date with trips shows a `Show Trip Details →` context menu; activating it opens All Trips in a **new tab** (`window.open('/trips?focus=<tripId>', '_blank')` + `focus()`) focused to the date’s first Trip (`app/calendar/page.tsx:98`). The dialog shell mirrors `leavesample.html` (gradient `h-1.5` bar, `rounded-2xl` `max-w-lg`, grouped chips with `aria-checked`, `textarea h-24` + `N/200` counter, `Cancel` + primary `Mark as Leave`/`Save` footer).
 _Avoid_: Auto-leave, holiday leave
 
-**Leave History**: Year-filterable table of `LeaveDay` rows (`Date | Day | Holiday | Note`) shown as a persistent card on the Calendar page; filter `All | 2024..2027` defaults to current year, sorted `date DESC`.
+**Leave History**: Year-filterable table of `LeaveDay` rows (`Date | Day | Holiday | Note`) shown as a persistent card on the Calendar page; filter `All | 2024..2027` defaults to current year, sorted `date DESC`; row `Clear` asks the same styled confirmation before delete.
 _Avoid_: Leave log, leave report
 
 **ODO Gap Period**: Open interval `(curTrip.date, nextTrip.date)` strictly between two chronologically adjacent Trips (`date || start_km` sort) where `cur.end_km != next.start_km` per `detectTripGaps` (`lib/continuityAlerts.ts`); the gap extent is the missing odometer `Δ`. Page KM gaps are not used for calendar filtering.

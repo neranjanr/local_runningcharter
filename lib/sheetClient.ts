@@ -29,6 +29,13 @@ export interface BufferTrip {
   fuel_order_no?: string;
 }
 
+export interface BufferLeave {
+  date: string;
+  note?: string;
+}
+
+export const LEAVES_SHEET_HEADERS = ['Date', 'Note'] as const;
+
 // Defaults loaded from gitignored config/sheet.local.json via lib/sheetConfig.ts (see config/sheet.example.json)
 import { DEFAULT_SHEET_ID, DEFAULT_SHEET_URL, DEFAULT_SCRIPT_URL } from './sheetConfig';
 export { DEFAULT_SHEET_ID, DEFAULT_SHEET_URL, DEFAULT_SCRIPT_URL };
@@ -58,7 +65,7 @@ export function saveSheetSettings(sheetIdOrUrl: string, scriptUrl: string) {
   localStorage.setItem('mobile.scriptUrl', scriptUrl.trim());
 }
 
-export async function fetchAllRows(): Promise<BufferTrip[]> {
+export async function fetchAllWithLeaves(): Promise<{ rows: BufferTrip[]; leaves: BufferLeave[] }> {
   const { scriptUrl } = getSheetSettings();
   if (!scriptUrl) throw new Error('Sheet Proxy URL not configured — open Settings');
   const url = scriptUrl + (scriptUrl.includes('?') ? '&' : '?') + 'action=allRows';
@@ -66,7 +73,19 @@ export async function fetchAllRows(): Promise<BufferTrip[]> {
   if (!res.ok) throw new Error(`Sheet fetch failed: ${res.status} — verify Apps Script deployed as "Anyone with link"`);
   const j = await res.json().catch(() => ({}));
   if (j.ok === false) throw new Error(j.error || 'Sheet rejected request');
-  return (j.rows || j.trips || []) as BufferTrip[];
+  const rows = (j.rows || j.trips || []) as BufferTrip[];
+  const leaves = (j.leaves || []) as BufferLeave[];
+  return { rows, leaves };
+}
+
+export async function fetchAllRows(): Promise<BufferTrip[]> {
+  const { rows } = await fetchAllWithLeaves();
+  return rows;
+}
+
+export async function fetchLeaves(): Promise<BufferLeave[]> {
+  const { leaves } = await fetchAllWithLeaves();
+  return leaves;
 }
 
 export async function fetchLast10(): Promise<BufferTrip[]> {
@@ -99,14 +118,14 @@ export function setLastPushAt(iso: string) {
   localStorage.setItem('mobile.lastSheetPushAt', iso);
 }
 
-export async function pushAllRows(rows: BufferTrip[]): Promise<void> {
+export async function pushAllWithLeaves(rows: BufferTrip[], leaves: BufferLeave[]): Promise<void> {
   const { scriptUrl } = getSheetSettings();
   if (!scriptUrl) throw new Error('Sheet Proxy URL not configured — open Settings');
   const url = scriptUrl + (scriptUrl.includes('?') ? '&' : '?') + 'action=rewriteSheet';
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'rewriteSheet', rows }),
+    body: JSON.stringify({ action: 'rewriteSheet', rows, leaves }),
   });
   if (!res.ok) throw new Error(`Sheet push failed: ${res.status} — verify Apps Script deployed as "Anyone with link"`);
   const j = await res.json().catch(() => ({}));
@@ -117,4 +136,8 @@ export async function pushAllRows(rows: BufferTrip[]): Promise<void> {
     }
     throw new Error(err);
   }
+}
+
+export async function pushAllRows(rows: BufferTrip[]): Promise<void> {
+  return pushAllWithLeaves(rows, []);
 }

@@ -175,7 +175,17 @@ export default function MobileQuickTripForm(){
           </div>
         </div>
 
-        <div><label className="text-xs font-medium">Places Visited *</label><input value={placesVisited} onChange={e=>setPlacesVisited(e.target.value)} placeholder="HQ → Port Customs" className="w-full px-2 py-1.5 border rounded text-sm" required/></div>
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <label className="text-xs font-medium">Places Visited *</label>
+            <div className="flex gap-1.5">
+              <button type="button" data-testid="quick-places-home-office" onClick={()=>setPlacesVisited('Home - Office')} className={`px-2 py-1 rounded-full text-xs font-semibold border transition ${placesVisited==='Home - Office'?'bg-sky-600 border-sky-600 text-white':'bg-zinc-50 border-zinc-300 text-zinc-700 hover:bg-sky-50 hover:border-sky-300'}`}>Home - Office</button>
+              <button type="button" data-testid="quick-places-office-home" onClick={()=>setPlacesVisited('Office - Home')} className={`px-2 py-1 rounded-full text-xs font-semibold border transition ${placesVisited==='Office - Home'?'bg-sky-600 border-sky-600 text-white':'bg-zinc-50 border-zinc-300 text-zinc-700 hover:bg-sky-50 hover:border-sky-300'}`}>Office - Home</button>
+            </div>
+          </div>
+          <input value={placesVisited} onChange={e=>setPlacesVisited(e.target.value)} placeholder="HQ → Port Customs" className="w-full px-2 py-1.5 border rounded text-sm" required/>
+          <p className="mt-1 text-[11px] text-zinc-500">Tap a chip to fill — editable after.</p>
+        </div>
         <div className="grid grid-cols-2 gap-2"><div><label className="text-xs">Fuel Pumped (L)</label><input type="number" step="0.1" value={fuelPumped} onChange={e=>setFuelPumped(e.target.value)} placeholder="35.0" className="w-full px-2 py-1.5 border rounded font-mono text-sm"/></div><div><label className="text-xs">Fuel Order No</label><input value={fuelOrderNo} onChange={e=>setFuelOrderNo(e.target.value)} placeholder="#FO-88912" className="w-full px-2 py-1.5 border rounded text-sm"/></div></div>
 
         <button type="submit" disabled={saving} className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-semibold disabled:opacity-50">{saving?'Saving…':'Save to Buffer Sheet'}</button>

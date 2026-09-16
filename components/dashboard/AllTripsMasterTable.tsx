@@ -32,11 +32,13 @@ import { sortTripsChronologically, shiftForInsert, shiftForRemove } from '@/lib/
 import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip } from '@/lib/pagination';
 import type { Vehicle } from '@/types';
 import { SheetSettingsDialog } from '@/components/SheetSettingsDialog';
-import { getSheetSettings, fetchAllRows, getLastPullAt, setLastPullAt, pushAllRows, getLastPushAt, setLastPushAt } from '@/lib/sheetClient';
-import { compareBufferToDb, type PullComparison } from '@/lib/sheetPull';
-import { computePreservedRows, buildDbBufferRows, buildPushPayload } from '@/lib/sheetPush';
-import type { BufferTrip } from '@/lib/sheetClient';
-import { getLeaves } from '@/lib/leaveStore';
+import { getSheetSettings, fetchAllRows, fetchAllWithLeaves, getLastPullAt, setLastPullAt, pushAllWithLeaves, getLastPushAt, setLastPushAt } from '@/lib/sheetClient';
+import { compareBufferToDb, compareLeavesBufferToDb, type PullComparison, type LeavesPullComparison } from '@/lib/sheetPull';
+import { computePreservedRows, buildDbBufferRows, buildPushPayload, computePreservedLeaves, buildDbLeavesRows, buildPushLeavesPayload } from '@/lib/sheetPush';
+import type { BufferTrip, BufferLeave } from '@/lib/sheetClient';
+import type { LeaveDay } from '@/types';
+import { getLeaves, saveLeave } from '@/lib/leaveStore';
+import { importLeavesFromWorkbook } from '@/lib/allTripsWorkbook';
 import { getDayTypeInfo, getHoliday } from '@/lib/sriLankanHolidays';
 import { validateTripsOnOffDays } from '@/lib/holidayValidation';
 
@@ -106,9 +108,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [sheetPulling, setSheetPulling] = useState(false);
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [pullComparison, setPullComparison] = useState<PullComparison | null>(null);
+  const [leavesPullComparison, setLeavesPullComparison] = useState<LeavesPullComparison | null>(null);
   const [showPullPreview, setShowPullPreview] = useState(false);
   const [selectedNew, setSelectedNew] = useState<Set<string>>(new Set());
   const [selectedChanged, setSelectedChanged] = useState<Set<string>>(new Set());
+  const [selectedLeaveNew, setSelectedLeaveNew] = useState<Set<string>>(new Set());
+  const [selectedLeaveChanged, setSelectedLeaveChanged] = useState<Set<string>>(new Set());
   const [lastPullAt, setLastPullAtState] = useState<string | null>(null);
   const [lastPushAt, setLastPushAtState] = useState<string | null>(null);
   React.useEffect(() => { setLastPullAtState(getLastPullAt()); setLastPushAtState(getLastPushAt()); }, []);
@@ -126,7 +131,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [sheetPushing, setSheetPushing] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
   const [showPushPreview, setShowPushPreview] = useState(false);
-  const [pushPreview, setPushPreview] = useState<{ dbCount: number; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number; mergedRows: BufferTrip[] } | null>(null);
+  const [pushPreview, setPushPreview] = useState<{ dbCount: number; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number; mergedRows: BufferTrip[]; leavesDbCount: number; leavesPreserved: BufferLeave[]; leavesOverwriting: number; leavesInvalid: number; mergedLeaves: BufferLeave[] } | null>(null);
   const [pushExpanded, setPushExpanded] = useState(false);
 
   const availableMonths = useMemo(() => getAvailableMonths(trips, pages), [trips, pages]);
@@ -821,17 +826,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   // Export Excel
   const handleExport = async () => {
-    const buffer = await generateAllTripsBuffer(trips);
+    let leaves: { date: string; note?: string }[] = [];
+    try { leaves = await getLeaves(); } catch {}
+    const buffer = await generateAllTripsBuffer(trips, vehicle ? { brand: vehicle.brand, model: vehicle.model } : null, leaves);
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = getAllTripsFileName();
+    a.download = getAllTripsFileName(vehicle ? { brand: vehicle.brand, model: vehicle.model } : null);
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // Push Preview + Export to Google Sheet (preserving unimported rows)
+  // Push Preview + Export to Google Sheet (preserving unimported rows — dual-sheet)
   const handlePushToSheet = async () => {
     const { scriptUrl } = getSheetSettings();
     if (!scriptUrl) { setShowSheetSettings(true); return; }
@@ -839,25 +846,41 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setImportMsg(null);
     setSheetPushing(true);
     try {
-      let bufferRows: BufferTrip[];
+      let bufferRows: BufferTrip[] = [];
+      let bufferLeaves: BufferLeave[] = [];
       try {
-        bufferRows = await fetchAllRows();
+        const fetched = await fetchAllWithLeaves();
+        bufferRows = fetched.rows;
+        bufferLeaves = fetched.leaves;
       } catch (e: unknown) {
-        const m = e instanceof Error ? e.message : String(e);
-        const hint = m.includes('Anyone with link') ? m : m + ' — verify Apps Script deployed as "Anyone with link"';
-        setPushError(hint);
-        setImportMsg(`Sheet not modified: ${hint}`);
-        setShowSheetSettings(true);
-        setSheetPushing(false);
-        return;
+        // fallback to trips-only fetch for old script
+        try {
+          bufferRows = await fetchAllRows();
+        } catch (e2: unknown) {
+          const m = e2 instanceof Error ? e2.message : String(e2);
+          const hint = m.includes('Anyone with link') ? m : m + ' — verify Apps Script deployed as "Anyone with link"';
+          setPushError(hint);
+          setImportMsg(`Sheet not modified: ${hint}`);
+          setShowSheetSettings(true);
+          setSheetPushing(false);
+          return;
+        }
       }
       const payload = buildPushPayload({ dbTrips: trips, bufferRows });
+      let dbLeaves: LeaveDay[] = [];
+      try { dbLeaves = await getLeaves(); } catch {}
+      const leavesPayload = buildPushLeavesPayload({ dbLeaves, bufferLeaves });
       setPushPreview({
         dbCount: trips.length,
         preserved: payload.preserved,
         overwritingCount: payload.overwritingCount,
         invalidIgnored: payload.invalidIgnored,
         mergedRows: payload.rows,
+        leavesDbCount: dbLeaves.length,
+        leavesPreserved: leavesPayload.preserved,
+        leavesOverwriting: leavesPayload.overwritingCount,
+        leavesInvalid: leavesPayload.invalidIgnored,
+        mergedLeaves: leavesPayload.leaves,
       });
       setPushExpanded(false);
       setShowPushPreview(true);
@@ -880,12 +903,14 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setSheetPushing(true);
     setPushError(null);
     try {
-      await pushAllRows(pushPreview.mergedRows);
+      await pushAllWithLeaves(pushPreview.mergedRows, pushPreview.mergedLeaves);
       const iso = new Date().toISOString();
       setLastPushAt(iso);
       setLastPushAtState(iso);
       const preservedMsg = pushPreview.preserved.length > 0 ? ` (+${pushPreview.preserved.length} preserved)` : '';
-      setImportMsg(`Exported — ${pushPreview.dbCount} rows${preservedMsg}`);
+      const leavesPreservedMsg = pushPreview.leavesPreserved.length > 0 ? ` (+${pushPreview.leavesPreserved.length} leaves preserved)` : '';
+      const leavesMsg = pushPreview.leavesDbCount > 0 || pushPreview.leavesPreserved.length > 0 ? ` + ${pushPreview.leavesDbCount} leaves${leavesPreservedMsg}` : '';
+      setImportMsg(`Exported — ${pushPreview.dbCount} rows${preservedMsg}${leavesMsg}`);
       setShowPushPreview(false);
       setPushPreview(null);
     } catch (e: unknown) {
@@ -915,146 +940,180 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     try {
       const buffer = await file.arrayBuffer();
       const parseResult = await parseAllTripsWorkbook(buffer);
-      if (!parseResult.valid) {
-        setImportMsg(`Import failed: ${parseResult.errors.map((e) => `Row ${e.row}: ${e.message}`).join('; ')}`);
-        setImporting(false);
-        return;
-      }
+      // Independent pipelines: trips and leaves validated separately (Q5)
+      let tripsImportMsg: string | null = null;
+      let leavesImportMsg: string | null = null;
+      let tripsSuccess = false;
+      let leavesSuccess = false;
 
-      // Conditioning: if Start Times not there, estimate via end_time - distance/20 ceiled to 5min
-      for (const t of parseResult.trips) {
-        if ((!t.start_time || String(t.start_time).trim() === '') && t.end_time && t.trip_distance) {
-          const est = estimateStartTime(t.end_time!, Number(t.trip_distance));
-          if (est) t.start_time = est;
+      // --- Trips pipeline ---
+      if (parseResult.errors.length > 0) {
+        tripsImportMsg = `Trips import failed: ${parseResult.errors.map((e) => `Row ${e.row}: ${e.message}`).join('; ')}`;
+      } else if (parseResult.trips.length > 0) {
+        for (const t of parseResult.trips) {
+          if ((!t.start_time || String(t.start_time).trim() === '') && t.end_time && t.trip_distance) {
+            const est = estimateStartTime(t.end_time!, Number(t.trip_distance));
+            if (est) t.start_time = est;
+          }
         }
-      }
-
-      // Overlap/pagination should ignore rows that are upserts (same date+odo) – they update in place
-      const isExactOdoMatch = (t: Partial<Trip>) => trips.some(e => e.date === t.date && Math.round(e.start_km) === Math.round(Number(t.start_km ?? NaN)) && Math.round(e.end_km) === Math.round(Number(t.end_km ?? NaN)));
-      const newOnlyTrips = parseResult.trips.filter(t => !isExactOdoMatch(t));
-      const overlapErrors = validateNoOverlap(trips, newOnlyTrips);
-      if (overlapErrors.length > 0) {
-        setImportMsg(`Overlap detected: ${overlapErrors.map((e) => e.message).join('; ')}`);
-        setImporting(false);
-        return;
-      }
-
-      // Pagination validation – only new trips affect pagination
-      const vehicle = await getVehicleProfile();
-      const allPages = await getPages();
-      const paginationErrors = validatePaginationForImport(trips, allPages, newOnlyTrips);
-      if (paginationErrors.length > 0) {
-        setImportMsg(`Pagination error: ${paginationErrors.map((e) => e.message).join('; ')}`);
-        setImporting(false);
-        return;
-      }
-
-      const result = importTripsFromWorkbook({
-        existingTrips: trips,
-        existingPages: allPages,
-        parsedTrips: parseResult.trips,
-        vehicleId: vehicle.id,
-        opening: { openingKm: vehicle.current_odometer, openingFuel: (vehicle as unknown as Record<string, unknown>).current_fuel_level as number ?? 10 },
-      });
-
-      if (result.success) {
-        // Bulk persist via /api/import (transactional, single round-trip for 200+ rows)
-        // Fallback to per-trip/per-page if bulk endpoint unavailable (e.g. older build)
-        let persisted = 0;
-        let bulkError: string | null = null;
-        try {
-          const bulkRes = await fetch('/api/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pages: result.pages, trips: result.trips }),
-          });
-          if (bulkRes.ok) {
-            await bulkRes.json().catch(() => ({}));
-            persisted = result.appendedCount + result.updatedCount;
-          } else {
-            const j = await bulkRes.json().catch(() => ({}));
-            throw new Error(j.error || `Bulk import HTTP ${bulkRes.status}`);
-          }
-        } catch (err: any) {
-          bulkError = err?.message || String(err);
-          // Always try localStorage fallback even on 401 – app works offline via localStorage
-          const existingPageIds = new Set(allPages.map((p) => p.id));
-          for (const pg of result.pages) {
-            if (!existingPageIds.has(pg.id)) {
-              try { await savePage(pg); } catch { /* fallback inside savePage writes localStorage */ }
-            } else {
-              const orig = allPages.find((p) => p.id === pg.id);
-              if (orig && (orig.page_number !== pg.page_number || orig.start_km !== pg.start_km || orig.end_km !== pg.end_km || orig.start_fuel_balance !== pg.start_fuel_balance || orig.end_fuel_balance !== pg.end_fuel_balance || orig.month !== pg.month)) {
-                try { await savePage(pg); } catch { /* ignore */ }
-              }
-            }
-          }
-          const existingTripIds = new Set(trips.map((t) => t.id));
-          const newTrips = result.trips.filter((t) => !existingTripIds.has(t.id));
-          const updatedTrips = result.updatedCount > 0 ? result.trips.filter((t) => {
-            if (!existingTripIds.has(t.id)) return false;
-            const orig = trips.find(o => o.id === t.id);
-            return !!orig && (orig.start_time !== t.start_time || orig.end_time !== t.end_time || orig.fuel_pumped_amount !== t.fuel_pumped_amount || (orig.fuel_order_no ?? '') !== (t.fuel_order_no ?? '') || orig.places_visited !== t.places_visited || orig.trip_type !== t.trip_type);
-          }) : [];
-          persisted = 0;
-          let authWarning = bulkError && bulkError.includes('Unauthorized') ? ' (session expired – saved locally)' : '';
-          // Persist new trips via POST and updated trips via PUT (upsert in localStorage as fallback)
-          for (const tr of [...newTrips, ...updatedTrips]) {
-            const isUpdate = existingTripIds.has(tr.id);
-            let apiOk = false;
-            try {
-              const res = await fetch('/api/trips', {
-                method: isUpdate ? 'PUT' : 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(tr),
-              });
-              if (res.ok) {
-                apiOk = true;
-                persisted++;
-                continue;
-              }
-              if (res.status === 401) authWarning = ' (session expired – saved locally)';
-            } catch { /* fall through to localStorage */ }
-            if (!apiOk) {
-              try {
-                const raw = localStorage.getItem('fleetledger_trips');
-                const arr = raw ? (JSON.parse(raw) as typeof result.trips) : [];
-                const idx = arr.findIndex((x: any) => x.id === tr.id);
-                if (idx >= 0) arr[idx] = tr;
-                else arr.push(tr);
-                localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
-                persisted++;
-              } catch { /* ignore */ }
-            }
-          }
-          // If bulk succeeded there was no catch, set persisted to appended+updated for message consistency
-          if (!bulkError) persisted = result.appendedCount + result.updatedCount;
-          else if (persisted === 0 && result.updatedCount > 0) {
-            // bulk failed but we wrote to localStorage above – ensure updated trips are also written even if newTrips empty
-            try {
-              localStorage.setItem('fleetledger_trips', JSON.stringify(result.trips));
-              localStorage.setItem('fleetledger_book_pages', JSON.stringify(result.pages));
-              persisted = result.appendedCount + result.updatedCount;
-            } catch { /* ignore */ }
-          }
-          if (authWarning) bulkError = bulkError ? bulkError + authWarning : authWarning;
-        }
-
-        if (bulkError && persisted === 0) {
-          setImportMsg(`Import computed ${result.appendedCount} trips but failed to persist: ${bulkError}`);
+        const isExactOdoMatch = (t: Partial<Trip>) => trips.some(e => e.date === t.date && Math.round(e.start_km) === Math.round(Number(t.start_km ?? NaN)) && Math.round(e.end_km) === Math.round(Number(t.end_km ?? NaN)));
+        const newOnlyTrips = parseResult.trips.filter(t => !isExactOdoMatch(t));
+        const overlapErrors = validateNoOverlap(trips, newOnlyTrips);
+        if (overlapErrors.length > 0) {
+          tripsImportMsg = `Overlap detected: ${overlapErrors.map((e) => e.message).join('; ')}`;
         } else {
-          const failed = (result.appendedCount + result.updatedCount) - persisted;
-          if (result.appendedCount === 0 && result.updatedCount === 0 && result.skippedDuplicates > 0) {
-            setImportMsg(`Imported 0 new trips (${result.skippedDuplicates} duplicate records skipped from workbook).`);
-          } else if (result.updatedCount > 0) {
-            setImportMsg(`Imported ${result.appendedCount} new, updated ${result.updatedCount} existing (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}${bulkError && bulkError.includes('saved locally') ? bulkError : ''}`);
+          const vehicle = await getVehicleProfile();
+          const allPages = await getPages();
+          const paginationErrors = validatePaginationForImport(trips, allPages, newOnlyTrips);
+          if (paginationErrors.length > 0) {
+            tripsImportMsg = `Pagination error: ${paginationErrors.map((e) => e.message).join('; ')}`;
           } else {
-            setImportMsg(`Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`);
+            const result = importTripsFromWorkbook({
+              existingTrips: trips,
+              existingPages: allPages,
+              parsedTrips: parseResult.trips,
+              vehicleId: vehicle.id,
+              opening: { openingKm: vehicle.current_odometer, openingFuel: (vehicle as unknown as Record<string, unknown>).current_fuel_level as number ?? 10 },
+            });
+            if (result.success) {
+              let persisted = 0;
+              let bulkError: string | null = null;
+              try {
+                const bulkRes = await fetch('/api/import', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ pages: result.pages, trips: result.trips }),
+                });
+                if (bulkRes.ok) {
+                  await bulkRes.json().catch(() => ({}));
+                  persisted = result.appendedCount + result.updatedCount;
+                } else {
+                  const j = await bulkRes.json().catch(() => ({}));
+                  throw new Error(j.error || `Bulk import HTTP ${bulkRes.status}`);
+                }
+              } catch (err: any) {
+                bulkError = err?.message || String(err);
+                const existingPageIds = new Set(allPages.map((p) => p.id));
+                for (const pg of result.pages) {
+                  if (!existingPageIds.has(pg.id)) {
+                    try { await savePage(pg); } catch { }
+                  } else {
+                    const orig = allPages.find((p) => p.id === pg.id);
+                    if (orig && (orig.page_number !== pg.page_number || orig.start_km !== pg.start_km || orig.end_km !== pg.end_km || orig.start_fuel_balance !== pg.start_fuel_balance || orig.end_fuel_balance !== pg.end_fuel_balance || orig.month !== pg.month)) {
+                      try { await savePage(pg); } catch { }
+                    }
+                  }
+                }
+                const existingTripIds = new Set(trips.map((t) => t.id));
+                const newTrips = result.trips.filter((t) => !existingTripIds.has(t.id));
+                const updatedTrips = result.updatedCount > 0 ? result.trips.filter((t) => {
+                  if (!existingTripIds.has(t.id)) return false;
+                  const orig = trips.find(o => o.id === t.id);
+                  return !!orig && (orig.start_time !== t.start_time || orig.end_time !== t.end_time || orig.fuel_pumped_amount !== t.fuel_pumped_amount || (orig.fuel_order_no ?? '') !== (t.fuel_order_no ?? '') || orig.places_visited !== t.places_visited || orig.trip_type !== t.trip_type);
+                }) : [];
+                persisted = 0;
+                let authWarning = bulkError && bulkError.includes('Unauthorized') ? ' (session expired – saved locally)' : '';
+                for (const tr of [...newTrips, ...updatedTrips]) {
+                  const isUpdate = existingTripIds.has(tr.id);
+                  let apiOk = false;
+                  try {
+                    const res = await fetch('/api/trips', {
+                      method: isUpdate ? 'PUT' : 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(tr),
+                    });
+                    if (res.ok) { apiOk = true; persisted++; continue; }
+                    if (res.status === 401) authWarning = ' (session expired – saved locally)';
+                  } catch { }
+                  if (!apiOk) {
+                    try {
+                      const raw = localStorage.getItem('fleetledger_trips');
+                      const arr = raw ? (JSON.parse(raw) as typeof result.trips) : [];
+                      const idx = arr.findIndex((x: any) => x.id === tr.id);
+                      if (idx >= 0) arr[idx] = tr; else arr.push(tr);
+                      localStorage.setItem('fleetledger_trips', JSON.stringify(arr));
+                      persisted++;
+                    } catch { }
+                  }
+                }
+                if (!bulkError) persisted = result.appendedCount + result.updatedCount;
+                else if (persisted === 0 && result.updatedCount > 0) {
+                  try {
+                    localStorage.setItem('fleetledger_trips', JSON.stringify(result.trips));
+                    localStorage.setItem('fleetledger_book_pages', JSON.stringify(result.pages));
+                    persisted = result.appendedCount + result.updatedCount;
+                  } catch { }
+                }
+                if (authWarning) bulkError = bulkError ? bulkError + authWarning : authWarning;
+              }
+              if (bulkError && persisted === 0) {
+                tripsImportMsg = `Import computed ${result.appendedCount} trips but failed to persist: ${bulkError}`;
+              } else {
+                const failed = (result.appendedCount + result.updatedCount) - persisted;
+                if (result.appendedCount === 0 && result.updatedCount === 0 && result.skippedDuplicates > 0) {
+                  tripsImportMsg = `Imported 0 new trips (${result.skippedDuplicates} duplicate records skipped from workbook).`;
+                } else if (result.updatedCount > 0) {
+                  tripsImportMsg = `Imported ${result.appendedCount} new, updated ${result.updatedCount} existing (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}${bulkError && bulkError.includes('saved locally') ? bulkError : ''}`;
+                } else {
+                  tripsImportMsg = `Imported ${persisted} trips (${result.skippedDuplicates} duplicates skipped)${failed > 0 ? ` — ${failed} failed to save${bulkError ? `: ${bulkError}` : ''}` : ''}`;
+                }
+              }
+              tripsSuccess = true;
+              notifyDataChanged();
+            } else {
+              tripsImportMsg = `Import failed: ${result.errors.map((e) => e.message).join('; ')}`;
+            }
           }
         }
-        notifyDataChanged();
       } else {
-        setImportMsg(`Import failed: ${result.errors.map((e) => e.message).join('; ')}`);
+        // No trips in file — not an error, just skip trips pipeline
+      }
+
+      // --- Leaves pipeline (independent) ---
+      if (parseResult.leafErrors.length > 0) {
+        leavesImportMsg = `Leaves import failed: ${parseResult.leafErrors.map((e) => `Row ${e.row}: ${e.message}`).join('; ')}`;
+      } else if (parseResult.leaves.length > 0) {
+        let existingLeaves: { date: string; note?: string }[] = [];
+        try { existingLeaves = await getLeaves(); } catch {}
+        const imp = importLeavesFromWorkbook({ existingLeaves, parsedLeaves: parseResult.leaves });
+        // Persist leaves one by one (POST upsert) — only appended/updated dates
+        let leavesPersisted = 0;
+        let leavesError: string | null = null;
+        const changedDates = new Set<string>();
+        // Determine which dates were actually appended/updated via comparing imp
+        const beforeMap = new Map(existingLeaves.map(l=>[l.date,l.note??''] as const));
+        for (const l of imp.leaves) {
+          const before = beforeMap.get(l.date);
+          if (before === undefined || before !== (l.note ?? '')) changedDates.add(l.date);
+        }
+        for (const date of changedDates) {
+          const lv = imp.leaves.find(x=>x.date===date)!;
+          try {
+            await saveLeave(lv.date, lv.note ?? '');
+            leavesPersisted++;
+          } catch (e:any) {
+            leavesError = e?.message || String(e);
+          }
+        }
+        // Also update local leaves via saving already handled localStorage fallback in saveLeave
+        if (imp.appendedCount === 0 && imp.updatedCount === 0 && imp.skippedDuplicates > 0) {
+          leavesImportMsg = `Leaves: 0 new (${imp.skippedDuplicates} duplicates skipped).`;
+        } else if (imp.appendedCount > 0 || imp.updatedCount > 0) {
+          leavesImportMsg = `Leaves: imported ${imp.appendedCount} new, updated ${imp.updatedCount} (${imp.skippedDuplicates} skipped)${leavesError ? ` — ${leavesError}` : ''}`;
+        }
+        if (changedDates.size > 0) {
+          leavesSuccess = true;
+          notifyDataChanged();
+          // Refresh leaveDates set
+          try { const lvs = await getLeaves(); setLeaveDates(new Set(lvs.map(l=>l.date))); } catch {}
+        }
+      }
+
+      // Combine messages
+      const combined = [tripsImportMsg, leavesImportMsg].filter(Boolean).join(' | ');
+      if (combined) setImportMsg(combined);
+      else if (!tripsSuccess && !leavesSuccess && parseResult.trips.length===0 && parseResult.leaves.length===0) {
+        setImportMsg('Import: no new rows found (all duplicates or empty).');
       }
     } catch {
       setImportMsg('Failed to read file');
@@ -1071,20 +1130,39 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setSheetError(null);
     setImportMsg(null);
     try {
-      const rows = await fetchAllRows();
+      let rows: BufferTrip[] = [];
+      let leaves: BufferLeave[] = [];
+      try {
+        const fetched = await fetchAllWithLeaves();
+        rows = fetched.rows;
+        leaves = fetched.leaves;
+      } catch {
+        rows = await fetchAllRows();
+      }
       const comp = compareBufferToDb({ bufferRows: rows, existingTrips: trips });
+      let leavesComp: LeavesPullComparison | null = null;
+      try {
+        const existingLeaves = await getLeaves();
+        leavesComp = compareLeavesBufferToDb({ bufferLeaves: leaves, existingLeaves });
+      } catch {}
       setPullComparison(comp);
+      setLeavesPullComparison(leavesComp);
       const iso = new Date().toISOString();
       setLastPullAt(iso);
       setLastPullAtState(iso);
-      if (comp.newRows.length === 0 && comp.changedRows.length === 0) {
-        setImportMsg(`Buffer Sheet up to date — 0 new rows (${comp.totalFetched} total, ${comp.skippedRows.length} already imported)`);
+      const hasTripChanges = comp.newRows.length > 0 || comp.changedRows.length > 0;
+      const hasLeaveChanges = leavesComp ? (leavesComp.newRows.length > 0 || leavesComp.changedRows.length > 0) : false;
+      if (!hasTripChanges && !hasLeaveChanges) {
+        setImportMsg(`Buffer Sheet up to date — 0 new rows (${comp.totalFetched} total, ${comp.skippedRows.length} already imported)${leavesComp ? ` · Leaves 0 new (${leavesComp.totalFetched} total)` : ''}`);
         setSheetPulling(false);
         return;
       }
-      // default select all new, none of changed
-      setSelectedNew(new Set(comp.newRows.map((_, i) => String(comp.newRows[i].partial.date + '|' + comp.newRows[i].partial.start_km + '|' + comp.newRows[i].partial.end_km))));
+      setSelectedNew(new Set(comp.newRows.map((r) => `${r.partial.date}|${r.partial.start_km}|${r.partial.end_km}`)));
       setSelectedChanged(new Set());
+      if (leavesComp) {
+        setSelectedLeaveNew(new Set(leavesComp.newRows.map(l => l.date)));
+        setSelectedLeaveChanged(new Set());
+      }
       setShowPullPreview(true);
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e);
@@ -1095,17 +1173,24 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   };
 
   const handleSheetImportConfirm = async () => {
-    if (!pullComparison) return;
+    if (!pullComparison && !leavesPullComparison) return;
     // Build selected partials
     const keyOf = (p: Partial<Trip>) => `${p.date}|${p.start_km}|${p.end_km}`;
     const selectedPartials: Partial<Trip>[] = [];
-    for (const r of pullComparison.newRows) {
-      if (selectedNew.has(keyOf(r.partial))) selectedPartials.push(r.partial);
+    if (pullComparison) {
+      for (const r of pullComparison.newRows) {
+        if (selectedNew.has(keyOf(r.partial))) selectedPartials.push(r.partial);
+      }
+      for (const r of pullComparison.changedRows) {
+        if (selectedChanged.has(keyOf(r.partial))) selectedPartials.push(r.partial);
+      }
     }
-    for (const r of pullComparison.changedRows) {
-      if (selectedChanged.has(keyOf(r.partial))) selectedPartials.push(r.partial);
+    const selectedLeavesForCheck: BufferLeave[] = [];
+    if (leavesPullComparison) {
+      for (const l of leavesPullComparison.newRows) if (selectedLeaveNew.has(l.date)) selectedLeavesForCheck.push(l);
+      for (const l of leavesPullComparison.changedRows) if (selectedLeaveChanged.has(l.bufferLeave.date)) selectedLeavesForCheck.push(l.bufferLeave);
     }
-    if (selectedPartials.length === 0) { setSheetError('Select at least one row'); return; }
+    if (selectedPartials.length === 0 && selectedLeavesForCheck.length === 0) { setSheetError('Select at least one row'); return; }
 
     // Estimate start times if missing (same as file import)
     for (const t of selectedPartials) {
@@ -1175,8 +1260,30 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         const updatedIds = result.trips.filter(t=>trips.some(o=>o.id===t.id && (o.places_visited!==t.places_visited || o.end_time!==t.end_time))).map(t=>t.id);
         if (updatedIds.length>0) focusTrip(updatedIds[0], { clearFilter: search!==''||month!=='All'||tripType!=='All' });
       }
+      // --- Leaves sheet import (independent, after trips)
+      if (leavesPullComparison) {
+        const selectedLeaves: BufferLeave[] = [];
+        for (const l of leavesPullComparison.newRows) if (selectedLeaveNew.has(l.date)) selectedLeaves.push(l);
+        for (const l of leavesPullComparison.changedRows) if (selectedLeaveChanged.has(l.bufferLeave.date)) selectedLeaves.push(l.bufferLeave);
+        if (selectedLeaves.length > 0) {
+          let existingLeaves: { date: string; note?: string }[] = [];
+          try { existingLeaves = await getLeaves(); } catch {}
+          const leafImp = importLeavesFromWorkbook({ existingLeaves, parsedLeaves: selectedLeaves });
+          let leavesChanged = 0;
+          const beforeMap = new Map(existingLeaves.map(l=>[l.date,l.note??''] as const));
+          for (const lv of leafImp.leaves) {
+            const before = beforeMap.get(lv.date);
+            if (before !== undefined && before === (lv.note ?? '')) continue;
+            try { await saveLeave(lv.date, lv.note ?? ''); leavesChanged++; } catch {}
+          }
+          if (leavesChanged > 0) {
+            try { const lvs = await getLeaves(); setLeaveDates(new Set(lvs.map(l=>l.date))); } catch {}
+          }
+        }
+      }
       setShowPullPreview(false);
       setPullComparison(null);
+      setLeavesPullComparison(null);
       notifyDataChanged();
     } catch (e: unknown) {
       setSheetError(e instanceof Error ? e.message : String(e));
@@ -1864,10 +1971,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="sheet-push-preview" onClick={() => { setShowPushPreview(false); setPushPreview(null); }}>
           <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-3xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
             <h3 className="text-sm font-bold text-on-surface mb-1">Export to Google Sheet — Preview</h3>
-            <p className="text-xs text-on-surface-variant mb-2">
-              DB rows {pushPreview.dbCount} | Preserved {pushPreview.preserved.length} (unimported) | Overwriting {pushPreview.overwritingCount} | Invalid ignored {pushPreview.invalidIgnored}
+            <p className="text-xs text-on-surface-variant mb-1">
+              Trips — DB {pushPreview.dbCount} | Preserved {pushPreview.preserved.length} (unimported) | Overwriting {pushPreview.overwritingCount} | Invalid {pushPreview.invalidIgnored}
             </p>
-            <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">Sheet will be cleared and rewritten atomically (LockService, {pushPreview.mergedRows.length} rows total).</p>
+            <p className="text-xs text-on-surface-variant mb-2">
+              Leaves — DB {pushPreview.leavesDbCount} | Preserved {pushPreview.leavesPreserved.length} | Overwriting {pushPreview.leavesOverwriting} | Invalid {pushPreview.leavesInvalid} · Leaves total {pushPreview.mergedLeaves.length}
+            </p>
+            <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">Sheet will be cleared and rewritten atomically (LockService, {pushPreview.mergedRows.length} trips + {pushPreview.mergedLeaves.length} leaves).</p>
             {(() => { const { sheetId, scriptUrl } = getSheetSettings(); if (!sheetId || !scriptUrl) return <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-3" data-testid="push-blocked-banner">Blocked by: Settings — configure Sheet ID and Apps Script URL</div>; return null; })()}
             {pushError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="sheet-push-preview-error">{pushError}</div>}
 
@@ -1962,9 +2072,37 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               </div>
             )}
 
+            {/* Leaves — only if fetched */}
+            {leavesPullComparison && (
+              <div className="mt-4 border-t border-rule-line pt-3">
+                <p className="text-xs text-on-surface-variant mb-2">
+                  Leaves — Fetched {leavesPullComparison.totalFetched} · <span className="font-bold text-emerald-700">{leavesPullComparison.newRows.length} new</span>, <span className="font-bold text-amber-600">{leavesPullComparison.changedRows.length} changed</span>, {leavesPullComparison.skippedRows.length} already imported
+                </p>
+                <div className="mb-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <h4 className="text-xs font-bold">New Leaves ({leavesPullComparison.newRows.length})</h4>
+                    <label className="text-[11px] flex items-center gap-1"><input type="checkbox" checked={leavesPullComparison.newRows.length>0 && selectedLeaveNew.size===leavesPullComparison.newRows.length} onChange={e=>{ if(e.target.checked) setSelectedLeaveNew(new Set(leavesPullComparison.newRows.map(l=>l.date))); else setSelectedLeaveNew(new Set()); }} /> {selectedLeaveNew.size===leavesPullComparison.newRows.length?'Deselect all':'Select all'}</label>
+                  </div>
+                  <div className="border border-rule-line rounded max-h-[140px] overflow-auto">
+                    <table className="w-full text-xs"><thead className="bg-paper-gutter sticky top-0"><tr><th className="px-1 py-1"></th><th className="px-1 py-1 text-left">Date</th><th className="px-1 py-1 text-left">Note</th></tr></thead><tbody>
+                      {leavesPullComparison.newRows.length===0 ? <tr><td colSpan={3} className="text-center py-2 text-on-surface-variant">No new leaves</td></tr> : leavesPullComparison.newRows.map((l,i)=>{ const checked=selectedLeaveNew.has(l.date); return <tr key={l.date} className="border-t border-rule-line"><td className="px-1"><input type="checkbox" checked={checked} onChange={e=>{ const ns=new Set(selectedLeaveNew); if(e.target.checked) ns.add(l.date); else ns.delete(l.date); setSelectedLeaveNew(ns); }} data-testid={`sheet-leave-new-${i}`} /></td><td className="px-1 whitespace-nowrap">{l.date}</td><td className="px-1 truncate max-w-[200px]">{l.note}</td></tr>; })}
+                    </tbody></table>
+                  </div>
+                </div>
+                {leavesPullComparison.changedRows.length>0 && (
+                  <div className="mb-2">
+                    <div className="flex items-center justify-between mb-1"><h4 className="text-xs font-bold text-amber-700">Changed Leaves ({leavesPullComparison.changedRows.length})</h4><label className="text-[11px] flex items-center gap-1"><input type="checkbox" checked={leavesPullComparison.changedRows.length>0 && selectedLeaveChanged.size===leavesPullComparison.changedRows.length} onChange={e=>{ if(e.target.checked) setSelectedLeaveChanged(new Set(leavesPullComparison.changedRows.map(r=>r.bufferLeave.date))); else setSelectedLeaveChanged(new Set()); }} /> {selectedLeaveChanged.size===leavesPullComparison.changedRows.length?'Deselect all':'Select all'}</label></div>
+                    <div className="border border-amber-200 rounded max-h-[140px] overflow-auto"><table className="w-full text-xs"><thead className="bg-amber-50 sticky top-0"><tr><th className="px-1 py-1"></th><th className="px-1 py-1 text-left">Date</th><th className="px-1 py-1 text-left">Diff</th></tr></thead><tbody>
+                      {leavesPullComparison.changedRows.map((r,i)=>{ const k=r.bufferLeave.date; const checked=selectedLeaveChanged.has(k); return <tr key={k} className="border-t border-rule-line"><td className="px-1"><input type="checkbox" checked={checked} onChange={e=>{ const ns=new Set(selectedLeaveChanged); if(e.target.checked) ns.add(k); else ns.delete(k); setSelectedLeaveChanged(ns); }} data-testid={`sheet-leave-changed-${i}`} /></td><td className="px-1 whitespace-nowrap">{r.bufferLeave.date}</td><td className="px-1 text-[11px] text-amber-700" title={r.diff}>{r.diff}</td></tr>; })}
+                    </tbody></table></div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={()=>{ setShowPullPreview(false); setPullComparison(null); }} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
-              <button disabled={sheetPulling || (selectedNew.size===0 && selectedChanged.size===0)} onClick={handleSheetImportConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-lg hover:bg-cyan-700 disabled:opacity-50" data-testid="confirm-sheet-pull">{sheetPulling?'Importing…':`Import Selected (${selectedNew.size+selectedChanged.size})`}</button>
+              <button onClick={()=>{ setShowPullPreview(false); setPullComparison(null); setLeavesPullComparison(null); }} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button disabled={sheetPulling || (selectedNew.size===0 && selectedChanged.size===0 && selectedLeaveNew.size===0 && selectedLeaveChanged.size===0)} onClick={handleSheetImportConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-lg hover:bg-cyan-700 disabled:opacity-50" data-testid="confirm-sheet-pull">{sheetPulling?'Importing…':`Import Selected (${selectedNew.size+selectedChanged.size+selectedLeaveNew.size+selectedLeaveChanged.size})`}</button>
             </div>
           </div>
         </div>
