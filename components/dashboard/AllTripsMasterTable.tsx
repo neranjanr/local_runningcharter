@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { Trip, BookPage } from '@/types';
 import {
   filterAndSortTrips,
@@ -81,6 +82,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   // Gap / Insert / Remove states
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
+  const menuButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const [gapFillTarget, setGapFillTarget] = useState<GapPair | null>(null);
   const [gapFillForm, setGapFillForm] = useState<{ date: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [gapFillError, setGapFillError] = useState<string | null>(null);
@@ -750,6 +753,72 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     if (focusAfterRemove) focusTrip(focusAfterRemove, { clearFilter: needsClearR });
   };
 
+  // Go to Latest (last row of current filtered view, else chronological latest)
+  const handleGoToLatest = useCallback(() => {
+    const targetList = filtered.length > 0 ? filtered : sortedAll;
+    if (targetList.length === 0) return;
+    const last = targetList[targetList.length - 1];
+    // if filtered hides chronological latest, we could also jump to global latest; prefer filtered's last as "last row of the table"
+    const el = rowRefs.current.get(last.id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setFocusedTripId(last.id);
+      setTimeout(() => setFocusedTripId(null), 2800);
+    } else {
+      // fallback via focusTrip
+      focusTrip(last.id);
+    }
+  }, [filtered, sortedAll, focusTrip]);
+
+  // Portal menu: update anchor rect on open, close on scroll/resize
+  useEffect(() => {
+    if (!openMenuId) { setMenuAnchorRect(null); return; }
+    const btn = menuButtonRefs.current.get(openMenuId);
+    if (btn) setMenuAnchorRect(btn.getBoundingClientRect());
+    const onScrollOrResize = () => {
+      const b = openMenuId ? menuButtonRefs.current.get(openMenuId) : null;
+      if (b) setMenuAnchorRect(b.getBoundingClientRect());
+      else setMenuAnchorRect(null);
+    };
+    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onScrollOrResize);
+    return () => {
+      window.removeEventListener('scroll', onScrollOrResize, true);
+      window.removeEventListener('resize', onScrollOrResize);
+    };
+  }, [openMenuId]);
+
+  const closeMenu = useCallback(() => { setOpenMenuId(null); setMenuAnchorRect(null); }, []);
+
+  // Helper: compact Day badge per spec - Weekday empty, Sat/Sun RED, Poya YELLOW, MH AMBER, PH BLUE, BH RED, HOL SLATE, Leave ORANGE
+  const getDayBadge = (date: string) => {
+    const info = getDayTypeInfo(date, leaveDates);
+    const hol = getHoliday(date);
+    if (info.isLeave) {
+      return { text: 'Leave', cls: 'bg-orange-100 border-orange-300 text-orange-700', dot: 'bg-orange-500' };
+    }
+    if (hol?.isPoya) {
+      return { text: 'Poya', cls: 'bg-yellow-100 border-yellow-300 text-yellow-800', dot: 'bg-yellow-500' };
+    }
+    if (hol?.kinds.includes('M')) {
+      return { text: 'MH', cls: 'bg-amber-100 border-amber-300 text-amber-800', dot: 'bg-amber-500' };
+    }
+    if (hol?.kinds.includes('P')) {
+      return { text: 'PH', cls: 'bg-sky-100 border-sky-300 text-sky-800', dot: 'bg-sky-600' };
+    }
+    if (hol?.kinds.includes('B')) {
+      return { text: 'BH', cls: 'bg-red-100 border-red-300 text-red-700', dot: 'bg-red-500' };
+    }
+    if (hol) {
+      return { text: 'HOL', cls: 'bg-slate-100 border-slate-300 text-slate-700', dot: 'bg-slate-500' };
+    }
+    if (info.isWeekend) {
+      const isSat = info.dayOfWeek === 'Saturday';
+      return { text: isSat ? 'Sat' : 'Sun', cls: 'bg-red-100 border-red-300 text-red-700', dot: 'bg-red-500' };
+    }
+    return null; // Weekday -> no badge
+  };
+
   // Export Excel
   const handleExport = async () => {
     const buffer = await generateAllTripsBuffer(trips);
@@ -1309,13 +1378,21 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </div>
         {/* Off-day summary bar */}
         {filtered.length > 0 && (
-          <div className="flex flex-wrap gap-2 text-[11px] px-1">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] px-1">
             <span className="px-2 py-1 rounded-full bg-rose-50 border border-rose-200">Off-day: {offDaySummary.offDayTrips} trips • {offDaySummary.offDayKm.toLocaleString()} km</span>
             <span className="px-2 py-1 rounded-full bg-slate-900 text-slate-100">Working: {offDaySummary.workingDayTrips} • {offDaySummary.workingDayKm.toLocaleString()} km</span>
             <span className="px-2 py-1 rounded-full bg-sky-50 border border-sky-200">Leave: {offDaySummary.onLeave}</span>
             <span className="px-2 py-1 rounded-full bg-amber-50 border border-amber-200">Mercantile: {offDaySummary.onMercantile}</span>
             <span className="px-2 py-1 rounded-full bg-purple-50 border border-purple-200">Poya: {offDaySummary.onPoya}</span>
             <a href="/calendar" className="px-2 py-1 rounded-full bg-paper-gutter border border-rule-line hover:bg-paper-sheet">Open Calendar →</a>
+            <button
+              onClick={handleGoToLatest}
+              data-testid="go-to-latest-btn"
+              className="ml-auto px-3 py-1 rounded-full bg-slate-900 text-white border border-slate-700 text-[11px] font-semibold hover:bg-slate-800 flex items-center gap-1"
+              title="Jump to the last row of the table"
+            >
+              Go to Latest records…
+            </button>
           </div>
         )}
       </div>
@@ -1324,14 +1401,14 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       <div ref={tableContainerRef} className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-y-auto overflow-x-auto scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
         <table className="w-full min-w-[1020px] text-left border-collapse">
           <thead className="sticky top-0 bg-paper-gutter z-10">
-            <tr className="text-[10px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
+            <tr className="text-[8px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
               <th className="py-2.5 px-2 border-r border-rule-line w-40">
                 <button onClick={() => handleSort('date')} className="flex items-center hover:text-on-surface">
                   Date <SortIcon col="date" />
                 </button>
               </th>
-              <th className="py-2.5 px-2 border-r border-rule-line w-28">Day Type</th>
+              <th className="py-2.5 px-1 border-r border-rule-line w-16 min-w-[56px] max-w-[64px] text-center">DAY</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Start Time</th>
               <th className="py-2.5 px-2 border-r border-rule-line">End Time</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">
@@ -1361,7 +1438,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Econ</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Balance</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Page</th>
-              <th className="py-2.5 px-2 w-10 min-w-[40px] text-center bg-paper-gutter sticky right-0 z-10">⋯</th>
+              <th className="py-2.5 px-1 w-10 min-w-[40px] text-center bg-paper-gutter sticky right-0 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">⋯</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-rule-line font-body-sm text-sm text-on-surface">
@@ -1409,16 +1486,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                       {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
                     </span>
                   </td>
-                  <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line text-[11px]" title={holiday ? `${holiday.name} (${holiday.kinds.join('/')})${dayInfo.isLeave ? ` • Leave: ${leaveDates.has(t.date) ? 'personal' : ''}` : ''}` : dayInfo.label}>
-                    {dayInfo.isLeave ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 border border-orange-300 text-orange-700 font-semibold"><span className="w-2 h-2 rounded-full bg-orange-500" />Leave</span>
-                    ) : holiday?.isPoya ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-100 border border-yellow-300 text-yellow-800 font-semibold"><span className="w-2 h-2 rounded-full bg-yellow-500" />Poya</span>
-                    ) : holiday || dayInfo.isWeekend ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 border border-red-300 text-red-700 font-semibold"><span className="w-2 h-2 rounded-full bg-red-500" />{holiday ? (holiday.kinds.includes('M') ? 'Mercantile' : holiday.kinds.includes('P') ? 'Public' : 'Bank') : dayInfo.dayOfWeek.slice(0,3)}</span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 font-semibold"><span className="w-2 h-2 rounded-full bg-green-500" />Weekday</span>
-                    )}
+                  <td className="py-2 px-1 whitespace-nowrap border-r border-rule-line text-[9px] text-center w-16 min-w-[56px] max-w-[64px]" title={holiday ? `${holiday.name} (${holiday.kinds.join('/')})${dayInfo.isLeave ? ` • Leave: ${leaveDates.has(t.date) ? 'personal' : ''}` : ''}` : dayInfo.label}>
+                    {(() => {
+                      const badge = getDayBadge(t.date);
+                      if (!badge) return <span className="text-on-surface-variant">—</span>;
+                      return <span className={`inline-flex items-center justify-center gap-0.5 px-1.5 py-0.5 rounded-full border font-semibold leading-none ${badge.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`} />{badge.text}</span>;
+                    })()}
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
                     {renderEditableCell(t, 'start_time', t.start_time || '-')}
@@ -1471,49 +1544,24 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-xs font-mono border-r border-rule-line">
                     {t.page_id.replace('page-', 'P')}
                   </td>
-                  <td className="py-2 px-1 text-center relative w-10 min-w-[40px] bg-inherit sticky right-0">
+                  <td className="py-2 px-1 text-center w-10 min-w-[40px] bg-paper-gutter sticky right-0 z-[5] shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">
                     <button
+                      ref={(el) => { if (el) menuButtonRefs.current.set(t.id, el); else menuButtonRefs.current.delete(t.id); }}
                       data-testid={`row-menu-${t.id}`}
-                      onClick={() => setOpenMenuId(openMenuId === t.id ? null : t.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (openMenuId === t.id) { closeMenu(); return; }
+                        setOpenMenuId(t.id);
+                        requestAnimationFrame(() => {
+                          const b = menuButtonRefs.current.get(t.id);
+                          if (b) setMenuAnchorRect(b.getBoundingClientRect());
+                        });
+                      }}
                       className="px-2 py-1.5 text-xs font-bold rounded bg-paper-sheet border border-rule-line shadow-sm hover:bg-paper-gutter"
                       aria-label="Actions"
                     >
                       ⋯
                     </button>
-                    {openMenuId === t.id && (
-                      <div className="absolute right-1 top-8 z-20 bg-paper-sheet border border-rule-line rounded-lg shadow-lg py-1 w-48 text-left">
-                        {predGap && (
-                          <button
-                            data-testid={`fill-gap-menu-${t.id}`}
-                            onClick={() => openGapFill(predGap)}
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter"
-                          >
-                            Fill Gap ({predGap.expected}→{predGap.actual})
-                          </button>
-                        )}
-                        <button
-                          data-testid={`insert-after-menu-${t.id}`}
-                          onClick={() => openInsert(t)}
-                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter"
-                        >
-                          Insert After
-                        </button>
-                        <button
-                          data-testid={`remove-shift-menu-${t.id}`}
-                          onClick={() => openRemoveShift(t)}
-                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter text-amber-700"
-                        >
-                          Remove &amp; Shift
-                        </button>
-                        <button
-                          data-testid={`delete-menu-${t.id}`}
-                          onClick={() => { setOpenMenuId(null); setConfirmDelete(t.id); }}
-                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter text-red-600"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
                   </td>
                 </tr>
                 );
@@ -1533,8 +1581,68 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </span>
       </div>
 
-      {/* Click outside to close menu */}
-      {openMenuId && <div className="fixed inset-0 z-10" onClick={() => setOpenMenuId(null)} />}
+      {/* Portal ⋯ menu - fixed outside scroll container to avoid clipping, auto-flips above for last rows */}
+      {openMenuId && menuAnchorRect && typeof document !== 'undefined' && createPortal(
+        <>
+          <div className="fixed inset-0 z-30" onClick={closeMenu} aria-hidden />
+          {(() => {
+            const tripForMenu = filtered.find(x => x.id === openMenuId) ?? sortedAll.find(x => x.id === openMenuId);
+            const gapForMenu = predecessorGapMap.get(openMenuId) ?? null;
+            const menuW = 192;
+            const menuH = gapForMenu ? 160 : 132;
+            const gap = 6;
+            const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
+            const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+            let top = menuAnchorRect.bottom + gap;
+            let left = menuAnchorRect.right - menuW;
+            if (left < 8) left = 8;
+            if (left + menuW > vw - 8) left = vw - menuW - 8;
+            const willClipBottom = top + menuH > vh - 8;
+            if (willClipBottom) top = menuAnchorRect.top - menuH - gap;
+            if (top < 8) top = 8;
+            return (
+              <div
+                data-testid={`row-menu-portal-${openMenuId}`}
+                className="fixed z-40 bg-paper-sheet border border-rule-line rounded-lg shadow-xl py-1 w-48 text-left"
+                style={{ top, left }}
+                onClick={e => e.stopPropagation()}
+              >
+                {gapForMenu && (
+                  <button
+                    data-testid={`fill-gap-menu-${openMenuId}`}
+                    onClick={() => { closeMenu(); openGapFill(gapForMenu); }}
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter"
+                  >
+                    Fill Gap ({gapForMenu.expected}→{gapForMenu.actual})
+                  </button>
+                )}
+                <button
+                  data-testid={`insert-after-menu-${openMenuId}`}
+                  onClick={() => { if (!tripForMenu) { closeMenu(); return; } closeMenu(); openInsert(tripForMenu); }}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter"
+                >
+                  Insert After
+                </button>
+                <button
+                  data-testid={`remove-shift-menu-${openMenuId}`}
+                  onClick={() => { if (!tripForMenu) { closeMenu(); return; } closeMenu(); openRemoveShift(tripForMenu); }}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter text-amber-700"
+                >
+                  Remove &amp; Shift
+                </button>
+                <button
+                  data-testid={`delete-menu-${openMenuId}`}
+                  onClick={() => { const id = openMenuId; closeMenu(); setConfirmDelete(id); }}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter text-red-600"
+                >
+                  Delete
+                </button>
+              </div>
+            );
+          })()}
+        </>,
+        document.body
+      )}
 
       {/* Confirmation Dialog for inline edit */}
       {confirmSave && (

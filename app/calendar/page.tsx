@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { getLeaves, saveLeave, deleteLeave, validateLeaveDate } from '@/lib/leaveStore';
 import { getTrips } from '@/lib/tripStore';
@@ -10,6 +11,7 @@ import type { LeaveDay, Trip } from '@/types';
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const WEEK_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const LEAVE_PRESETS = ['Annual Leave', 'Casual Leave', 'Medical Leave', 'Duty Leave', 'Duty Leave (Overseas)', 'Private Overseas'] as const;
 
 function daysInMonth(year:number, month:number): number {
   return new Date(year, month, 0).getDate();
@@ -20,6 +22,7 @@ function firstWeekdayMon(year:number, month:number): number {
 }
 
 export default function CalendarPage() {
+  const router = useRouter();
   const [leaves, setLeaves] = useState<LeaveDay[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +34,7 @@ export default function CalendarPage() {
   const [showOffPopup, setShowOffPopup] = useState(false);
   const [showNoTripPopup, setShowNoTripPopup] = useState(false);
   const [leaveHistoryYear, setLeaveHistoryYear] = useState<string>('all');
+  const [contextMenu, setContextMenu] = useState<{ date: string; x: number; y: number } | null>(null);
 
   const refresh = useCallback(async () => {
     const [lv, tr] = await Promise.all([getLeaves(), getTrips()]);
@@ -85,6 +89,35 @@ export default function CalendarPage() {
     setEditNote(existing?.note ?? '');
   };
 
+  const handleCellContextMenu = (e: React.MouseEvent, date: string) => {
+    if (!tripDateSet.has(date)) return;
+    e.preventDefault();
+    setContextMenu({ date, x: e.clientX, y: e.clientY });
+  };
+
+  const handleShowTripsForDate = (date: string) => {
+    const first = trips.filter(t => t.date === date).sort((a,b) => a.start_km - b.start_km)[0];
+    if (first) router.push(`/trips?focus=${encodeURIComponent(first.id)}`);
+    else router.push('/trips');
+    setContextMenu(null);
+    setEditingDate(null);
+  };
+
+  // close context menu on click/scroll/esc
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onClick = () => setContextMenu(null);
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setContextMenu(null); };
+    window.addEventListener('click', onClick);
+    window.addEventListener('scroll', onClick, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', onClick);
+      window.removeEventListener('scroll', onClick, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [contextMenu]);
+
   const handleMarkLeave = async () => {
     if (!editingDate) return;
     const err = validateLeaveDate(editingDate);
@@ -131,7 +164,7 @@ export default function CalendarPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-on-surface">Holiday Calendar & Leaves</h1>
-            <p className="text-sm text-on-surface-variant">2024–2027 · Sat/Sun are Bank holidays · Click any date to mark/clear personal leave (manual-only, with note).</p>
+            <p className="text-sm text-on-surface-variant">2024–2027 · Sat/Sun are Bank holidays · Click any date to mark/clear personal leave (manual-only, with note). Right-click a date with trips to Show Trip Details → All Trips.</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={()=>setShowOffPopup(true)} className="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-sm font-semibold hover:bg-rose-100">Trips on Off-Days ({offGroups.reduce((s,g)=>s+g.trips.length,0)})</button>
@@ -245,7 +278,8 @@ export default function CalendarPage() {
                                 <button
                                   key={date}
                                   onClick={()=>handleCellClick(date)}
-                                  title={`${date} ${info.dayOfWeek}${holiday? ` — ${holiday.name} (${holiday.kinds.join('/')})`:''}${isLeave? ` — Leave: ${leaveMap.get(date)?.note ?? ''}`:''}${hasTrip? ` — ${count} trip(s)`:''}`}
+                                  onContextMenu={(e)=>handleCellContextMenu(e, date)}
+                                  title={`${date} ${info.dayOfWeek}${holiday? ` — ${holiday.name} (${holiday.kinds.join('/')})`:''}${isLeave? ` — Leave: ${leaveMap.get(date)?.note ?? ''}`:''}${hasTrip? ` — ${count} trip(s)`:''}${hasTrip ? ' — Right-click: Show Trip Details' : ''}`}
                                   className={`relative h-14 p-1 text-left border ${border} ${bg} hover:brightness-95 transition ${hidden ? 'opacity-20' : ''} ${editingDate===date ? 'ring-2 ring-telemetry-cyan' : ''}`}
                                 >
                                   <div className="text-xs font-semibold">{date.slice(8,10)}</div>
@@ -317,15 +351,44 @@ export default function CalendarPage() {
             <div className="bg-paper-sheet rounded-xl border border-rule-line p-5 w-full max-w-md shadow-xl" onClick={e=>e.stopPropagation()}>
               <h3 className="font-bold text-on-surface">Leave — {editingDate} <span className="font-normal text-xs text-on-surface-variant">({getDayTypeInfo(editingDate, new Set()).dayOfWeek})</span></h3>
               {getHoliday(editingDate) && <p className="text-xs text-rose-700 mt-1">{getHoliday(editingDate)!.name} ({getHoliday(editingDate)!.kinds.join('/')})</p>}
-              {tripDateSet.has(editingDate) && <p className="text-xs text-amber-700 mt-1">⚠ {tripCountByDate.get(editingDate)} trip(s) on this date</p>}
-              <p className="text-xs text-on-surface-variant mt-2">{isEditingLeave ? 'Edit note or clear this leave.' : 'Add a note (max 200) and mark as leave.'}</p>
+              {tripDateSet.has(editingDate) && (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-amber-800">⚠ {tripCountByDate.get(editingDate)} trip(s) on this date</p>
+                  <button
+                    type="button"
+                    data-testid="leave-show-trips-btn"
+                    onClick={() => handleShowTripsForDate(editingDate!)}
+                    className="shrink-0 px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 border border-slate-700"
+                    title="Open All Trips and focus this date"
+                  >
+                    Show Trips →
+                  </button>
+                </div>
+              )}
+              <p className="text-xs text-on-surface-variant mt-2">{isEditingLeave ? 'Edit note or clear this leave.' : 'Add a note (max 200) and mark as leave.'} <span className="text-on-surface-variant">Tap a preset to fill the box, or type freely.</span></p>
+              <div className="mt-3 flex flex-wrap gap-1.5" data-testid="leave-preset-buttons">
+                {LEAVE_PRESETS.map(preset => (
+                  <button
+                    key={preset}
+                    type="button"
+                    data-testid={`leave-preset-${preset.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`}
+                    onClick={() => setEditNote(preset)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${editNote === preset ? 'bg-sky-600 border-sky-600 text-white' : 'bg-paper-gutter border-rule-line text-on-surface hover:bg-sky-50 hover:border-sky-300'}`}
+                    title={`Fill note with "${preset}"`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
               <input
                 value={editNote}
                 onChange={e=>setEditNote(e.target.value)}
                 maxLength={200}
-                placeholder="e.g. personal, medical"
-                className="mt-3 w-full px-3 py-2 border border-rule-line rounded-lg text-sm"
+                placeholder="e.g. Annual Leave, Casual Leave..."
+                data-testid="leave-note-input"
+                className="mt-2 w-full px-3 py-2 border border-rule-line rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500"
               />
+              <div className="text-[11px] text-on-surface-variant text-right mt-1">{editNote.length}/200</div>
               <div className="flex justify-between gap-2 mt-4">
                 <div>
                   {isEditingLeave && (
@@ -442,6 +505,36 @@ export default function CalendarPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* Right-click context menu: Show Trip Details */}
+        {contextMenu && (
+          <div
+            data-testid="calendar-context-menu"
+            className="fixed z-50 bg-paper-sheet border border-rule-line rounded-lg shadow-xl py-1 min-w-[200px] text-sm"
+            style={{
+              top: Math.min(contextMenu.y, typeof window !== 'undefined' ? window.innerHeight - 120 : contextMenu.y),
+              left: Math.min(contextMenu.x, typeof window !== 'undefined' ? window.innerWidth - 220 : contextMenu.x),
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-3 py-1.5 text-xs font-semibold text-on-surface-variant border-b border-rule-line/50">
+              {contextMenu.date} · {getDayTypeInfo(contextMenu.date, new Set()).dayOfWeek} · {tripCountByDate.get(contextMenu.date) ?? 0} trip(s)
+            </div>
+            <button
+              data-testid="calendar-show-trip-details-btn"
+              onClick={() => handleShowTripsForDate(contextMenu.date)}
+              className="w-full text-left px-3 py-2 hover:bg-paper-gutter flex items-center gap-2 text-slate-900 font-medium"
+            >
+              <span>📋</span> Show Trip Details →
+            </button>
+            <button
+              onClick={() => setContextMenu(null)}
+              className="w-full text-left px-3 py-1.5 text-xs text-on-surface-variant hover:bg-paper-gutter"
+            >
+              Cancel
+            </button>
           </div>
         )}
       </div>
