@@ -295,12 +295,16 @@ export function validateLeavesHeaders(rowValues: string[]): boolean {
 }
 
 /**
- * Validate a LeaveDay date (2024-2027 and real date)
+ * Validate a LeaveDay date (dynamic range, auto-extends on Dec 01)
  */
 export function validateLeaveDateForImport(date: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Invalid date format YYYY-MM-DD';
   const [y, m, d] = date.split('-').map(Number);
-  if (y < 2024 || y > 2027) return 'Leaves allowed only 2024-2027';
+  // dynamic endYear (auto-extends)
+  const now = new Date();
+  let endYear = 2027;
+  while (now >= new Date(endYear, 11, 1) && endYear < 2100) endYear++;
+  if (y < 2024 || y > endYear) return `Leaves allowed only 2024-${endYear}`;
   const dt = new Date(y, m - 1, d);
   if (dt.getFullYear() !== y || dt.getMonth() + 1 !== m || dt.getDate() !== d) return 'Invalid date';
   return null;

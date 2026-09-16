@@ -1,4 +1,5 @@
 import type { LeaveDay } from '@/types';
+import { CALENDAR_RANGE } from './sriLankanHolidays';
 
 const LOCAL_KEY = 'fleetledger_leaves';
 
@@ -89,7 +90,8 @@ export async function toggleLeave(date: string, note?: string): Promise<{ isLeav
 export function validateLeaveDate(date: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return 'Invalid date format YYYY-MM-DD';
   const [y, m, d] = date.split('-').map(Number);
-  if (y < 2024 || y > 2027) return 'Leaves allowed only 2024-2027';
+  const endYear = CALENDAR_RANGE.endYear;
+  if (y < CALENDAR_RANGE.startYear || y > endYear) return `Leaves allowed only ${CALENDAR_RANGE.startYear}-${endYear}`;
   const dt = new Date(y, m - 1, d);
   if (dt.getFullYear() !== y || dt.getMonth() + 1 !== m || dt.getDate() !== d) return 'Invalid date';
   return null;

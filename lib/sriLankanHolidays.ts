@@ -151,8 +151,34 @@ if (may2026 && !may2026.kinds.includes('M')) {
   may2026.kinds.push('M');
 }
 
+// Dynamic holidays (fetched live via /api/holidays, no rebuild) — overrides/adds to static
+const DYNAMIC_HOLIDAY_MAP = new Map<string, SriLankanHoliday>();
+
+export function setDynamicHolidays(holidays: SriLankanHoliday[]): void {
+  DYNAMIC_HOLIDAY_MAP.clear();
+  for (const h of holidays) {
+    // normalize kinds to B/P/M only
+    const kinds = (h.kinds || []).filter((k) => k === 'B' || k === 'P' || k === 'M') as HolidayKind[];
+    DYNAMIC_HOLIDAY_MAP.set(h.date, { date: h.date, name: h.name, kinds: kinds.length ? kinds : ['B'], isPoya: !!h.isPoya });
+  }
+}
+
+export function getDynamicHolidays(): SriLankanHoliday[] {
+  return Array.from(DYNAMIC_HOLIDAY_MAP.values());
+}
+
+export function clearDynamicHolidays(): void {
+  DYNAMIC_HOLIDAY_MAP.clear();
+}
+
 export function getHoliday(date: string): SriLankanHoliday | undefined {
-  return HOLIDAY_MAP.get(date);
+  return DYNAMIC_HOLIDAY_MAP.get(date) ?? HOLIDAY_MAP.get(date);
+}
+
+export function getAllHolidays(): SriLankanHoliday[] {
+  const merged = new Map<string, SriLankanHoliday>(HOLIDAY_MAP);
+  for (const [k, v] of DYNAMIC_HOLIDAY_MAP) merged.set(k, v);
+  return Array.from(merged.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function isWeekend(date: string): boolean {
@@ -245,18 +271,41 @@ export function isOffDay(date: string, leaveSet: Set<string>): boolean {
   return getDayTypeInfo(date, leaveSet).isOffDay;
 }
 
-// Calendar helpers
+// Calendar helpers — auto-extends on Dec 01 each year after 2027 (no rebuild)
+function computeDynamicEndYear(): number {
+  const BASE_END = 2027;
+  const now = new Date();
+  let endYear = BASE_END;
+  // Roll forward while now >= Dec 01 of endYear
+  // e.g. on 2027-12-01 → 2028, on 2028-12-01 → 2029, etc.
+  while (now >= new Date(endYear, 11, 1)) {
+    endYear++;
+    // safety cap far future to avoid infinite loop
+    if (endYear > 2100) break;
+  }
+  return endYear;
+}
+
 export const CALENDAR_RANGE = {
-  startYear: 2024,
-  endYear: 2027,
-  startDate: '2024-01-01',
-  endDate: '2027-12-31',
+  get startYear(): number { return 2024; },
+  get endYear(): number { return computeDynamicEndYear(); },
+  get startDate(): string { return '2024-01-01'; },
+  get endDate(): string { return `${computeDynamicEndYear()}-12-31`; },
 };
 
 export function getYearsInRange(): number[] {
   const years: number[] = [];
   for (let y = CALENDAR_RANGE.startYear; y <= CALENDAR_RANGE.endYear; y++) years.push(y);
   return years;
+}
+
+export function getCalendarRange(): { startYear: number; endYear: number; startDate: string; endDate: string } {
+  return {
+    startYear: CALENDAR_RANGE.startYear,
+    endYear: CALENDAR_RANGE.endYear,
+    startDate: CALENDAR_RANGE.startDate,
+    endDate: CALENDAR_RANGE.endDate,
+  };
 }
 
 export function getMonthsForYear(year: number): string[] {

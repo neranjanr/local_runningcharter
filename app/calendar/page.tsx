@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { getLeaves, saveLeave, deleteLeave, validateLeaveDate } from '@/lib/leaveStore';
 import { getTrips } from '@/lib/tripStore';
-import { getDayTypeInfo, getHoliday, CALENDAR_RANGE, getYearsInRange, isWeekend } from '@/lib/sriLankanHolidays';
+import { getDayTypeInfo, getHoliday, CALENDAR_RANGE, getYearsInRange, isWeekend, setDynamicHolidays } from '@/lib/sriLankanHolidays';
+import { getHolidays, refreshHolidaysFromSource } from '@/lib/holidayStore';
 import { validateTripsOnOffDays, getTripsOnOffDaysGrouped, getNoTripWorkingDays } from '@/lib/holidayValidation';
 import type { LeaveDay, Trip } from '@/types';
 
@@ -36,6 +37,8 @@ export default function CalendarPage() {
   const [leaveHistoryYear, setLeaveHistoryYear] = useState<string>('all');
   const [contextMenu, setContextMenu] = useState<{ date: string; x: number; y: number } | null>(null);
   const [confirmClearDate, setConfirmClearDate] = useState<string | null>(null);
+  const [holidayRefreshing, setHolidayRefreshing] = useState(false);
+  const [holidayMsg, setHolidayMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [lv, tr] = await Promise.all([getLeaves(), getTrips()]);
@@ -53,6 +56,11 @@ export default function CalendarPage() {
       // default leave history year to current year if leaves exist, else all
       setLeaveHistoryYear(String(cur));
     });
+    // Load dynamic holidays (live from DB, no rebuild) — merges into static map
+    getHolidays().then((hs) => {
+      if (!mounted) return;
+      try { setDynamicHolidays(hs); } catch {}
+    }).catch(() => {});
     return () => { mounted = false; };
   }, []);
 
@@ -91,6 +99,25 @@ export default function CalendarPage() {
     if (leaveHistoryYear === 'all') return leaves.slice().sort((a,b)=>b.date.localeCompare(a.date));
     return leaves.filter(l=>l.date.startsWith(leaveHistoryYear)).sort((a,b)=>b.date.localeCompare(a.date));
   }, [leaves, leaveHistoryYear]);
+
+  const handleRefreshHolidays = async () => {
+    const targetYear = CALENDAR_RANGE.endYear;
+    setHolidayRefreshing(true);
+    setHolidayMsg(null);
+    try {
+      const res = await refreshHolidaysFromSource(targetYear);
+      // Reload merged holidays and apply
+      const hs = await getHolidays();
+      setDynamicHolidays(hs);
+      setHolidayMsg(`Holidays ${res.year}: ${res.upserted} upserted from ${res.source.split('/').pop()?.slice(0, 20) || 'source'} — ${res.fetched} fetched`);
+      setTimeout(() => setHolidayMsg(null), 4000);
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e);
+      setHolidayMsg(`Holiday refresh failed: ${m}`);
+      setTimeout(() => setHolidayMsg(null), 5000);
+    }
+    setHolidayRefreshing(false);
+  };
 
   const toggleYear = (y:number) => {
     setExpandedYears(prev => {
@@ -196,11 +223,14 @@ export default function CalendarPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-on-surface">Holiday Calendar & Leaves</h1>
-            <p className="text-sm text-on-surface-variant">2024–2027 · Sat/Sun are Bank holidays · Click any date to mark/clear personal leave (manual-only, with note). Right-click a date with trips to Show Trip Details → All Trips.</p>
+            <p className="text-sm text-on-surface-variant">{CALENDAR_RANGE.startYear}–{CALENDAR_RANGE.endYear} (auto-extends to next year on Dec 01) · Sat/Sun are Bank holidays · Click any date to mark/clear personal leave (manual-only, with note). Right-click a date with trips to Show Trip Details → All Trips.</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={()=>setShowOffPopup(true)} className="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-sm font-semibold hover:bg-rose-100">Trips on Off-Days ({offGroups.reduce((s,g)=>s+g.trips.length,0)})</button>
             <button onClick={()=>setShowNoTripPopup(true)} className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-50 text-sm font-semibold hover:bg-slate-800">No-Trip Working Days ({noTripDays.length})</button>
+            <button onClick={handleRefreshHolidays} disabled={holidayRefreshing} data-testid="refresh-holidays-btn" className="px-3 py-2 rounded-lg bg-white border border-rule-line text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50" title={`Query holidays for ${CALENDAR_RANGE.endYear} from source (Nager.Date) — no rebuild`}>
+              {holidayRefreshing ? 'Querying…' : `⟳ Query Holidays (${CALENDAR_RANGE.endYear})`}
+            </button>
             <select value={filter} onChange={e=>setFilter(e.target.value as any)} className="px-3 py-2 border border-rule-line rounded-lg bg-paper-sheet text-sm">
               <option value="all">All days</option>
               <option value="off">Off-days only</option>
@@ -210,6 +240,7 @@ export default function CalendarPage() {
         </div>
 
         {msg && <div className="px-4 py-2 bg-telemetry-cyan text-on-primary rounded-lg text-sm">{msg}</div>}
+        {holidayMsg && <div className={`px-4 py-2 rounded-lg text-sm ${holidayMsg.includes('failed') ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>{holidayMsg}</div>}
 
         {/* Legend */}
         <div className="bg-paper-sheet rounded-xl border border-rule-line p-4 flex flex-wrap gap-3 text-xs">

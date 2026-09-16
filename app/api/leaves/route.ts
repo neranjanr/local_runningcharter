@@ -21,7 +21,11 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) return NextResponse.json({ error: 'Invalid date' }, { status: 400 });
   const y = Number(body.date.slice(0,4));
-  if (y < 2024 || y > 2027) return NextResponse.json({ error: 'Leaves allowed 2024-2027 only' }, { status: 400 });
+  // dynamic endYear (auto-extends on Dec 01)
+  const now = new Date();
+  let endYear = 2027;
+  while (now >= new Date(endYear, 11, 1) && endYear < 2100) endYear++;
+  if (y < 2024 || y > endYear) return NextResponse.json({ error: `Leaves allowed 2024-${endYear} only` }, { status: 400 });
   const note = String(body.note ?? '').slice(0, 200);
   const id = body.id || `leave-${body.date}-${Date.now()}`;
   const { rows } = await query(

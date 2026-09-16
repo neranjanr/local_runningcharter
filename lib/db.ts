@@ -106,6 +106,16 @@ db.exec(`
     note TEXT DEFAULT '',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS holidays (
+    date TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kinds TEXT NOT NULL DEFAULT '["B"]',
+    isPoya INTEGER NOT NULL DEFAULT 0,
+    source TEXT DEFAULT 'static',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Seed or upsert default super admin
