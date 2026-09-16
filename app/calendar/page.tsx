@@ -64,6 +64,16 @@ export default function CalendarPage() {
     for (const t of trips) m.set(t.date, (m.get(t.date) ?? 0) + 1);
     return m;
   }, [trips]);
+  const tripTypeCountsByDate = useMemo(() => {
+    const m = new Map<string, { official: number; private: number }>();
+    for (const t of trips) {
+      const cur = m.get(t.date) ?? { official: 0, private: 0 };
+      if ((t.trip_type as string) === 'Private') cur.private += 1;
+      else cur.official += 1;
+      m.set(t.date, cur);
+    }
+    return m;
+  }, [trips]);
   const fuelPumpedByDate = useMemo(() => {
     const m = new Map<string, number>();
     for (const t of trips) {
@@ -208,7 +218,9 @@ export default function CalendarPage() {
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-amber-100 border border-amber-400"/> Mercantile</span>
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-teal-600"/> Public Holiday</span>
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-sky-500"/> Personal Leave</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-telemetry-cyan border"/> Trip on day</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-telemetry-cyan border"/> Official trip</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 border border-white shadow-sm"/> Private trip</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-telemetry-cyan border"/><span className="w-3 h-3 rounded-full bg-orange-400 border border-white shadow-sm -ml-1"/> Mixed</span>
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 border border-white shadow-sm"/> Fuel pumped</span>
         </div>
 
@@ -286,6 +298,9 @@ export default function CalendarPage() {
                               const isLeave = leaveSet.has(date);
                               const hasTrip = tripDateSet.has(date);
                               const count = tripCountByDate.get(date) ?? 0;
+                              const typeCounts = tripTypeCountsByDate.get(date) ?? { official: 0, private: 0 };
+                              const hasOfficial = typeCounts.official > 0;
+                              const hasPrivate = typeCounts.private > 0;
                               const fuelAmt = fuelPumpedByDate.get(date) ?? 0;
                               const hasFuel = fuelAmt > 0;
                               const holiday = getHoliday(date);
@@ -299,20 +314,34 @@ export default function CalendarPage() {
                                 || (filter==='off' && info.isOffDay)
                                 || (filter==='trips' && hasTrip);
                               const hidden = !show;
+                              const typeHover = hasTrip ? (hasOfficial && hasPrivate ? ` — ${typeCounts.official} Official + ${typeCounts.private} Private` : hasPrivate ? ' — Private' : ' — Official') : '';
                               const fuelHover = hasFuel ? ` — Pumped ${fuelAmt.toFixed(1)} L` : '';
                               return (
                                 <button
                                   key={date}
                                   onClick={()=>handleCellClick(date)}
                                   onContextMenu={(e)=>handleCellContextMenu(e, date)}
-                                  title={`${date} ${info.dayOfWeek}${holiday? ` — ${holiday.name} (${holiday.kinds.join('/')})`:''}${isLeave? ` — Leave: ${leaveMap.get(date)?.note ?? ''}`:''}${hasTrip? ` — ${count} trip(s)`:''}${fuelHover}${hasFuel ? ' ⛽' : ''}${hasTrip ? ' — Right-click: Show Trip Details' : ''}`}
+                                  title={`${date} ${info.dayOfWeek}${holiday? ` — ${holiday.name} (${holiday.kinds.join('/')})`:''}${isLeave? ` — Leave: ${leaveMap.get(date)?.note ?? ''}`:''}${hasTrip? ` — ${count} trip(s)${typeHover}`:''}${fuelHover}${hasFuel ? ' ⛽' : ''}${hasTrip ? ' — Right-click: Show Trip Details' : ''}`}
                                   className={`relative h-14 p-1 text-left border ${border} ${bg} hover:brightness-95 transition ${hidden ? 'opacity-20' : ''} ${editingDate===date ? 'ring-2 ring-telemetry-cyan' : ''}`}
                                 >
                                   <div className="text-xs font-semibold">{date.slice(8,10)}</div>
                                   {holiday && !isLeave && <div className="text-[8px] leading-tight line-clamp-2 font-medium text-rose-700">{holiday.name}</div>}
                                   {isLeave && <div className="text-[8px] leading-tight line-clamp-2 font-medium">{leaveMap.get(date)?.note ? leaveMap.get(date)!.note!.slice(0,18) : 'Leave'}</div>}
                                   {hasFuel && <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-white shadow-sm" title={`Pumped ${fuelAmt.toFixed(1)} L`} />}
-                                  {hasTrip && <span className="absolute bottom-1 right-1 w-2 h-2 rounded-full bg-telemetry-cyan border border-white"/>}
+                                  {hasTrip && (
+                                    <span className="absolute bottom-1 right-1 flex items-center">
+                                      {hasOfficial && hasPrivate ? (
+                                        <>
+                                          <span className="w-2 h-2 rounded-full bg-telemetry-cyan border border-white" title={`${typeCounts.official} Official`} />
+                                          <span className="w-2 h-2 rounded-full bg-orange-400 border border-white -ml-0.5 shadow-sm" title={`${typeCounts.private} Private`} />
+                                        </>
+                                      ) : hasPrivate ? (
+                                        <span className="w-2 h-2 rounded-full bg-orange-400 border border-white shadow-sm" title={`${typeCounts.private} Private`} />
+                                      ) : (
+                                        <span className="w-2 h-2 rounded-full bg-telemetry-cyan border border-white" title={`${typeCounts.official} Official`} />
+                                      )}
+                                    </span>
+                                  )}
                                   {count>1 && hasTrip && <span className="absolute bottom-1 left-1 text-[9px] font-bold bg-slate-900 text-white rounded px-1">×{count}</span>}
                                 </button>
                               );
