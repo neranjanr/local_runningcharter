@@ -324,22 +324,36 @@ Successful Trip save shows a "Trip Added" toast (~2s) then redirects to Dashboar
   },
   {
     id: 'calendar-leaves',
-    title: '19. Calendar — Holiday Calendar, Leaves & Summaries',
+    title: '19. Calendar — Holiday Calendar, Leaves, Trip Badges & Expanded Month',
     group: 'Calendar & Leaves',
-    content: `Holiday Calendar 2024–2027 (Sat/Sun are Bank holidays, plus CBSL Poya/Bank/Public/Mercantile from lib/sriLankanHolidays.ts). Each month shows day cells colored by kind; a cyan dot marks dates with trips and ×N counts multiple trips.
+    content: `Holiday Calendar 2024–2027 — Saturdays and Sundays are Bank holidays, plus CBSL Poya / Bank / Public / Mercantile holidays from lib/sriLankanHolidays.ts. Day cells are tinted by kind (weekend slate, Poya rose, Mercantile amber, public teal, personal leave sky).
+
+Trip badges inside each date cell:
+  • Official trips → black badge (white text) Xn — e.g., X1, X2
+  • Private trips → orange badge (white text) Xm
+  • Both appear side-by-side at bottom-right; even a single trip shows X1 (no more ×N)
+  • Fuel pumped → small red dot top-right; hover shows litres
+
+Month tile:
+  • Header shows trip-days count and a ⛶ Maximize button
+  • Click ⛶ to open an expanded popup for that month only
+
+Expanded month popup:
+  • Large min-h-[108px] grid — same holiday/leave tinting, but each date lists its trips inline: "24km · Colombo → Kandy" plus ⛽ 12.0L ORD-123 when fuel was pumped
+  • Private trips show an orange dot (●) before the route inside the cell and in the summary table
+  • Right-click any dated cell with trips → context menu Show Trip Details → opens All Trips focused on that date (also works inside the popup)
+  • Below the grid: Trip Summary table Date | Day | Route | Km | Fuel | Order No | Type (type badge black/orange with dot) + month totals
 
 Leave (manual-only):
-  • Click any date → dialog shows Mark as Leave or, if already leave, Clear Leave. Leave is never auto-created from holidays/import.
-  • Optional note max 200 chars (e.g., personal, medical). Save keeps note, Clear removes the row from leaves table + localStorage and dispatches fleetledger:data-changed.
-  • All Leaves are Off-Days (priority Leave > Mercantile > Public > Bank/Poya > Weekend). Leave rows are sky/orange in calendar; existing auto-marked leaves were purged.
+  • Click any date → dialog shows Mark as Leave or, if already leave, Clear Leave. Leave is never auto-created from holidays or import.
+  • Optional note max 200 chars; 6 preset pills (Annual, Casual, Medical, Duty, Duty Overseas, Private Overseas) fill the box on click; Clear removes the row and dispatches fleetledger:data-changed.
+  • All Leaves are Off-Days (priority Leave > Poya > Mercantile > Public > Bank > Weekend).
 
-Summaries (header buttons, popups):
-  • Trips on Off-Days — popup grouped by date, each group header Date · DayOfWeek · Reason (Leave/Mercantile/Public/Bank/Poya/Weekend) with per-trip Start KM / End KM / Distance / Type / Places / Fuel and per-date total km. Counts from validateTripsOnOffDays + getTripsOnOffDaysGrouped.
-  • No-Trip Working Days — popup lists every Working Day (Mon–Fri, not holiday, not leave) with zero trips that lies inside an ODO-Continuous Segment. Dates strictly inside a Trip-to-Trip ODO Gap (end_km ≠ next start_km on different dates, lib/continuityAlerts.ts) are hidden; range is firstTripDate..lastTripDate clamped to 2024..2027. Each row Date | Day.
+Header summaries:
+  • Trips on Off-Days — grouped by date (Date · DayOfWeek · Reason) with per-trip Start/End KM, Distance, Type, Places, Fuel and per-date total km.
+  • No-Trip Working Days — every Working Day (Mon–Fri, not holiday, not leave) with zero trips inside an ODO-Continuous Segment; dates strictly inside a Trip-to-Trip ODO Gap (end_km ≠ next start_km on different dates) are hidden; range is firstTripDate..lastTripDate clamped to 2024..2027.
 
-Leave History — persistent card below months:
-  • Table Date | Day | Holiday | Note with Edit / Clear actions.
-  • Year filter All | 2024 | 2025 | 2026 | 2027 (default current year), sorted date DESC; empty state shows "No leaves in YYYY".`,
+Leave History — persistent card below months: table Date | Day | Holiday | Note with Edit / Clear; Year filter All | 2024..2027 (default current year), sorted date DESC.`,
   },
   {
     id: 'all-trips-daytype',
@@ -371,13 +385,13 @@ Usage:
   1. Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
   2. .\\start-service.ps1
 
-On start it prints: -- attempting to start service at HH:mm on dd-MM-yyyy (cyan, e.g., -- attempting to start service at 09:14 on 15-09-2026).
+On start it prints: Web Service start process started at HH:mm:ss on dd-MM-yyyy (cyan, e.g., Web Service start process started at 09:14:22 on 15-09-2026) — echoed in the calling cmd so you see the click time even after the elevated PowerShell window closes.
 
 What it does:
-  1. Stops any old LocalRunningCharterService task and kills processes on :8082
+  1. Stops any old local_runningchart (legacy LocalRunningCharterService) task and kills processes on :8082 (local_runningchart.exe)
   2. Runs npm run build (retries 3x on contention)
   3. Builds the mobile private file: npm run build:mobile — reads $ScriptUrl or config/sheet.local.json
-  4. Registers a Scheduled Task at logon (NT AUTHORITY\\SYSTEM, restart-on-failure x3)
+  4. Creates/updates wrapper local_runningchart.exe (copy of node.exe so Task Manager shows local_runningchart) and registers Scheduled Task local_runningchart at logon (NT AUTHORITY\\SYSTEM, restart-on-failure x3)
   5. Starts the task, waits 3s, opens http://localhost:8082
 
 Configuring the Script URL in the PS1:
@@ -385,8 +399,9 @@ Configuring the Script URL in the PS1:
   This value overrides config/sheet.local.json via $env:SCRIPT_URL.
 
 Managing the service:
-  • Stop: Stop-ScheduledTask -TaskName LocalRunningCharterService
-  • Or: Task Scheduler GUI → find LocalRunningCharterService → delete
+  • Stop: Stop-ScheduledTask -TaskName local_runningchart (legacy: LocalRunningCharterService) or .\\stop-service.ps1
+  • Or: Task Scheduler GUI → find local_runningchart → delete
+  • Process shows as local_runningchart.exe (not node.exe) in Task Manager
   • After stop, port 8082 is free
   • Re-run .\\start-service.ps1 after git pull to update
 

@@ -1,16 +1,20 @@
 <#
 .SYNOPSIS
-    Builds and starts Local Running Charter in production mode on port 8082 as a persistent background service (Windows Scheduled Task).
+    Builds and starts local_runningchart in production mode on port 8082 as a persistent background service (Windows Scheduled Task: local_runningchart / process: local_runningchart.exe).
 #>
 
-$AppName = "LocalRunningCharter"
+$AppName = "local_runningchart"
 $Port = 8082
 $WorkDir = $PSScriptRoot
+$TaskName = "local_runningchart"
+$LegacyTaskName = "LocalRunningCharterService"
 
 # --- Mobile private build: Apps Script URL source of truth ---
 # Option A (recommended): leave empty and keep URL in gitignored config/sheet.local.json { scriptUrl } — build script reads it.
 # Option B: paste URL here to override config file and inject directly via PS1 (still not pushed to git if PS1 is local).
 $ScriptUrl = ""  # e.g. "https://script.google.com/macros/s/AKfycbyf.../exec"
+
+Write-Host ("Web Service start process started at {0} on {1}" -f (Get-Date -Format "HH:mm:ss"), (Get-Date -Format "dd-MM-yyyy")) -ForegroundColor Cyan
 
 # Ensure running as Administrator
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -21,16 +25,17 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 Set-Location -LiteralPath $WorkDir
 
-Write-Host ("-- attempting to start service at {0} on {1}" -f (Get-Date -Format "HH:mm"), (Get-Date -Format "dd-MM-yyyy")) -ForegroundColor Cyan
-
 # --- Stop any ongoing web server (fresh start, data preserved) ---
-$TaskName = "LocalRunningCharterService"
 Write-Host "Stopping any ongoing web server on port $Port (data preserved)..." -ForegroundColor Cyan
 
-# Stop scheduled task if exists
-try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null } catch {}
+# Stop scheduled task if exists (new + legacy names)
+foreach ($tn in @($TaskName, $LegacyTaskName)) {
+    try { Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue | Out-Null } catch {}
+}
 Start-Sleep -Seconds 1
-try { Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null } catch {}
+foreach ($tn in @($TaskName, $LegacyTaskName)) {
+    try { Disable-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue | Out-Null } catch {}
+}
 
 # Kill any process listening on $Port (Next.js / Node)
 try {
@@ -62,8 +67,10 @@ if (-not $conns) {
 }
 Start-Sleep -Seconds 2
 
-# Unregister old task (will be re-created) - do NOT delete DB/files
-try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch {}
+# Unregister old tasks (will be re-created) - do NOT delete DB/files
+foreach ($tn in @($TaskName, $LegacyTaskName)) {
+    try { Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch {}
+}
 Write-Host "  Existing service stopped. DB at $WorkDir\runningcharter.db and browser localStorage are preserved." -ForegroundColor DarkCyan
 
 Write-Host "Building application for production (existing data not harmed)..." -ForegroundColor Cyan
@@ -71,7 +78,7 @@ Write-Host "Building application for production (existing data not harmed)..." -
 # --- Guard against concurrent Next.js build (common when service was not cleanly stopped) ---
 Write-Host "  Checking for stale Next.js build lock..." -ForegroundColor DarkCyan
 try {
-    $buildProcs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*next*build*" }
+    $buildProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('node.exe','local_runningchart.exe') -and $_.CommandLine -like "*next*build*" }
     foreach ($bp in $buildProcs) {
         Write-Host "  Killing stale next build PID $($bp.ProcessId)" -ForegroundColor Yellow
         try { Stop-Process -Id $bp.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
@@ -103,7 +110,7 @@ while ($buildAttempts -lt 3 -and -not $buildSuccess) {
         }
         # Kill any orphaned next build procs before retry
         try {
-            $bps2 = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*next*build*" }
+            $bps2 = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('node.exe','local_runningchart.exe') -and $_.CommandLine -like "*next*build*" }
             foreach ($bp in $bps2) { try { Stop-Process -Id $bp.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
         } catch {}
     }
@@ -154,7 +161,25 @@ try {
     Write-Host "  Mobile build error: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-$NodePath = (Get-Command node).Source
+$RealNodePath = (Get-Command node).Source
+$WrapperExe = Join-Path $WorkDir "local_runningchart.exe"
+# Create/update wrapper exe as copy of node.exe so Task Manager shows process name local_runningchart
+try {
+    $needCopy = $true
+    if (Test-Path -LiteralPath $WrapperExe) {
+        try { $srcHash = (Get-FileHash -LiteralPath $RealNodePath -Algorithm SHA256).Hash; $dstHash = (Get-FileHash -LiteralPath $WrapperExe -Algorithm SHA256).Hash; if ($srcHash -eq $dstHash) { $needCopy = $false } } catch {}
+    }
+    if ($needCopy) {
+        Copy-Item -LiteralPath $RealNodePath -Destination $WrapperExe -Force -ErrorAction Stop
+        Write-Host "  Created wrapper exe $WrapperExe from $RealNodePath" -ForegroundColor DarkCyan
+    } else {
+        Write-Host "  Wrapper exe $WrapperExe already up to date" -ForegroundColor DarkCyan
+    }
+} catch {
+    Write-Host "  Warning: failed to create wrapper exe $WrapperExe : $($_.Exception.Message) - falling back to $RealNodePath" -ForegroundColor Yellow
+    $WrapperExe = $RealNodePath
+}
+$NodePath = $WrapperExe
 $NextBin = "$WorkDir\node_modules\next\dist\bin\next"
 
 # Create or update Scheduled Task to run at startup and persist when window closed
@@ -169,7 +194,7 @@ Start-ScheduledTask -TaskName $TaskName
 
 Start-Sleep -Seconds 3
 
-Write-Host "Local Running Charter is now running (fresh) in production on port $Port!" -ForegroundColor Green
+Write-Host "local_runningchart is now running (fresh) in production on port $Port! (process: local_runningchart.exe, task: $TaskName)" -ForegroundColor Green
 Write-Host "  Data preserved: runningcharter.db + localStorage (fleetledger_*) untouched" -ForegroundColor DarkCyan
 Write-Host "Opening http://localhost:$Port in your browser (hard-refresh Ctrl+Shift+R if you still see old version)..." -ForegroundColor Cyan
 Start-Process "http://localhost:$Port"

@@ -165,11 +165,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 **What it does:**
 
-1. Prints `-- attempting to start service at HH:mm on dd-MM-yyyy` (cyan) immediately after `Set-Location` — so you see the exact click time even before UAC elevation.
-2. Stops any old `LocalRunningCharterService` task and kills processes on `:8082`
+1. Prints `Web Service start process started at HH:mm:ss on dd-MM-yyyy` (cyan) in the calling `cmd` immediately — so you see the exact click time even after the elevated PowerShell window closes.
+2. Stops any old `local_runningchart` (legacy `LocalRunningCharterService`) task and kills processes on `:8082` (`local_runningchart.exe`)
 3. Runs `npm run build` (retries 3x on contention)
 4. Builds the mobile private file: `npm run build:mobile` — reads `$ScriptUrl` or `config/sheet.local.json`
-5. Registers a **Scheduled Task** at logon (`NT AUTHORITY\SYSTEM`, restart-on-failure x3)
+5. Creates/updates wrapper `local_runningchart.exe` (copy of `node.exe` so Task Manager shows `local_runningchart`) and registers a **Scheduled Task** `local_runningchart` at logon (`NT AUTHORITY\SYSTEM`, restart-on-failure x3)
 6. Starts the task, waits 3s, opens `http://localhost:8082`
 
 **Configuring the Script URL in the PS1:**
@@ -186,9 +186,11 @@ This value overrides `config/sheet.local.json` via `$env:SCRIPT_URL`. The PS1 it
 
 ```powershell
 # Stop the service
-Stop-ScheduledTask -TaskName LocalRunningCharterService
+Stop-ScheduledTask -TaskName local_runningchart
+# Legacy name (if upgraded): Stop-ScheduledTask -TaskName LocalRunningCharterService
 
-# Or: Task Scheduler GUI → find LocalRunningCharterService → delete
+# Or: Task Scheduler GUI → find local_runningchart → delete
+# Also: .\stop-service.ps1  (stops task + kills local_runningchart.exe on :8082)
 # After stop, port 8082 is free
 
 # Re-run after git pull to update
@@ -268,7 +270,7 @@ Any one-file transfer works:
 [ ] Node 20+ installed
 [ ] config/sheet.local.json exists
 [ ] PowerShell as Admin → .\start-service.ps1 → opened http://localhost:8082
-[ ] Scheduled Task LocalRunningCharterService exists (Task Scheduler)
+[ ] Scheduled Task local_runningchart exists (Task Scheduler) — process shows as local_runningchart.exe
 [ ] After reboot, localhost:8082 comes up without re-running anything
 ```
 
@@ -289,8 +291,10 @@ Any one-file transfer works:
 
 ### 7.0 Holiday Calendar & Summaries (`/calendar`)
 
-- **Range:** 2024–2027. Saturdays/Sundays are Bank holidays; plus CBSL Poya/Bank/Public/Mercantile from `lib/sriLankanHolidays.ts`. Cells colored by kind; cyan dot marks dates with trips, ×N for multiple trips. Right-click a date cell that has trips → context menu **Show Trip Details →** jumps to `All Trips?focus=<tripId>` and focuses that day (`app/calendar/page.tsx:90,508`).
-- **Leave (manual-only):** Click any date → dialog. If not leave: enter optional note (max 200) → **Mark as Leave**. If already leave: edit note → **Save** or **Clear Leave**. Leaves are never auto-created from holidays/import; all prior auto leaves were purged. Leaves are always Off-Days (priority Leave > Mercantile > Public > Bank/Poya > Weekend). Dialog shows 6 preset pills `Annual Leave | Casual Leave | Medical Leave | Duty Leave | Duty Leave (Overseas) | Private Overseas` (`LEAVE_PRESETS`) that fill the note box on click (`editNote === preset` → `bg-sky-600`, else `bg-paper-gutter`); box still freely editable, `maxLength 200`, placeholder `e.g. Annual Leave…`, counter `N/200`. If that date has trips, dialog shows amber bar `⚠ N trip(s) on this date` + **Show Trips →** (`leave-show-trips-btn`) that navigates to `All Trips` and focuses the date’s first trip (`app/calendar/page.tsx:327`, `handleShowTripsForDate`).
+- **Range:** 2024–2027. Saturdays/Sundays are Bank holidays; plus CBSL Poya/Bank/Public/Mercantile from `lib/sriLankanHolidays.ts`. Cells tinted by kind (weekend slate, Poya rose, Mercantile amber, public teal, leave sky). Trip badges at bottom-right: **black Xn** for Official, **orange Xm** for Private (white text), side-by-side, even `X1` for a single trip; red dot top-right when fuel was pumped.
+- **Month maximize:** Every month tile header has a **⛶** button. Click to open an expanded popup for that month only — larger `min-h-[108px]` cells list each trip inline as `24km · Colombo → Kandy ⛽ 12.0L ORD-123`; private trips show an **orange dot** before the route and in the summary table. Right-click any date with trips (also inside the popup) → **Show Trip Details →** jumps to `All Trips?focus=<tripId>`.
+- **Leave (manual-only):** Click any date → dialog. If not leave: enter optional note (max 200) → **Mark as Leave**. If already leave: edit note → **Save** or **Clear Leave**. Leaves are never auto-created from holidays/import; all prior auto leaves were purged. Leaves are always Off-Days (priority Leave > Poya > Mercantile > Public > Bank > Weekend). Dialog shows 6 preset pills `Annual Leave | Casual Leave | Medical Leave | Duty Leave | Duty Leave (Overseas) | Private Overseas` that fill the note box; box still freely editable, `maxLength 200`, counter `N/200`. If that date has trips, dialog shows amber bar `⚠ N trip(s) on this date` + **Show Trips →** that navigates to `All Trips` and focuses the date’s first trip.
+- **Expanded popup summary:** Below the enlarged grid a **Trip Summary** table lists every trip in that month: `Date | Day | Route | Km | Fuel | Order No | Type` (type badge black/orange with dot) plus month totals. Fuel lines show amount and order number per trip.
 - **Header buttons (popups):**
   - **Trips on Off-Days** — grouped by date (header `Date · DayOfWeek · Reason`) with per-trip Start/End KM, Distance, Type, Places, Fuel and per-date total km. Built from `validateTripsOnOffDays` + `getTripsOnOffDaysGrouped`.
   - **No-Trip Working Days** — lists every Working Day (Mon–Fri, not holiday, not leave) with zero trips that lies inside an **ODO-Continuous Segment**. Dates strictly inside a Trip-to-Trip ODO Gap (`end_km ≠ next start_km` on different dates, `lib/continuityAlerts.ts`) are hidden (ledger missing). Range `firstTripDate..lastTripDate` clamped to 2024..2027.

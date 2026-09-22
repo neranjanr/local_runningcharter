@@ -49,6 +49,8 @@ config/sheet.local.json
 sheet.local.json
 # mobile private build — single-file with hard-coded Script URL for phone (gitignored)
 quicktrip-mobile/dist/Mobile_with_url_private.html
+# process wrapper — copy of node.exe renamed to local_runningchart.exe for Task Manager visibility
+/local_runningchart.exe
 
 # uploaded samples / scratch — not needed to run project
 .scratch/
