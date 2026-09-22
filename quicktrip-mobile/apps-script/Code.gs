@@ -240,20 +240,24 @@ function ensureLeavesHeaders_(sh){
 
 function formatDate_(v){
   if (!v) return '';
+  var tz = Session.getScriptTimeZone();
+  try { var sstz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(); if (sstz) tz = sstz; } catch(e) {}
   if (Object.prototype.toString.call(v)==='[object Date]' && !isNaN(v)){
     if (v.getFullYear()===1899) return '';
-    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
   }
   const s=String(v).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   const d=new Date(s);
-  if (!isNaN(d) && d.getFullYear()>=2000) return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  if (!isNaN(d) && d.getFullYear()>=2000) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
   return s;
 }
 function formatTime_(v){
   if (!v) return '';
+  var tz = Session.getScriptTimeZone();
+  try { var sstz2 = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(); if (sstz2) tz = sstz2; } catch(e2) {}
   if (Object.prototype.toString.call(v)==='[object Date]' && !isNaN(v)){
-    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'HH:mm');
+    return Utilities.formatDate(v, tz, 'HH:mm');
   }
   if (typeof v==='number' && v>=0 && v<1){
     const mins=Math.round(v*1440);
