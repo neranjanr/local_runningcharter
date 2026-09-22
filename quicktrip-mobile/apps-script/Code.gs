@@ -253,7 +253,7 @@ function formatDate_(v){
 function formatTime_(v){
   if (!v) return '';
   if (Object.prototype.toString.call(v)==='[object Date]' && !isNaN(v)){
-    return Utilities.formatDate(v, 'UTC', 'HH:mm');
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'HH:mm');
   }
   if (typeof v==='number' && v>=0 && v<1){
     const mins=Math.round(v*1440);
