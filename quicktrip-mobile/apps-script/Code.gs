@@ -38,14 +38,16 @@ function doGet(e){
     const lastRow = sh.getLastRow();
     if (lastRow < 2) return json_({ rows: [] });
     const start = Math.max(2, lastRow - 9);
-    const vals = sh.getRange(start, 1, lastRow - start + 1, HEADERS.length).getValues();
-    const rows = vals.map(r => ({
+    const range = sh.getRange(start, 1, lastRow - start + 1, HEADERS.length);
+    const vals = range.getValues();
+    const disp = range.getDisplayValues();
+    const rows = vals.map((r,i) => ({
       date: formatDate_(r[0]),
       start_km: roundIntKm_(r[1]),
       end_km: roundIntKm_(r[2]),
       trip_distance: roundIntKm_(r[3] || (Number(r[2])-Number(r[1]))),
-      start_time: formatTime_(r[4]),
-      end_time: formatTime_(r[5]),
+      start_time: formatTime_(disp[i][4] || r[4]),
+      end_time: formatTime_(disp[i][5] || r[5]),
       trip_type: String(r[6]).toLowerCase().includes('priv') ? 'Private' : 'Official',
       places_visited: String(r[7]||''),
       fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
@@ -58,14 +60,16 @@ function doGet(e){
     const lastRow = sh.getLastRow();
     var rows = [];
     if (lastRow >= 2) {
-      const vals = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
-      rows = vals.map(r => ({
+      const range2 = sh.getRange(2, 1, lastRow - 1, HEADERS.length);
+      const vals = range2.getValues();
+      const disp = range2.getDisplayValues();
+      rows = vals.map((r,i) => ({
         date: formatDate_(r[0]),
         start_km: roundIntKm_(r[1]),
         end_km: roundIntKm_(r[2]),
         trip_distance: roundIntKm_(r[3]),
-        start_time: formatTime_(r[4]),
-        end_time: formatTime_(r[5]),
+        start_time: formatTime_(disp[i][4] || r[4]),
+        end_time: formatTime_(disp[i][5] || r[5]),
         trip_type: String(r[6]).toLowerCase().includes('priv') ? 'Private' : 'Official',
         places_visited: String(r[7]||''),
         fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
