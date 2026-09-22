@@ -13,7 +13,10 @@ import {
   formatDurationMinutes,
   roundToIntegerKm,
   roundToOneDecimal,
+  parseTimeToMinutes,
+  formatMinutesToTime,
 } from '@/lib/tripCalculations';
+import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 
 type BufferTrip = {
   date: string; start_km: number; end_km: number; trip_distance: number;
@@ -45,15 +48,21 @@ export default function MobileQuickTripForm(){
   const [showSettings,setShowSettings]=useState(false);
   const [sheetId,setSheetId]=useState('');
   const [scriptUrl,setScriptUrl]=useState('');
+  const [trafficMode,setTrafficMode]=useState<'traffic'|'light'>('traffic');
+  const [isTrafficMode,setIsTrafficMode]=useState(false);
 
   useEffect(()=>{
     const s=getSettings(); setSheetId(s.sheetId); setScriptUrl(s.scriptUrl);
     // hydrate queue len
     try{ setQueueLen(JSON.parse(localStorage.getItem(QUEUE_KEY)||'[]').length);}catch{}
     fetchLast10();
+    loadSpeedConfig().then(c=> setIsTrafficMode(c.mode==='traffic'));
+    const handler=()=>{ const c=getStoredSpeedConfigSync(); setIsTrafficMode(c.mode==='traffic'); };
+    window.addEventListener('fleetledger:speed-config-changed', handler);
+    window.addEventListener('storage', handler as EventListener);
     const id=setInterval(flushQueue, 30000);
     window.addEventListener('online', flushQueue);
-    return ()=>{ clearInterval(id); window.removeEventListener('online', flushQueue);};
+    return ()=>{ clearInterval(id); window.removeEventListener('online', flushQueue); window.removeEventListener('fleetledger:speed-config-changed', handler); window.removeEventListener('storage', handler as EventListener); };
   },[]);
 
   async function fetchLast10(){
@@ -97,8 +106,16 @@ export default function MobileQuickTripForm(){
     if(curStart!=='') return;
     const d=parseIntKm(nextDist); if(isNaN(d)||d<=0) return;
     if(!nextEnd||!nextEnd.includes(':')) return;
-    const est=estimateStartTime(nextEnd,d); if(!est) return;
+    const tm=isTrafficMode?trafficMode:undefined;
+    const est=estimateStartTime(nextEnd,d,tm); if(!est) return;
     setStartTime(est); setDuration(formatDurationMinutes(calculateDurationMinutes(est,nextEnd)));
+  };
+  const nudgeStartTime=(delta:number)=>{
+    if(!startTime||!startTime.includes(':')) return;
+    const cur=parseTimeToMinutes(startTime);
+    const nxt=formatMinutesToTime(cur+delta);
+    setStartTime(nxt);
+    if(endTime) setDuration(formatDurationMinutes(calculateDurationMinutes(nxt,endTime)));
   };
 
   const onSubmit=async(e:React.FormEvent)=>{
@@ -168,8 +185,15 @@ export default function MobileQuickTripForm(){
 
         <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded border space-y-2">
           <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Time — End − Duration = Start • Estimated Start</p>
+          {isTrafficMode && (
+            <div className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 rounded">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-amber-800">Traffic</span>
+              <label className="flex items-center gap-1 text-xs"><input type="radio" checked={trafficMode==='traffic'} onChange={()=>setTrafficMode('traffic')}/>Traffic</label>
+              <label className="flex items-center gap-1 text-xs"><input type="radio" checked={trafficMode==='light'} onChange={()=>setTrafficMode('light')}/>Light</label>
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-2">
-            <div><label className="text-xs">Start <span className="text-zinc-400">Opt</span></label><div className="flex gap-1"><input type="time" value={startTime} onChange={e=>{setStartTime(e.target.value); if(e.target.value&&endTime) setDuration(formatDurationMinutes(calculateDurationMinutes(e.target.value,endTime)));}} className="flex-1 px-2 py-1.5 border rounded font-mono text-sm"/><button type="button" onClick={()=>{ const d=parseIntKm(distance); if(isNaN(d)||d<=0||!endTime.includes(':')){ setMsg({t:'err',m:'Need Distance & End Time'}); return; } const est=estimateStartTime(endTime,d); if(est){ setStartTime(est); setDuration(formatDurationMinutes(calculateDurationMinutes(est,endTime)));}}} className="px-2 py-1 text-[10px] font-bold border rounded bg-white">Auto</button></div></div>
+            <div><label className="text-xs">Start <span className="text-zinc-400">Opt</span></label><div className="flex gap-1"><input type="time" value={startTime} onChange={e=>{setStartTime(e.target.value); if(e.target.value&&endTime) setDuration(formatDurationMinutes(calculateDurationMinutes(e.target.value,endTime)));}} className="flex-1 px-2 py-1.5 border rounded font-mono text-sm"/><button type="button" onClick={()=>{ const d=parseIntKm(distance); if(isNaN(d)||d<=0||!endTime.includes(':')){ setMsg({t:'err',m:'Need Distance & End Time'}); return; } const tm=isTrafficMode?trafficMode:undefined; const est=estimateStartTime(endTime,d,tm); if(est){ setStartTime(est); setDuration(formatDurationMinutes(calculateDurationMinutes(est,endTime)));}}} className="px-2 py-1 text-[10px] font-bold border rounded bg-white">Auto</button></div><div className="flex gap-1 mt-1"><button type="button" onClick={()=>nudgeStartTime(-10)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">−10</button><button type="button" onClick={()=>nudgeStartTime(-5)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">−5</button><button type="button" onClick={()=>nudgeStartTime(5)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">+5</button><button type="button" onClick={()=>nudgeStartTime(10)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">+10</button></div></div>
             <div><label className="text-xs">End</label><input type="time" value={endTime} onChange={e=>{setEndTime(e.target.value); if(startTime) setDuration(formatDurationMinutes(calculateDurationMinutes(startTime,e.target.value))); else maybeAutoEstimate(distance,e.target.value,startTime);}} className="w-full px-2 py-1.5 border rounded font-mono text-sm" required/></div>
             <div><label className="text-xs">Duration</label><input type="text" placeholder="00:55" value={duration} onChange={e=>{setDuration(e.target.value); const m=parseDurationToMinutes(e.target.value); if(endTime) setStartTime(calculateStartTimeFromEndAndDuration(endTime,m));}} className="w-full px-2 py-1.5 border rounded font-mono text-sm"/></div>
           </div>

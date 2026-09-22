@@ -14,9 +14,12 @@ import {
   formatDurationMinutes,
   roundToIntegerKm,
   roundToOneDecimal,
+  parseTimeToMinutes,
+  formatMinutesToTime,
 } from '@/lib/tripCalculations';
 import { getLastEndKm, saveTrip } from '@/lib/tripStore';
 import { useToast } from '@/lib/toastContext';
+import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 
 export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void }) {
   const { showToast } = useToast();
@@ -37,6 +40,8 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
   const [saving, setSaving] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [trafficMode, setTrafficMode] = useState<'traffic' | 'light'>('traffic');
+  const [isTrafficMode, setIsTrafficMode] = useState<boolean>(false);
 
   useEffect(() => {
     let mounted = true;
@@ -55,8 +60,21 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
       setIsAutoStartKm(true);
       setLoading(false);
     });
+    // Load speed config to know if Traffic selector should show
+    loadSpeedConfig().then(c => {
+      if (!mounted) return;
+      setIsTrafficMode(c.mode === 'traffic');
+    });
+    const handler = () => {
+      const c = getStoredSpeedConfigSync();
+      setIsTrafficMode(c.mode === 'traffic');
+    };
+    window.addEventListener('fleetledger:speed-config-changed', handler);
+    window.addEventListener('storage', handler as EventListener);
     return () => {
       mounted = false;
+      window.removeEventListener('fleetledger:speed-config-changed', handler);
+      window.removeEventListener('storage', handler as EventListener);
     };
   }, []);
 
@@ -83,10 +101,22 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     const d = parseIntKm(nextDistanceStr);
     if (isNaN(d) || d <= 0) return;
     if (!nextEndTime || !nextEndTime.includes(':')) return;
-    const estimated = estimateStartTime(nextEndTime, d);
+    const tm = isTrafficMode ? trafficMode : undefined;
+    const estimated = estimateStartTime(nextEndTime, d, tm);
     if (estimated) {
       setStartTime(estimated);
       const dur = calculateDurationMinutes(estimated, nextEndTime);
+      setDuration(formatDurationMinutes(dur));
+    }
+  };
+
+  const nudgeStartTime = (deltaMin: number) => {
+    if (!startTime || !startTime.includes(':')) return;
+    const cur = parseTimeToMinutes(startTime);
+    const next = formatMinutesToTime(cur + deltaMin);
+    setStartTime(next);
+    if (endTime) {
+      const dur = calculateDurationMinutes(next, endTime);
       setDuration(formatDurationMinutes(dur));
     }
   };
@@ -187,7 +217,8 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
       setErrorMessage('Enter End Time to estimate Start Time.');
       return;
     }
-    const estimated = estimateStartTime(endTime, d);
+    const tm = isTrafficMode ? trafficMode : undefined;
+    const estimated = estimateStartTime(endTime, d, tm);
     if (!estimated) {
       setErrorMessage('Cannot estimate Start Time (check Distance and End Time).');
       return;
@@ -411,6 +442,20 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
         {/* Time Section */}
         <div className="p-4 bg-paper-ledger dark:bg-zinc-800/50 rounded-xl border border-rule-line dark:border-zinc-700 space-y-4">
           <h3 className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Time Reciprocal — End − Duration = Start • Estimated Start Time</h3>
+          {isTrafficMode && (
+            <div className="flex items-center gap-3 px-2 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-200">Traffic Mode</span>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="trafficMode" value="traffic" checked={trafficMode === 'traffic'} onChange={() => setTrafficMode('traffic')} className="accent-amber-600" />
+                <span className="text-sm font-medium">Traffic</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" name="trafficMode" value="light" checked={trafficMode === 'light'} onChange={() => setTrafficMode('light')} className="accent-emerald-600" />
+                <span className="text-sm font-medium">Light Traffic</span>
+              </label>
+              <span className="text-[10px] text-zinc-500 ml-auto">Selects Speed Slab set for Auto estimate</span>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label htmlFor="start-time" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
@@ -430,12 +475,18 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
                   aria-label="Auto"
                   onClick={handleAutoEstimate}
                   className="px-3 py-2 text-xs font-bold uppercase tracking-wider border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-600 transition-colors"
-                  title="Estimate Start Time as End − (Distance/speed) tiered <10→15 <20→20 <40→25 ≤60→30 >60→35 ceiled to 5 min"
+                  title="Estimate Start Time as End − (Distance/speed) configurable slabs ceiled to 5 min"
                 >
                   Auto
                 </button>
               </div>
-              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase tracking-wider">Auto: End − (Distance/speed) tiered ceil 5 min • Empty allowed</span>
+              <div className="flex gap-1 mt-2">
+                <button type="button" onClick={() => nudgeStartTime(-10)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="-10 min">−10</button>
+                <button type="button" onClick={() => nudgeStartTime(-5)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="-5 min">−5</button>
+                <button type="button" onClick={() => nudgeStartTime(5)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="+5 min">+5</button>
+                <button type="button" onClick={() => nudgeStartTime(10)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="+10 min">+10</button>
+              </div>
+              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase tracking-wider">Auto: End − (Distance/speed) slabs ceil 5 min • Empty allowed</span>
             </div>
 
             <div>

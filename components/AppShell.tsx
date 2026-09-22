@@ -1,14 +1,17 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { GoogleLoginButton } from './GoogleLoginButton';
 import { useAuth } from '@/lib/authContext';
+import { FeatureInsightsDialog } from '@/components/dashboard/FeatureInsightsDialog';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user } = useAuth();
+  const [showInsights, setShowInsights] = useState(false);
+  const isDashboard = pathname === '/';
 
   const navItems = [
     { label: 'Dashboard & Analytics', href: '/', icon: 'dashboard' },
@@ -76,6 +79,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="font-bold text-sm">FleetLedger</span>
           </div>
           <div className="flex items-center gap-2">
+            {isDashboard && (
+              <button
+                onClick={() => setShowInsights(true)}
+                aria-label="Feature Insights"
+                data-testid="header-insights-link-mobile"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white text-slate-800 font-bold text-xs border border-slate-300 hover:bg-slate-100"
+                title="Feature Insights — what this app does for you"
+              >
+                ✨
+              </button>
+            )}
             {user && (
               <Link
                 href="/help"
@@ -95,13 +109,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="text-xs text-on-surface-variant">FleetLedger • Audit Running Chart</span>
           </div>
           <div className="flex items-center gap-3">
+            {isDashboard && (
+              <button
+                onClick={() => setShowInsights(true)}
+                aria-label="Feature Insights"
+                data-testid="header-insights-link"
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-white text-slate-700 font-bold text-sm border border-slate-300 hover:bg-slate-50"
+                title="Feature Insights — what this app does for you"
+              >
+                ✨
+              </button>
+            )}
             {user && (
               <Link
                 href="/help"
                 aria-label="Help"
                 data-testid="header-help-link"
                 className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-surface text-on-primary font-bold text-sm border border-slate-600 hover:bg-primary"
-                title="Help — 8 sections"
+                title="Help — 21 sections"
               >
                 ?
               </Link>
@@ -112,6 +137,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      <FeatureInsightsDialog open={showInsights} onClose={() => setShowInsights(false)} />
     </div>
   );
 }

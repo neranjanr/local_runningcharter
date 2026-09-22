@@ -98,13 +98,12 @@ export function Side1TripsLog({ pageNumber, month, dayGroups, grandTotals, pageS
             {flatTrips.map((t: Trip, idx: number) => {
               const dateIdx = dateToIdx.get(t.date) ?? 0;
               const isAltDate = dateIdx % 2 === 0;
-              const tripName = (t.places_visited ?? '').trim().toLowerCase();
-              const isDummyOrPrivateTrip = tripName === 'dummy' || tripName === 'private';
               const isPrivateType = t.trip_type === 'Private';
-              const shouldOrange = isDummyOrPrivateTrip || isPrivateType;
-              const rowBg = shouldOrange ? 'bg-orange-200' : isAltDate ? 'bg-slate-200' : 'bg-white';
+              const isBlueDesc = /\b(dummy|bus|private)\b/i.test(t.places_visited ?? '');
+              const shouldOrange = isPrivateType;
+              const rowBg = shouldOrange ? 'bg-orange-200' : isBlueDesc ? 'bg-blue-100' : isAltDate ? 'bg-slate-200' : 'bg-white';
               return (
-                <tr key={t.id} className={`${rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange ? '' : 'hover:bg-amber-50/50'} transition-colors`}>
+                <tr key={t.id} className={`${rowBg} ${isPrivateType ? 'font-semibold' : ''} ${shouldOrange || isBlueDesc ? '' : 'hover:bg-amber-50/50'} transition-colors`}>
                   <td className="py-2 px-2.5 text-center font-mono text-sm font-semibold border border-rule-line">{pageSeq[idx]}</td>
                   <td className="py-2 px-2.5 text-center text-[10px] font-semibold tracking-widest text-on-surface-variant border border-rule-line">
                     {formatDateCell(t.date)}

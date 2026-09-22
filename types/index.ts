@@ -10,6 +10,8 @@ export interface Vehicle {
   /** @deprecated removed in Phase 2 Issue 03 — use Book Opening fuel instead; kept optional for migration */
   current_fuel_level?: number;
   registration_no?: string; // Phase 2: Vehicle Registration No (paper header)
+  typical_economy_low?: number; // Typical Fuel Economy Range low (km/L)
+  typical_economy_high?: number; // Typical Fuel Economy Range high (km/L)
   created_at?: string;
   updated_at?: string;
 }

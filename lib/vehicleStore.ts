@@ -12,6 +12,8 @@ export const DEFAULT_VEHICLE: Vehicle = {
   current_odometer: 50000,
   current_fuel_level: 10.0,
   registration_no: 'CAB-1234',
+  typical_economy_low: 7.0,
+  typical_economy_high: 9.0,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -31,7 +33,13 @@ export async function getVehicleProfile(): Promise<Vehicle> {
     const res = await apiFetch('/api/vehicles');
     if (res.ok) {
       const data = await res.json();
-      if (data) return data as Vehicle;
+      if (data) {
+        const v = data as Vehicle;
+        if (v.typical_economy_low == null) v.typical_economy_low = DEFAULT_VEHICLE.typical_economy_low;
+        if (v.typical_economy_high == null) v.typical_economy_high = DEFAULT_VEHICLE.typical_economy_high;
+        if (!v.registration_no) v.registration_no = DEFAULT_VEHICLE.registration_no;
+        return v;
+      }
     }
   } catch {
     // Fall through to localStorage
@@ -44,6 +52,8 @@ export async function getVehicleProfile(): Promise<Vehicle> {
       try {
         const parsed = JSON.parse(stored) as Vehicle;
         if (!parsed.registration_no) parsed.registration_no = DEFAULT_VEHICLE.registration_no;
+        if (parsed.typical_economy_low == null) parsed.typical_economy_low = DEFAULT_VEHICLE.typical_economy_low;
+        if (parsed.typical_economy_high == null) parsed.typical_economy_high = DEFAULT_VEHICLE.typical_economy_high;
         return parsed;
       } catch {
         // ignore

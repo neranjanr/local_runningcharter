@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
-import type { Trip, BookPage } from '@/types';
+import type { Trip, BookPage, Vehicle } from '@/types';
 import { computeLedgerDays, computeTripFuelMap } from '@/lib/ledgerCalculations';
 import { getFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage } from '@/lib/inTankStore';
@@ -10,6 +10,7 @@ import { detectTripGaps } from '@/lib/continuityAlerts';
 interface Props {
   trips: Trip[];
   pages: BookPage[];
+  vehicle?: Vehicle | null;
 }
 
 function formatDayLabel(iso: string): string {
@@ -36,7 +37,15 @@ function getEconomyShade(economy: number, min: number, max: number): string {
   return ECONOMY_SHADES[3];
 }
 
-export function FuelEconomyGraph({ trips, pages }: Props) {
+function getEconomyBandColor(economy: number, low: number, high: number): { bg: string; label: 'green' | 'amber' | 'red' } {
+  const mid = (low + high) / 2;
+  const margin = mid * 0.2; // 20% per grill Q6
+  if (economy >= low && economy <= high) return { bg: 'bg-emerald-500', label: 'green' };
+  if ((economy >= low - margin && economy < low) || (economy > high && economy <= high + margin)) return { bg: 'bg-amber-400', label: 'amber' };
+  return { bg: 'bg-red-500', label: 'red' };
+}
+
+export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ active: boolean; startX: number; startScroll: number }>({ active: false, startX: 0, startScroll: 0 });
   const [activeYear, setActiveYear] = useState<string | null>(null);
@@ -355,6 +364,13 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
             <span className="text-slate-300">•</span>
             <span>gaps show odometer loss / missing sync periods</span>
           </p>
+          <p className="text-[10px] mt-1 flex items-center gap-2 font-mono">
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />Green {(vehicle?.typical_economy_low ?? 7).toFixed(1)}–{(vehicle?.typical_economy_high ?? 9).toFixed(1)}</span>
+            <span className="text-slate-300">|</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Amber ±{(((vehicle?.typical_economy_low ?? 7)+(vehicle?.typical_economy_high ?? 9))/2*0.2).toFixed(1)} outside</span>
+            <span className="text-slate-300">|</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Red beyond</span>
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="inline-flex p-0.5 bg-slate-100 rounded-lg border border-slate-200 text-xs font-medium text-slate-600" id="filter-presets">
@@ -436,19 +452,23 @@ export function FuelEconomyGraph({ trips, pages }: Props) {
                   >
                     {g.stems.map(d => {
                       const barPct = maxEconomy > 0 ? (d.fuelEconomy / maxEconomy) * 100 : 0;
-                      const shade = getEconomyShade(d.fuelEconomy, minEconomy, maxEconomy);
+                      const low = vehicle?.typical_economy_low ?? 7.0;
+                      const high = vehicle?.typical_economy_high ?? 9.0;
+                      const band = getEconomyBandColor(d.fuelEconomy, low, high);
+                      const shade = band.bg; // absolute band coloring per Typical Fuel Economy Range (ADR-0025)
+                      const dotColor = band.label === 'green' ? 'text-emerald-600' : band.label === 'amber' ? 'text-amber-600' : 'text-red-600';
                       return (
                         <div key={d.key} className="group relative flex flex-col items-center w-8 shrink-0">
-                          <span className="text-[11px] font-mono font-medium text-slate-600 mb-1">{d.fuelEconomy.toFixed(1)}</span>
+                          <span className={`text-[11px] font-mono font-medium mb-1 ${dotColor}`}>{d.fuelEconomy.toFixed(1)}</span>
                           <div className="w-5 bg-slate-100 rounded-t-sm h-48 flex items-end">
                             <div
-                              className={`w-full rounded-t-sm hover:brightness-110 transition-all ${shade}`}
+                              className={`w-full rounded-t-sm hover:brightness-110 transition-all ${shade} ${band.label !== 'green' ? 'ring-1 ring-inset ' + (band.label === 'amber' ? 'ring-amber-500' : 'ring-red-600') : ''}`}
                               style={{ height: `${Math.max(6, barPct)}%` }}
-                              title={`${d.date}: ${d.fuelEconomy.toFixed(1)} km/L`}
+                              title={`${d.date}: ${d.fuelEconomy.toFixed(1)} km/L (${band.label}) [${low.toFixed(1)}–${high.toFixed(1)} ±${(((low+high)/2)*0.2).toFixed(1)}]`}
                             />
                           </div>
                           <div className="pointer-events-none absolute bottom-full mb-6 hidden group-hover:flex flex-col bg-slate-900 text-white text-[10px] rounded py-1 px-2 z-30 shadow-lg whitespace-nowrap">
-                            <span className="font-bold text-emerald-400">{d.fuelEconomy.toFixed(1)} km/L</span>
+                            <span className={`font-bold ${band.label === 'green' ? 'text-emerald-400' : band.label === 'amber' ? 'text-amber-400' : 'text-red-400'}`}>{d.fuelEconomy.toFixed(1)} km/L · {band.label}</span>
                             <span>{d.date}</span>
                           </div>
                         </div>

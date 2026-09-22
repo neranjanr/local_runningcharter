@@ -2,6 +2,7 @@
  * Trip calculation engines - pure functions for odometer and time reciprocals.
  * Seams for TDD: odometer (Start + Distance = End), time (End - Duration = Start), day-of-week.
  */
+import { resolveSpeed, getStoredSpeedConfigSync } from './speedConfig';
 
 export function roundToOneDecimal(n: number): number {
   return Math.round(n * 10) / 10;
@@ -24,30 +25,38 @@ export function calculateStartKm(endKm: number, distance: number): number {
 }
 
 /**
- * Estimated Start Time engine (tiered by distance, ADR-0018):
- * Speed table: <10→15, <20→20, <40→25, ≤60→30, >60→35 km/h; ceiled to nearest 5 min.
+ * Estimated Start Time engine (configurable Speed Slab, ADR-0025):
+ * Default tiered <10→15 <20→20 <40→25 ≤60→30 >60→35, ceiled to 5 min.
+ * When Speed Slab config present (custom/traffic), resolves via `lib/speedConfig.ts`
+ * using stored `app.speedConfig` (mode + slabs + trafficMode). Transient Traffic Mode
+ * selects Traffic vs Light set; bulk import falls back to Traffic set.
  * Returns null for zero/negative distance or missing endTime.
  */
-export function getSpeedForDistance(distanceKm: number): number {
-  if (distanceKm < 10) return 15;
-  if (distanceKm < 20) return 20;
-  if (distanceKm < 40) return 25;
-  if (distanceKm <= 60) return 30;
-  return 35;
+export function getSpeedForDistance(distanceKm: number, trafficMode?: 'traffic' | 'light'): number {
+  try {
+    const cfg = getStoredSpeedConfigSync();
+    return resolveSpeed(distanceKm, cfg, trafficMode);
+  } catch {
+    if (distanceKm < 10) return 15;
+    if (distanceKm < 20) return 20;
+    if (distanceKm < 40) return 25;
+    if (distanceKm <= 60) return 30;
+    return 35;
+  }
 }
 
-export function calculateEstimatedMinutes(distanceKm: number): number | null {
+export function calculateEstimatedMinutes(distanceKm: number, trafficMode?: 'traffic' | 'light'): number | null {
   if (!distanceKm || distanceKm <= 0 || !Number.isFinite(distanceKm)) return null;
-  const speed = getSpeedForDistance(distanceKm);
+  const speed = getSpeedForDistance(distanceKm, trafficMode);
   const rawMinutes = (distanceKm / speed) * 60;
   const ceiled = Math.ceil(rawMinutes / 5) * 5;
   if (ceiled <= 0) return null;
   return ceiled;
 }
 
-export function estimateStartTime(endTime: string, distanceKm: number): string | null {
+export function estimateStartTime(endTime: string, distanceKm: number, trafficMode?: 'traffic' | 'light'): string | null {
   if (!endTime || !endTime.includes(':')) return null;
-  const minutes = calculateEstimatedMinutes(distanceKm);
+  const minutes = calculateEstimatedMinutes(distanceKm, trafficMode);
   if (minutes === null) return null;
   return calculateStartTimeFromEndAndDuration(endTime, minutes);
 }

@@ -39,6 +39,7 @@ export default function CalendarPage() {
   const [confirmClearDate, setConfirmClearDate] = useState<string | null>(null);
   const [holidayRefreshing, setHolidayRefreshing] = useState(false);
   const [holidayMsg, setHolidayMsg] = useState<string | null>(null);
+  const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [lv, tr] = await Promise.all([getLeaves(), getTrips()]);
@@ -88,6 +89,17 @@ export default function CalendarPage() {
       const amt = Number((t as unknown as Record<string, unknown>).fuel_pumped_amount ?? 0);
       if (amt > 0) m.set(t.date, (m.get(t.date) ?? 0) + amt);
     }
+    return m;
+  }, [trips]);
+  const tripsByDate = useMemo(() => {
+    const m = new Map<string, Trip[]>();
+    for (const t of trips) {
+      const arr = m.get(t.date) ?? [];
+      arr.push(t);
+      m.set(t.date, arr);
+    }
+    // sort each day's trips by start_km for stable order
+    for (const [, arr] of m) arr.sort((a, b) => a.start_km - b.start_km);
     return m;
   }, [trips]);
 
@@ -168,6 +180,14 @@ export default function CalendarPage() {
     };
   }, [contextMenu]);
 
+  // close expanded month on Escape
+  useEffect(() => {
+    if (!expandedMonth) return;
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setExpandedMonth(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expandedMonth]);
+
   const handleMarkLeave = async () => {
     if (!editingDate) return;
     const err = validateLeaveDate(editingDate);
@@ -243,15 +263,15 @@ export default function CalendarPage() {
         {holidayMsg && <div className={`px-4 py-2 rounded-lg text-sm ${holidayMsg.includes('failed') ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>{holidayMsg}</div>}
 
         {/* Legend */}
-        <div className="bg-paper-sheet rounded-xl border border-rule-line p-4 flex flex-wrap gap-3 text-xs">
+        <div className="bg-paper-sheet rounded-xl border border-rule-line p-4 flex flex-wrap gap-3 text-xs items-center">
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-slate-200 border border-slate-300"/> Sat/Sun (Bank)</span>
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-rose-100 border border-rose-300"/> Poya / Bank Holiday</span>
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-amber-100 border border-amber-400"/> Mercantile</span>
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-teal-600"/> Public Holiday</span>
           <span className="flex items-center gap-1"><span className="w-4 h-4 rounded bg-sky-500"/> Personal Leave</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-telemetry-cyan border"/> Official trip</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-orange-400 border border-white shadow-sm"/> Private trip</span>
-          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-telemetry-cyan border"/><span className="w-3 h-3 rounded-full bg-orange-400 border border-white shadow-sm -ml-1"/> Mixed</span>
+          <span className="flex items-center gap-1"><span className="px-1 py-0.5 rounded text-[9px] font-bold leading-none bg-black text-white">X1</span> Official (Xn)</span>
+          <span className="flex items-center gap-1"><span className="px-1 py-0.5 rounded text-[9px] font-bold leading-none bg-orange-500 text-white">X1</span> Private (Xm)</span>
+          <span className="flex items-center gap-1"><span className="px-1 py-0.5 rounded text-[9px] font-bold leading-none bg-black text-white">X1</span><span className="px-1 py-0.5 rounded text-[9px] font-bold leading-none bg-orange-500 text-white">X1</span> Mixed</span>
           <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 border border-white shadow-sm"/> Fuel pumped</span>
         </div>
 
@@ -317,9 +337,21 @@ export default function CalendarPage() {
                       for (let d=1; d<=dim; d++) cells.push(`${monthKey}-${String(d).padStart(2,'0')}`);
                       return (
                         <div key={monthKey} className="border border-rule-line rounded-lg overflow-hidden bg-paper-gutter">
-                          <div className="px-3 py-2 bg-slate-900 text-slate-50 flex items-center justify-between">
+                          <div className="px-3 py-2 bg-slate-900 text-slate-50 flex items-center justify-between gap-2">
                             <span className="font-semibold text-sm">{MONTH_NAMES[m-1]} {year}</span>
-                            <span className="text-[11px] opacity-75">{Array.from(tripDateSet).filter(d=>d.startsWith(monthKey)).length ? `${Array.from(tripDateSet).filter(d=>d.startsWith(monthKey)).length} trip-days` : ''}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="text-[11px] opacity-75">{Array.from(tripDateSet).filter(d=>d.startsWith(monthKey)).length ? `${Array.from(tripDateSet).filter(d=>d.startsWith(monthKey)).length} trip-days` : ''}</span>
+                              <button
+                                type="button"
+                                data-testid={`maximize-${monthKey}`}
+                                title={`Maximize ${MONTH_NAMES[m-1]} ${year}`}
+                                aria-label={`Maximize ${MONTH_NAMES[m-1]} ${year}`}
+                                onClick={(e) => { e.stopPropagation(); setExpandedMonth(monthKey); }}
+                                className="w-6 h-6 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold leading-none"
+                              >
+                                ⛶
+                              </button>
+                            </span>
                           </div>
                           <div className="grid grid-cols-7 gap-px bg-rule-line">
                             {WEEK_DAYS.map(w=> <div key={w} className="bg-paper-sheet text-center text-[11px] font-semibold py-1 text-on-surface-variant">{w.slice(0,2)}</div>)}
@@ -360,20 +392,15 @@ export default function CalendarPage() {
                                   {isLeave && <div className="text-[8px] leading-tight line-clamp-2 font-medium">{leaveMap.get(date)?.note ? leaveMap.get(date)!.note!.slice(0,18) : 'Leave'}</div>}
                                   {hasFuel && <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-white shadow-sm" title={`Pumped ${fuelAmt.toFixed(1)} L`} />}
                                   {hasTrip && (
-                                    <span className="absolute bottom-1 right-1 flex items-center">
-                                      {hasOfficial && hasPrivate ? (
-                                        <>
-                                          <span className="w-2 h-2 rounded-full bg-telemetry-cyan border border-white" title={`${typeCounts.official} Official`} />
-                                          <span className="w-2 h-2 rounded-full bg-orange-400 border border-white -ml-0.5 shadow-sm" title={`${typeCounts.private} Private`} />
-                                        </>
-                                      ) : hasPrivate ? (
-                                        <span className="w-2 h-2 rounded-full bg-orange-400 border border-white shadow-sm" title={`${typeCounts.private} Private`} />
-                                      ) : (
-                                        <span className="w-2 h-2 rounded-full bg-telemetry-cyan border border-white" title={`${typeCounts.official} Official`} />
-                                      )}
+                                    <span className="absolute bottom-0.5 right-0.5 flex items-center gap-0.5">
+                                      {hasOfficial ? (
+                                        <span className="px-1 py-0.5 rounded text-[8px] font-bold leading-none bg-black text-white" title={`${typeCounts.official} Official trip(s)`}>X{typeCounts.official}</span>
+                                      ) : null}
+                                      {hasPrivate ? (
+                                        <span className="px-1 py-0.5 rounded text-[8px] font-bold leading-none bg-orange-500 text-white" title={`${typeCounts.private} Private trip(s)`}>X{typeCounts.private}</span>
+                                      ) : null}
                                     </span>
                                   )}
-                                  {count>1 && hasTrip && <span className="absolute bottom-1 left-1 text-[9px] font-bold bg-slate-900 text-white rounded px-1">×{count}</span>}
                                 </button>
                               );
                             })}
@@ -387,6 +414,131 @@ export default function CalendarPage() {
             );
           })}
         </div>
+
+        {/* Expanded month popup */}
+        {expandedMonth && (() => {
+          const [ey, em] = expandedMonth.split('-').map(Number);
+          const dim = daysInMonth(ey, em);
+          const offset = firstWeekdayMon(ey, em);
+          const cells: (string|null)[] = Array(offset).fill(null);
+          for (let d=1; d<=dim; d++) cells.push(`${expandedMonth}-${String(d).padStart(2,'0')}`);
+          const monthTrips = trips.filter(t => t.date.startsWith(expandedMonth)).sort((a,b)=> a.date.localeCompare(b.date) || a.start_km - b.start_km);
+          const monthFuelTotal = monthTrips.reduce((s,t)=> s + (Number((t as unknown as Record<string, unknown>).fuel_pumped_amount) || 0), 0);
+          const monthKm = monthTrips.reduce((s,t)=> s + (Number(t.trip_distance)||0), 0);
+          return (
+            <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-3 sm:p-4" onClick={()=>setExpandedMonth(null)} data-testid="expanded-month-popup">
+              <div className="bg-paper-sheet rounded-xl border border-rule-line w-full max-w-6xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden" onClick={e=>e.stopPropagation()}>
+                <div className="px-4 py-3 bg-slate-900 text-slate-50 flex items-center justify-between shrink-0">
+                  <div>
+                    <h3 className="font-bold text-sm">{MONTH_NAMES[em-1]} {ey} — Expanded</h3>
+                    <p className="text-[11px] opacity-75">{monthTrips.length} trip(s) · {monthKm} km · {monthFuelTotal > 0 ? `Fuel ${monthFuelTotal.toFixed(1)} L · ` : ''}{Array.from(tripDateSet).filter(d=>d.startsWith(expandedMonth!)).length} trip-days</p>
+                  </div>
+                  <button onClick={()=>setExpandedMonth(null)} data-testid="expanded-month-close" className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm" aria-label="Close">✕</button>
+                </div>
+                <div className="overflow-auto flex-1 p-3 sm:p-4 space-y-4 bg-paper-gutter">
+                  <div className="border border-rule-line rounded-lg overflow-hidden bg-paper-gutter">
+                    <div className="grid grid-cols-7 gap-px bg-rule-line">
+                      {WEEK_DAYS.map(w=> <div key={w} className="bg-paper-sheet text-center text-[11px] font-semibold py-1.5 text-on-surface-variant">{w}</div>)}
+                      {cells.map((date, idx) => {
+                        if (!date) return <div key={`exp-empty-${idx}`} className="bg-paper-gutter min-h-[108px]"/>;
+                        const info = getDayTypeInfo(date, leaveSet);
+                        const isLeave = leaveSet.has(date);
+                        const tripsForDate = tripsByDate.get(date) ?? [];
+                        const hasTrip = tripsForDate.length > 0;
+                        const typeCounts = tripTypeCountsByDate.get(date) ?? { official: 0, private: 0 };
+                        const hasOfficial = typeCounts.official > 0;
+                        const hasPrivate = typeCounts.private > 0;
+                        const holiday = getHoliday(date);
+                        let bg = 'bg-paper-sheet';
+                        let border = 'border-transparent';
+                        if (isLeave) { bg='bg-sky-500 text-white'; border='border-sky-600'; }
+                        else if (holiday?.kinds.includes('M')) { bg='bg-amber-100'; border='border-amber-400'; }
+                        else if (holiday?.kinds.includes('P') || holiday?.kinds.includes('B')) { bg='bg-rose-50'; border='border-rose-300'; }
+                        else if (isWeekend(date)) { bg='bg-slate-100'; border='border-slate-200'; }
+                        return (
+                          <button
+                            key={date}
+                            onClick={()=>handleCellClick(date)}
+                            onContextMenu={(e)=>handleCellContextMenu(e, date)}
+                            title={`${date} ${info.dayOfWeek}${holiday? ` — ${holiday.name} (${holiday.kinds.join('/')})`:''}${isLeave? ` — Leave: ${leaveMap.get(date)?.note ?? ''}`:''}${hasTrip? ` — ${tripsForDate.length} trip(s)`:''} — Right-click: Show Trip Details`}
+                            className={`relative min-h-[108px] p-1.5 text-left border ${border} ${bg} hover:brightness-95 transition flex flex-col gap-1 ${editingDate===date ? 'ring-2 ring-telemetry-cyan' : ''}`}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-xs font-bold">{date.slice(8,10)}</span>
+                              {hasTrip && (
+                                <span className="flex items-center gap-0.5 shrink-0">
+                                  {hasOfficial ? <span className="px-1 py-0.5 rounded text-[7px] font-bold leading-none bg-black text-white">X{typeCounts.official}</span> : null}
+                                  {hasPrivate ? <span className="px-1 py-0.5 rounded text-[7px] font-bold leading-none bg-orange-500 text-white">X{typeCounts.private}</span> : null}
+                                </span>
+                              )}
+                            </div>
+                            {holiday && !isLeave && <div className="text-[8px] leading-tight line-clamp-1 font-medium text-rose-700">{holiday.name}</div>}
+                            {isLeave && <div className="text-[8px] leading-tight line-clamp-1 font-medium">{leaveMap.get(date)?.note ? leaveMap.get(date)!.note!.slice(0,20) : 'Leave'}</div>}
+                            {hasTrip && (
+                              <div className="flex flex-col gap-0.5 mt-0.5">
+                                {tripsForDate.map(t => {
+                                  const fuelAmt = Number((t as unknown as Record<string, unknown>).fuel_pumped_amount ?? 0);
+                                  const orderNo = (t as unknown as Record<string, unknown>).fuel_order_no as string | undefined;
+                                  const isPrivate = t.trip_type === 'Private';
+                                  return (
+                                    <div key={t.id} className={`text-[8px] leading-tight rounded px-1 py-0.5 border flex items-center gap-1 ${isLeave ? 'bg-white/20 border-white/30 text-white' : 'bg-white border-slate-200 text-slate-700'}`} title={`${t.places_visited} — ${t.trip_distance} km${fuelAmt>0 ? ` — ${fuelAmt} L ${orderNo ?? ''}` : ''} — ${t.trip_type}`}>
+                                      {isPrivate && <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" title="Private" />}
+                                      <span className="font-semibold shrink-0">{t.trip_distance}km</span><span className="truncate">· {t.places_visited}</span>
+                                      {fuelAmt > 0 && <span className="ml-1 font-bold text-red-600 shrink-0">⛽ {fuelAmt}L{orderNo ? ` ${orderNo}` : ''}</span>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {hasTrip && tripsForDate.some(t=> Number((t as unknown as Record<string, unknown>).fuel_pumped_amount ?? 0) > 0) && (
+                              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 border border-white shadow-sm" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {monthTrips.length > 0 ? (
+                    <div className="bg-paper-sheet rounded-lg border border-rule-line overflow-hidden">
+                      <div className="px-3 py-2 bg-slate-900 text-slate-50 flex items-center justify-between">
+                        <span className="font-semibold text-xs">Trip Summary — {MONTH_NAMES[em-1]} {ey}</span>
+                        <span className="text-[11px] opacity-75">{monthTrips.length} trips · {monthKm} km</span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[28vh] overflow-auto">
+                        <table className="w-full text-xs">
+                          <thead><tr className="text-left text-on-surface-variant border-b bg-paper-gutter sticky top-0">
+                            <th className="px-2 py-1.5">Date</th><th className="px-2 py-1.5">Day</th><th className="px-2 py-1.5">Route</th><th className="px-2 py-1.5 text-right">Km</th><th className="px-2 py-1.5">Fuel</th><th className="px-2 py-1.5">Order No</th><th className="px-2 py-1.5">Type</th>
+                          </tr></thead>
+                          <tbody>
+                            {monthTrips.map(t=> {
+                              const fuelAmt = Number((t as unknown as Record<string, unknown>).fuel_pumped_amount ?? 0);
+                              const orderNo = (t as unknown as Record<string, unknown>).fuel_order_no as string | undefined;
+                              const info = getDayTypeInfo(t.date, leaveSet);
+                              return (
+                                <tr key={t.id} className="border-b border-rule-line/50 hover:bg-paper-gutter">
+                                  <td className="px-2 py-1 font-mono whitespace-nowrap">{t.date}</td>
+                                  <td className="px-2 py-1 whitespace-nowrap">{info.dayOfWeek}</td>
+                                  <td className="px-2 py-1 max-w-[260px] truncate" title={t.places_visited}>{t.trip_type==='Private' ? <><span className="w-1.5 h-1.5 rounded-full bg-orange-500 inline-block mr-1 align-middle" title="Private" />{t.places_visited}</> : t.places_visited}</td>
+                                  <td className="px-2 py-1 text-right font-mono">{t.trip_distance}</td>
+                                  <td className="px-2 py-1 whitespace-nowrap">{fuelAmt > 0 ? `${fuelAmt} L` : '—'}</td>
+                                  <td className="px-2 py-1 whitespace-nowrap">{fuelAmt > 0 && orderNo ? orderNo : '—'}</td>
+                                  <td className="px-2 py-1"><span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${t.trip_type==='Private' ? 'bg-orange-500 text-white' : 'bg-black text-white'}`}>{t.trip_type==='Private' ? <><span className="w-1.5 h-1.5 rounded-full bg-white/90" />{t.trip_type}</> : t.trip_type}</span></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-on-surface-variant text-center py-4 border border-dashed border-rule-line rounded-lg bg-paper-sheet">No trips in {MONTH_NAMES[em-1]} {ey}</div>
+                  )}
+                  <p className="text-[11px] text-on-surface-variant">Right-click any date with trips in the expanded grid to Show Trip Details → All Trips. Click a date to mark leave.</p>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Leave History filtered by year */}
         <div className="bg-paper-sheet rounded-xl border border-rule-line p-4">

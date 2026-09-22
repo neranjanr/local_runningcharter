@@ -10,6 +10,7 @@ export default function VehicleProfileForm() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     getVehicleProfile().then((data) => {
@@ -23,7 +24,7 @@ export default function VehicleProfileForm() {
     const { name, value } = e.target;
     setVehicle({
       ...vehicle,
-      [name]: ['tank_capacity', 'current_odometer', 'current_fuel_level'].includes(name)
+      [name]: ['tank_capacity', 'current_odometer', 'current_fuel_level', 'typical_economy_low', 'typical_economy_high'].includes(name)
         ? parseFloat(value) || 0
         : value,
     });
@@ -32,8 +33,16 @@ export default function VehicleProfileForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vehicle) return;
+    // Validate Typical Economy Range
+    const low = Number(vehicle.typical_economy_low);
+    const high = Number(vehicle.typical_economy_high);
+    if (isNaN(low) || isNaN(high) || low < 0.1 || high > 50 || low >= high) {
+      setErrorMessage('Typical economy range invalid: require 0.1 ≤ low < high ≤ 50 (e.g. 7.0 – 9.0)');
+      return;
+    }
     setSaving(true);
     setSuccessMessage('');
+    setErrorMessage('');
     try {
       const previous = await getVehicleProfile();
       const updated = await saveVehicleProfile(vehicle);
@@ -78,6 +87,11 @@ export default function VehicleProfileForm() {
       {successMessage && (
         <div className="mb-6 p-4 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-lg text-sm font-medium">
           {successMessage}
+        </div>
+      )}
+      {errorMessage && (
+        <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg text-sm font-medium">
+          {errorMessage}
         </div>
       )}
 
@@ -190,6 +204,31 @@ export default function VehicleProfileForm() {
               placeholder="CAB-1234"
               className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none font-mono"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Typical Economy Low (km/L)</label>
+            <input
+              type="number"
+              step="0.1"
+              name="typical_economy_low"
+              value={vehicle.typical_economy_low ?? 7.0}
+              onChange={handleChange}
+              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Typical Economy High (km/L)</label>
+            <input
+              type="number"
+              step="0.1"
+              name="typical_economy_high"
+              value={vehicle.typical_economy_high ?? 9.0}
+              onChange={handleChange}
+              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none font-mono"
+            />
+            <p className="text-[11px] text-zinc-500 mt-1">Green in graph if inside, Amber within 20% margin outside, Red beyond</p>
           </div>
         </div>
 

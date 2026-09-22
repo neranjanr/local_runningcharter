@@ -116,7 +116,21 @@ db.exec(`
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS app_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+// Add Typical Fuel Economy Range columns to vehicles (ADR-0025) and speed_config column if missing
+try {
+  const cols = db.prepare("PRAGMA table_info(vehicles)").all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('typical_economy_low')) db.exec("ALTER TABLE vehicles ADD COLUMN typical_economy_low REAL DEFAULT 7.0");
+  if (!names.has('typical_economy_high')) db.exec("ALTER TABLE vehicles ADD COLUMN typical_economy_high REAL DEFAULT 9.0");
+} catch {}
 
 // Seed or upsert default super admin
 db.prepare(`

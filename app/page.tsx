@@ -14,12 +14,14 @@ import { FuelInSummary } from '@/components/dashboard/FuelInSummary';
 import { FuelEconomyGraph } from '@/components/dashboard/FuelEconomyGraph';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ContinuityAlertBanner } from '@/components/ContinuityAlertBanner';
+import { FeatureInsightsDialog } from '@/components/dashboard/FeatureInsightsDialog';
 
 export default function DashboardPage() {
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [pages, setPages] = useState<BookPage[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showInsights, setShowInsights] = useState(false);
   const refresh = useCallback(() => {
     Promise.all([getVehicleProfile(), getPages(), getTrips()]).then(([v, p, t]) => {
       setVehicle(v);
@@ -86,6 +88,14 @@ export default function DashboardPage() {
             <p className="text-sm text-on-surface-variant">Summary metrics, monthly breakdown, page-wise visualization, and master trip ledger.</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowInsights(true)}
+              data-testid="dashboard-insights-btn"
+              className="px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-50 flex items-center gap-1.5"
+              title="Feature Insights — what this app does for you"
+            >
+              <span>✨</span> Insights
+            </button>
             <Link href="/trips/new" className="px-4 py-2 bg-slate-surface text-on-primary rounded-lg text-sm font-semibold hover:bg-primary transition-colors">
               + New Trip
             </Link>
@@ -101,7 +111,7 @@ export default function DashboardPage() {
       {hasData && (
         <div className="grid grid-cols-1 lg:grid-cols-10 gap-4">
           <div className="lg:col-span-7 min-w-0">
-            <FuelEconomyGraph trips={trips} pages={pages} />
+            <FuelEconomyGraph trips={trips} pages={pages} vehicle={vehicle} />
           </div>
           <div className="lg:col-span-3 min-w-0">
             <FuelInSummary trips={trips} />
@@ -127,6 +137,7 @@ export default function DashboardPage() {
         </div>
       )}
       </div>
+      <FeatureInsightsDialog open={showInsights} onClose={() => setShowInsights(false)} />
     </ProtectedRoute>
   );
 }

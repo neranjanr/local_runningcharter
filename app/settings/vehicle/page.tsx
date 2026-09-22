@@ -1,6 +1,7 @@
 'use client';
 
 import VehicleProfileForm from '@/components/VehicleProfileForm';
+import SpeedSlabSettings from '@/components/SpeedSlabSettings';
 import Link from 'next/link';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 
@@ -17,7 +18,10 @@ export default function VehicleSettingsPage() {
             ← Back to Dashboard
           </Link>
         </div>
-        <VehicleProfileForm />
+        <div className="max-w-3xl mx-auto space-y-6">
+          <SpeedSlabSettings />
+          <VehicleProfileForm />
+        </div>
       </div>
     </ProtectedRoute>
   );

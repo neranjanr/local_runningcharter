@@ -35,6 +35,35 @@ function loadScriptUrl() {
   return '';
 }
 
+function loadSpeedConfig() {
+  // Try DB app_config first, then config/speed.local.json fallback
+  try {
+    const dbPath = path.join(repoRoot, 'runningcharter.db');
+    if (fs.existsSync(dbPath)) {
+      // Lazy load better-sqlite3 if available
+      try {
+        const Database = require('better-sqlite3');
+        const db = new Database(dbPath, { readonly: true });
+        const row = db.prepare("SELECT value FROM app_config WHERE key = 'speedConfig'").get();
+        db.close();
+        if (row && row.value) {
+          const parsed = JSON.parse(row.value);
+          if (parsed && parsed.mode) return JSON.stringify(parsed);
+        }
+      } catch {}
+    }
+  } catch {}
+  try {
+    const p = path.join(repoRoot, 'config', 'speed.local.json');
+    if (fs.existsSync(p)) {
+      const raw = fs.readFileSync(p, 'utf8');
+      const j = JSON.parse(raw);
+      if (j && j.mode) return JSON.stringify(j);
+    }
+  } catch {}
+  return JSON.stringify({ mode: 'default' });
+}
+
 function build() {
   if (!fs.existsSync(templatePath)) {
     console.error(`[build-mobile] Template not found: ${templatePath}`);
@@ -42,6 +71,7 @@ function build() {
   }
   const template = fs.readFileSync(templatePath, 'utf8');
   const scriptUrl = loadScriptUrl();
+  const speedConfigJson = loadSpeedConfig();
 
   // Replace the public placeholder: const SCRIPT_URL_DEFAULT = "";
   // Handle both "" and existing URL forms
@@ -55,6 +85,23 @@ function build() {
     process.exit(1);
   }
 
+  // Inject SPEED_CONFIG (ADR-0025)
+  const speedInjected = `const SPEED_CONFIG = ${speedConfigJson};`;
+  if (output.includes('const SPEED_CONFIG =')) {
+    output = output.replace(/const SPEED_CONFIG\s*=\s*\{[^;]*\};/, speedInjected);
+  } else {
+    output = output.replace('const SCRIPT_URL_DEFAULT =', `${speedInjected}\nconst SCRIPT_URL_DEFAULT =`);
+  }
+
+  // Also ensure template source gets updated for dev (in-place patch of mobile_app_public.html after build)
+  try {
+    let src = fs.readFileSync(templatePath, 'utf8');
+    if (src.includes('const SPEED_CONFIG =')) {
+      const srcPatched = src.replace(/const SPEED_CONFIG\s*=\s*\{[^;]*\};/, speedInjected);
+      if (srcPatched !== src) fs.writeFileSync(templatePath, srcPatched, 'utf8');
+    }
+  } catch {}
+
   // Also patch the hint comment to reflect private generation
   output = output.replace(
     'Public template — no secret; generate private file via npm run build:mobile (reads config/sheet.local.json)',
@@ -64,6 +111,7 @@ function build() {
   fs.writeFileSync(outputPath, output, 'utf8');
   console.log(`[build-mobile] Wrote ${path.relative(repoRoot, outputPath)}`);
   console.log(`[build-mobile]   scriptUrl: ${scriptUrl.slice(0, 60)}...`);
+  console.log(`[build-mobile]   speedConfig: ${speedConfigJson.slice(0, 80)}...`);
   console.log(`[build-mobile]   Copy this single file to phone → open in Chrome → Add to Home Screen. No Settings paste needed.`);
 }
 

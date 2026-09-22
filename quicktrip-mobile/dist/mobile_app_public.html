@@ -72,6 +72,13 @@ small{font-size:11px;color:#64748b}
       </div>
     </div>
 
+    <div id="trafficModeGroup" style="display:none;gap:8px;align-items:center;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;margin-bottom:6px">
+      <span style="font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Traffic Mode</span>
+      <label style="font-weight:700;display:flex;gap:4px;align-items:center;font-size:13px"><input type="radio" name="trafficMode" value="traffic" checked/> Traffic</label>
+      <label style="font-weight:700;display:flex;gap:4px;align-items:center;font-size:13px"><input type="radio" name="trafficMode" value="light"/> Light</label>
+      <small style="margin-left:auto">picks slab set</small>
+    </div>
+
     <div class="group">
       <h3>Odometer — Start + Distance = End (Integer KM)</h3>
       <div class="grid3">
@@ -84,7 +91,7 @@ small{font-size:11px;color:#64748b}
     <div class="group">
       <h3>Time — End − Duration = Start • Estimated Start</h3>
       <div class="grid3">
-        <div><label>Start <span style="color:#94a3b8;font-weight:400">Opt</span></label><div style="display:flex;gap:6px"><input id="startTime" type="time" style="flex:1"/><button type="button" id="autoBtn" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-weight:800;font-size:11px">AUTO</button></div><div class="hint">Auto: End − (Distance/speed) tiered &lt;10→15 &lt;20→20 &lt;40→25 ≤60→30 &gt;60→35 ceil 5 min</div></div>
+        <div><label>Start <span style="color:#94a3b8;font-weight:400">Opt</span></label><div style="display:flex;gap:6px"><input id="startTime" type="time" style="flex:1"/><button type="button" id="autoBtn" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-weight:800;font-size:11px">AUTO</button></div><div style="display:flex;gap:4px;margin-top:6px"><button type="button" id="nudgeM10" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">−10</button><button type="button" id="nudgeM5" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">−5</button><button type="button" id="nudgeP5" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">+5</button><button type="button" id="nudgeP10" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">+10</button></div><div class="hint">Auto: End − (Distance/speed) slabs ceil 5 min</div></div>
         <div><label>End Time *</label><input id="endTime" type="time" required/><div class="hint" style="color:#0ea5e9;font-weight:700">defaults to now</div></div>
         <div><label>Duration HH:MM</label><input id="duration" type="text" placeholder="00:55" inputmode="numeric"/><div class="hint">Enter to compute Start</div></div>
       </div>
@@ -120,7 +127,9 @@ small{font-size:11px;color:#64748b}
 <script>
 // ====== CONFIG — paste your Script URL here to hard-code (skips Settings) ======
 const SCRIPT_URL_DEFAULT = ""; // public template — no secret; generate private file via start-service.ps1 / npm run build:mobile (reads PS1 $ScriptUrl or config/sheet.local.json)
+const SPEED_CONFIG = {"mode":"default"}; // INJECTED by npm run build:mobile — do not edit manually (speed slabs from Settings)
 // ============================================================================
+let trafficMode = 'traffic'; // transient helper when SPEED_CONFIG.mode === 'traffic'
 
 const QUEUE_KEY="mobile.queue";
 const $=id=>document.getElementById(id);
@@ -139,9 +148,10 @@ function calcDurationMin(s,e){const a=parseTimeToMin(s),b=parseTimeToMin(e);let 
 function calcStartFromEndDur(end,dur){return minToHM(parseTimeToMin(end)-dur)}
 function parseDurToMin(s){if(!s||!s.trim()) return 0;const t=s.trim();if(t.includes(":")){const [h,m]=t.split(":").map(x=>parseInt(x,10)||0);return h*60+m}const n=Number(t);return isNaN(n)?0:Math.round(n)}
 function formatDur(min){min=Math.max(0,min);return `${pad(Math.floor(min/60))}:${pad(min%60)}`}
-function getSpeedForDistance(distanceKm){ if(distanceKm < 10) return 15; if(distanceKm < 20) return 20; if(distanceKm < 40) return 25; if(distanceKm <= 60) return 30; return 35; }
-function estMinutes(dist){if(!dist||dist<=0||!isFinite(dist)) return null;const speed=getSpeedForDistance(dist);const raw=(dist/speed)*60;const ceiled=Math.ceil(raw/5)*5;return ceiled>0?ceiled:null}
-function estStart(end,dist){const mins=estMinutes(dist);if(mins==null||!end||!end.includes(":")) return null;return calcStartFromEndDur(end,mins)}
+function getSpeedForSlabs(distanceKm, slabs){ for(const s of slabs){ if(s.upper==null) return s.speed; if(distanceKm < s.upper) return s.speed; } return slabs[slabs.length-1].speed; }
+function getSpeedForDistance(distanceKm, mode){ const m = mode || trafficMode; const cfg = (typeof SPEED_CONFIG !== 'undefined' ? SPEED_CONFIG : {mode:'default'}); if(!distanceKm || distanceKm<=0 || !isFinite(distanceKm)) return 15; if(cfg.mode==='default'){ if(distanceKm < 10) return 15; if(distanceKm < 20) return 20; if(distanceKm < 40) return 25; if(distanceKm <= 60) return 30; return 35; } if(cfg.mode==='custom'){ return getSpeedForSlabs(distanceKm, cfg.slabs); } if(cfg.mode==='traffic'){ const set = m==='light' ? cfg.light : cfg.traffic; return getSpeedForSlabs(distanceKm, set); } return 15; }
+function estMinutes(dist, mode){if(!dist||dist<=0||!isFinite(dist)) return null;const speed=getSpeedForDistance(dist, mode);const raw=(dist/speed)*60;const ceiled=Math.ceil(raw/5)*5;return ceiled>0?ceiled:null}
+function estStart(end,dist,mode){const mins=estMinutes(dist, mode);if(mins==null||!end||!end.includes(":")) return null;return calcStartFromEndDur(end,mins)}
 
 function getScriptUrl(){
   const ls=localStorage.getItem("mobile.scriptUrl")||"";
@@ -210,6 +220,13 @@ async function flushQueue(){
   setQueue(remain);
   if(flushed>0){msg("ok",`Synced ${flushed} queued trip(s)`);fetchLast10()} else msg("err","Flush failed — still offline or Script error");
 }
+
+// traffic mode + nudge helpers (ADR-0025)
+function applySpeedConfigVisibility(){ try{ if(typeof SPEED_CONFIG!=='undefined' && SPEED_CONFIG.mode==='traffic'){ $("trafficModeGroup").style.display='flex'; } else { $("trafficModeGroup").style.display='none'; } } catch{} }
+function nudgeStartMobile(delta){ const v=$("startTime").value; if(!v||!v.includes(":")) return; const cur=parseTimeToMin(v); const nxt=minToHM(cur+delta); $("startTime").value=nxt; const et=$("endTime").value; if(et) $("duration").value=formatDur(calcDurationMin(nxt,et)); }
+applySpeedConfigVisibility();
+document.querySelectorAll('input[name="trafficMode"]').forEach(r=>r.addEventListener('change',e=>{ trafficMode=e.target.value; }));
+["nudgeM10","nudgeM5","nudgeP5","nudgeP10"].forEach(id=>{ const el=$(id); if(!el) return; const delta = id==="nudgeM10"?-10:id==="nudgeM5"?-5:id==="nudgeP5"?5:10; el.onclick=()=>nudgeStartMobile(delta); });
 
 // events
 $("settingsBtn").onclick=()=>$("settingsPanel").classList.toggle("open");

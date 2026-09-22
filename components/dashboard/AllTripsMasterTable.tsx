@@ -86,6 +86,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null);
   const menuButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  // Row right-click Private/Official toggle
+  const [rowContextMenu, setRowContextMenu] = useState<{ tripId: string; x: number; y: number } | null>(null);
+  const [confirmToggle, setConfirmToggle] = useState<Trip | null>(null);
   const [gapFillTarget, setGapFillTarget] = useState<GapPair | null>(null);
   const [gapFillForm, setGapFillForm] = useState<{ date: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [gapFillError, setGapFillError] = useState<string | null>(null);
@@ -794,6 +797,45 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   }, [openMenuId]);
 
   const closeMenu = useCallback(() => { setOpenMenuId(null); setMenuAnchorRect(null); }, []);
+  const closeRowMenu = useCallback(() => setRowContextMenu(null), []);
+  const handleRowContextMenu = useCallback((e: React.MouseEvent, trip: Trip) => {
+    e.preventDefault();
+    closeMenu();
+    setRowContextMenu({ tripId: trip.id, x: e.clientX, y: e.clientY });
+  }, [closeMenu]);
+
+  const handleToggleTripType = useCallback((trip: Trip) => {
+    setRowContextMenu(null);
+    setConfirmToggle(trip);
+  }, []);
+
+  const doToggleTripType = useCallback(async () => {
+    if (!confirmToggle) return;
+    const newType = confirmToggle.trip_type === 'Private' ? 'Official' : 'Private';
+    const tripId = confirmToggle.id;
+    setConfirmToggle(null);
+    preserveTableScroll();
+    await updateTrip(tripId, { trip_type: newType });
+    setFocusedTripId(tripId);
+    setTimeout(() => setFocusedTripId(null), 2200);
+    notifyDataChanged();
+    setImportMsg(`Trip on ${confirmToggle.date} marked as ${newType}`);
+  }, [confirmToggle, preserveTableScroll, notifyDataChanged]);
+
+  // Close row context menu on scroll/resize/Escape/click
+  useEffect(() => {
+    if (!rowContextMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRowMenu(); };
+    const onScroll = () => closeRowMenu();
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [rowContextMenu, closeRowMenu]);
 
   // Helper: compact Day badge per spec - Weekday empty, Sat/Sun RED, Poya YELLOW, MH AMBER, PH BLUE, BH RED, HOL SLATE, Leave ORANGE
   const getDayBadge = (date: string) => {
@@ -1565,11 +1607,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 const isEarliest = earliestDate === t.date;
                 const dayInfo = getDayTypeInfo(t.date, leaveDates);
                 const holiday = getHoliday(t.date);
-                const tripName = (t.places_visited ?? '').trim().toLowerCase();
-                const isDummyOrPrivateTrip = tripName === 'dummy' || tripName === 'private';
                 const isPrivateType = t.trip_type === 'Private';
-                const shouldOrange = isDummyOrPrivateTrip || isPrivateType;
-                const rowBg = shouldOrange ? 'bg-orange-200' : isAltDay ? 'bg-slate-200' : 'bg-white';
+                const isBlueDesc = /\b(dummy|bus|private)\b/i.test(t.places_visited ?? '');
+                const rowBg = isBlueDesc ? 'bg-blue-100' : isAltDay ? 'bg-slate-200' : 'bg-white';
                 const succGap = successorGapMap.get(t.id);
                 const predGap = predecessorGapMap.get(t.id);
                 const isFocused = focusedTripId === t.id;
@@ -1580,7 +1620,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   key={t.id}
                   data-testid={`trip-row-${t.id}`}
                   ref={(el) => { if (el) rowRefs.current.set(t.id, el); else rowRefs.current.delete(t.id); }}
-                  className={`transition-colors border-b border-rule-line/60 ${isFocused ? 'ring-2 ring-telemetry-cyan bg-cyan-50' : isJustImported ? 'bg-cyan-50' : rowBg} ${isFuelPumped ? 'text-blue-900' : ''} ${shouldOrange && !isFocused && !isJustImported ? '' : 'hover:bg-amber-50/40'}`}
+                  onContextMenu={(e) => handleRowContextMenu(e, t)}
+                  className={`transition-colors border-b border-rule-line/60 ${isFocused ? 'ring-2 ring-telemetry-cyan bg-cyan-50' : isJustImported ? 'bg-cyan-50' : rowBg} ${isFuelPumped ? 'text-blue-900' : ''} hover:bg-amber-50/40`}
                 >
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
                     <span className="inline-flex items-center justify-center gap-0.5">
@@ -1627,8 +1668,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-right font-odometer-sm text-xs font-bold text-slate-surface border-r border-rule-line">
                     {Math.round(t.trip_distance).toLocaleString()}
                   </td>
-                  <td className="py-2 px-2 max-w-[6%] w-[6%] border-r border-rule-line truncate text-xs" title={t.places_visited}>
-                    {renderEditableCell(t, 'places_visited', t.places_visited)}
+                  <td className="py-2 px-2 max-w-[6%] w-[6%] border-r border-rule-line text-xs" title={t.places_visited}>
+                    <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
+                      <span className="truncate min-w-0">{renderEditableCell(t, 'places_visited', t.places_visited)}</span>
+                      {isPrivateType && <span className="text-red-600 font-bold text-[10px] leading-none shrink-0" data-testid={`prv-tag-${t.id}`}>[PRV]</span>}
+                    </span>
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '-', 'right')}
@@ -1749,6 +1793,64 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           })()}
         </>,
         document.body
+      )}
+
+      {/* Row right-click: Private/Official toggle */}
+      {rowContextMenu && typeof document !== 'undefined' && createPortal(
+        <>
+          <div className="fixed inset-0 z-30" onClick={closeRowMenu} aria-hidden />
+          {(() => {
+            const trip = filtered.find(x => x.id === rowContextMenu.tripId) ?? sortedAll.find(x => x.id === rowContextMenu.tripId);
+            if (!trip) return null;
+            const isPrivate = trip.trip_type === 'Private';
+            const label = isPrivate ? 'Mark as Official Trip' : 'Mark as Private Trip';
+            const menuW = 200;
+            const menuH = 36;
+            const gap = 4;
+            const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
+            const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+            let top = rowContextMenu.y + gap;
+            let left = rowContextMenu.x + gap;
+            if (left + menuW > vw - 8) left = vw - menuW - 8;
+            if (top + menuH > vh - 8) top = rowContextMenu.y - menuH - gap;
+            if (top < 8) top = 8;
+            if (left < 8) left = 8;
+            return (
+              <div
+                data-testid={`row-context-menu-${rowContextMenu.tripId}`}
+                className="fixed z-40 bg-paper-sheet border border-rule-line rounded-lg shadow-xl py-1 w-52 text-left"
+                style={{ top, left }}
+                onClick={e => e.stopPropagation()}
+              >
+                <button
+                  data-testid={`toggle-trip-type-${rowContextMenu.tripId}`}
+                  onClick={() => handleToggleTripType(trip)}
+                  className={`w-full text-left px-3 py-2 text-xs font-semibold hover:bg-paper-gutter flex items-center gap-2 ${isPrivate ? 'text-slate-700' : 'text-orange-700'}`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isPrivate ? 'bg-slate-700' : 'bg-orange-500'}`} />
+                  {label}
+                </button>
+              </div>
+            );
+          })()}
+        </>,
+        document.body
+      )}
+
+      {/* Confirm Private/Official toggle */}
+      {confirmToggle && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="confirm-toggle-dialog" onClick={() => setConfirmToggle(null)}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-2">Confirm Change</h3>
+            <p className="text-sm text-on-surface-variant mb-4">
+              Mark trip on <span className="font-semibold text-on-surface">{confirmToggle.date}</span> ({Math.round(confirmToggle.start_km)}–{Math.round(confirmToggle.end_km)} • {confirmToggle.places_visited}) as <span className="font-bold">{confirmToggle.trip_type === 'Private' ? 'Official' : 'Private'}</span>? Current: <span className={`px-1.5 py-0.5 rounded text-xs font-bold ${confirmToggle.trip_type === 'Private' ? 'bg-orange-200 text-orange-800' : 'bg-slate-200 text-slate-700'}`}>{confirmToggle.trip_type}</span>
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmToggle(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg transition-colors" data-testid="confirm-toggle-cancel">Cancel</button>
+              <button onClick={doToggleTripType} className={`px-4 py-2 text-sm font-semibold text-white rounded-lg transition-colors ${confirmToggle.trip_type === 'Private' ? 'bg-slate-700 hover:bg-slate-800' : 'bg-orange-600 hover:bg-orange-700'}`} data-testid="confirm-toggle-ok">{confirmToggle.trip_type === 'Private' ? 'Mark as Official' : 'Mark as Private'}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Confirmation Dialog for inline edit */}
