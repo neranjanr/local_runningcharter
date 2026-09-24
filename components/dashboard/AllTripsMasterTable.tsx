@@ -52,7 +52,7 @@ interface Props {
   initialFocusId?: string | null;
 }
 
-type EditableField = 'start_km' | 'end_km' | 'start_time' | 'end_time' | 'trip_type' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited' | 'fuel_position' | 'in_tank' | 'fuel_economy';
+  type EditableField = 'date' | 'start_km' | 'end_km' | 'start_time' | 'end_time' | 'trip_type' | 'fuel_pumped_amount' | 'fuel_order_no' | 'places_visited' | 'fuel_position' | 'in_tank' | 'fuel_economy';
 
 interface EditState {
   tripId: string;
@@ -495,7 +495,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     }
 
     const fields: TripUpdateFields = {};
-    if (field === 'start_km' || field === 'end_km') {
+    if (field === 'date') {
+      const v = value.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) { cancelEdit(); return; }
+      const idx = sortedIdToIndex.get(tripId) ?? -1;
+      const pred = idx > 0 ? sortedAll[idx-1] : null;
+      const succ = idx >=0 && idx < sortedAll.length-1 ? sortedAll[idx+1] : null;
+      const min = pred?.date ?? null;
+      const max = succ?.date ?? null;
+      if (min && v < min) { setImportMsg(`Date cannot be before ${min} (predecessor #${globalSeqMap.get(pred!.id) ?? ''} — ${pred!.date}) — ODO order cannot be changed. Allowed ${min} to ${max ?? v}`); cancelEdit(); return; }
+      if (max && v > max) { setImportMsg(`Date cannot be after ${max} (successor #${globalSeqMap.get(succ!.id) ?? ''} — ${succ!.date}) — ODO order cannot be changed. Allowed ${min ?? v} to ${max}`); cancelEdit(); return; }
+      if (v === trip.date) { cancelEdit(); return; }
+      (fields as Record<string,string>).date = v;
+    } else if (field === 'start_km' || field === 'end_km') {
       const num = parseInt(value, 10);
       if (isNaN(num) || num < 0) { cancelEdit(); return; }
       fields[field] = num;
@@ -1855,9 +1867,47 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     </span>
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line">
-                    <span className="inline-flex items-center gap-1 px-1 py-0.5 rounded font-label-caps text-[10px] uppercase tracking-tight text-on-surface-variant">
-                      {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
-                    </span>
+                    {(() => {
+                      const isEditing = editState?.tripId === t.id && editState?.field === 'date';
+                      if (isEditing) {
+                        const idx = sortedIdToIndex.get(t.id) ?? -1;
+                        const pred = idx > 0 ? sortedAll[idx-1] : null;
+                        const succ = idx >=0 && idx < sortedAll.length-1 ? sortedAll[idx+1] : null;
+                        const min = pred?.date ?? '';
+                        const max = succ?.date ?? '';
+                        return (
+                          <input
+                            autoFocus
+                            type="date"
+                            value={editState!.value}
+                            min={min || undefined}
+                            max={max || undefined}
+                            onChange={(e) => setEditState({ ...editState!, value: e.target.value })}
+                            onBlur={() => commitEdit(t.id, 'date', editState!.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') commitEdit(t.id, 'date', editState!.value);
+                              if (e.key === 'Escape') cancelEdit();
+                            }}
+                            className="w-full px-1 py-0.5 border border-telemetry-cyan rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-telemetry-cyan"
+                            title={min || max ? `Allowed: ${min || '...'} to ${max || '...'}` : undefined}
+                          />
+                        );
+                      }
+                      const idx = sortedIdToIndex.get(t.id) ?? -1;
+                      const pred = idx > 0 ? sortedAll[idx-1] : null;
+                      const succ = idx >=0 && idx < sortedAll.length-1 ? sortedAll[idx+1] : null;
+                      const tip = !pred && !succ ? 'Click to edit date' : !pred ? `Click to edit — allowed up to ${succ?.date}` : !succ ? `Click to edit — allowed from ${pred?.date}` : `Click to edit — allowed ${pred.date} to ${succ.date} (ODO order cannot be changed)`;
+                      return (
+                        <span
+                          className="cursor-pointer hover:bg-surface-container-low rounded px-1 -mx-1 py-0.5 inline-flex items-center gap-1 text-[10px] uppercase tracking-tight text-on-surface-variant"
+                          onClick={() => startEdit(t.id, 'date', t.date)}
+                          title={tip}
+                          data-testid={`date-cell-${t.id}`}
+                        >
+                          {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-2 px-1 whitespace-nowrap border-r border-rule-line text-[9px] text-center w-16 min-w-[56px] max-w-[64px]" title={holiday ? `${holiday.name} (${holiday.kinds.join('/')})${dayInfo.isLeave ? ` • Leave: ${leaveDates.has(t.date) ? 'personal' : ''}` : ''}` : dayInfo.label}>
                     {(() => {

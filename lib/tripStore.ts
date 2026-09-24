@@ -181,6 +181,7 @@ export async function saveTrip(input: TripInput): Promise<Trip> {
 }
 
 export interface TripUpdateFields {
+  date?: string;
   start_km?: number;
   end_km?: number;
   trip_distance?: number;
