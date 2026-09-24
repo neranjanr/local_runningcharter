@@ -218,6 +218,55 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     return m;
   }, [gapPairs]);
 
+  // Pagination rebuild-required warning (allow 5th/6th date with warning per user req)
+  const paginationViolations = useMemo(() => validatePaginationConstraints(pages, trips), [pages, trips]);
+  const [rebuildRequiredAllTrips, setRebuildRequiredAllTrips] = useState(false);
+  const [rebuildReasonAllTrips, setRebuildReasonAllTrips] = useState<string | null>(null);
+  const [rebuildingAllTrips, setRebuildingAllTrips] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      try {
+        const flag = typeof window !== 'undefined' && localStorage.getItem('fleetledger.rebuildRequired') === '1';
+        const reason = typeof window !== 'undefined' ? localStorage.getItem('fleetledger.rebuildReason') : null;
+        const hasViolations = paginationViolations.length > 0;
+        setRebuildRequiredAllTrips(flag || hasViolations);
+        if (flag && reason) setRebuildReasonAllTrips(reason);
+        else if (hasViolations) setRebuildReasonAllTrips(paginationViolations.map(v => `Page ${v.pageNumber}: ${v.violation}`).join('; '));
+        else setRebuildReasonAllTrips(null);
+      } catch {
+        setRebuildRequiredAllTrips(paginationViolations.length > 0);
+        setRebuildReasonAllTrips(paginationViolations.length ? paginationViolations.map(v => `Page ${v.pageNumber}: ${v.violation}`).join('; ') : null);
+      }
+    };
+    check();
+    window.addEventListener('fleetledger:rebuild-required', check);
+    window.addEventListener('storage', check);
+    window.addEventListener('fleetledger:data-changed', check);
+    return () => {
+      window.removeEventListener('fleetledger:rebuild-required', check);
+      window.removeEventListener('storage', check);
+      window.removeEventListener('fleetledger:data-changed', check);
+    };
+  }, [paginationViolations]);
+  const handleRebuildFromAllTrips = async () => {
+    setRebuildingAllTrips(true);
+    try {
+      const res = await rebuildLedger();
+      setImportMsg(res.message);
+      if (res.success) {
+        try { localStorage.removeItem('fleetledger.rebuildRequired'); localStorage.removeItem('fleetledger.rebuildReason'); } catch {}
+        setRebuildRequiredAllTrips(false);
+        setRebuildReasonAllTrips(null);
+        window.dispatchEvent(new CustomEvent('fleetledger:data-changed'));
+        onDataChanged?.();
+      }
+    } catch (e: any) {
+      setImportMsg(e?.message || 'Rebuild failed');
+    } finally {
+      setRebuildingAllTrips(false);
+    }
+  };
+
   // Group trips by date for alternating row backgrounds — chronological distinct order among visible rows
   const dateGroups = useMemo(() => {
     const distinctSorted = Array.from(new Set(filtered.map(t => t.date))).sort();
@@ -699,15 +748,22 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const sortedIdx = sortedIdToIndex.get(gapFillTarget.predecessor.id) ?? -1;
     const newSorted = [...sortedAll];
     newSorted.splice(sortedIdx + 1, 0, newTrip);
-    // Validate pagination constraints for the newSorted set (with recomputed pages)
+    // Validate pagination constraints for the newSorted set (with recomputed pages) — allow MAX_DAYS with rebuild warning per user req (5th/6th+ date)
     const recomputed = await recomputePagesForTrips(newSorted);
     const violations = validatePaginationConstraints(recomputed, newSorted);
-    if (violations.length > 0) {
-      setGapFillError(`Pagination violation: ${violations.map(v=>v.violation).join('; ')}`);
+    const maxDaysViolations = violations.filter(v => v.violation.includes('MAX_DAYS'));
+    const otherViolations = violations.filter(v => !v.violation.includes('MAX_DAYS'));
+    if (otherViolations.length > 0) {
+      setGapFillError(`Pagination violation: ${otherViolations.map(v=>v.violation).join('; ')}`);
       return;
     }
+    let gapPersistMsg = `Gap filled — ${newTrip.start_km}→${newTrip.end_km} (${newTrip.trip_distance} km)`;
+    if (maxDaysViolations.length > 0) {
+      try { localStorage.setItem('fleetledger.rebuildRequired','1'); localStorage.setItem('fleetledger.rebuildReason', maxDaysViolations.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')); window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required')); } catch {}
+      gapPersistMsg = `Gap filled — ${newTrip.start_km}→${newTrip.end_km} (${newTrip.trip_distance} km) — Ledger rebuild is required (${maxDaysViolations.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')}). Please rebuild.`;
+    }
     // Persist
-    await persistTripsAndPages(newSorted, recomputed, `Gap filled — ${newTrip.start_km}→${newTrip.end_km} (${newTrip.trip_distance} km)`);
+    await persistTripsAndPages(newSorted, recomputed, gapPersistMsg);
     setGapFillTarget(null);
     const gapNeedsClear = search !== '' || month !== 'All' || tripType !== 'All';
     focusTrip(newTrip.id, { clearFilter: gapNeedsClear });
@@ -886,11 +942,18 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
     const recomputed = await recomputePagesForTrips(result.trips);
     const violations = validatePaginationConstraints(recomputed, result.trips);
-    if (violations.length > 0) {
-      setInsertError(`Pagination violation: ${violations.map(v=>v.violation).join('; ')}`);
+    const maxDaysV = violations.filter(v => v.violation.includes('MAX_DAYS'));
+    const otherV = violations.filter(v => !v.violation.includes('MAX_DAYS'));
+    if (otherV.length > 0) {
+      setInsertError(`Pagination violation: ${otherV.map(v=>v.violation).join('; ')}`);
       return;
     }
-    await persistTripsAndPages(result.trips, recomputed, `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
+    let insertMsg = `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`;
+    if (maxDaysV.length > 0) {
+      try { localStorage.setItem('fleetledger.rebuildRequired','1'); localStorage.setItem('fleetledger.rebuildReason', maxDaysV.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')); window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required')); } catch {}
+      insertMsg += ` — Ledger rebuild is required (${maxDaysV.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')}). Please rebuild.`;
+    }
+    await persistTripsAndPages(result.trips, recomputed, insertMsg);
     setInsertConfirm(null);
     setInsertTarget(null);
     const needsClear2 = search !== '' || month !== 'All' || tripType !== 'All';
@@ -1166,6 +1229,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       let leavesImportMsg: string | null = null;
       let tripsSuccess = false;
       let leavesSuccess = false;
+      let paginationWarningForImport: string | null = null;
 
       // --- Trips pipeline ---
       if (parseResult.errors.length > 0) {
@@ -1186,9 +1250,17 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           const vehicle = await getVehicleProfile();
           const allPages = await getPages();
           const paginationErrors = validatePaginationForImport(trips, allPages, newOnlyTrips);
+          paginationWarningForImport = null;
+          const maxDaysOnlyForImport = paginationErrors.length > 0 && paginationErrors.every(e => e.message.includes('MAX_DAYS'));
           if (paginationErrors.length > 0) {
-            tripsImportMsg = `Pagination error: ${paginationErrors.map((e) => e.message).join('; ')}`;
-          } else {
+            if (maxDaysOnlyForImport) {
+              paginationWarningForImport = `Pagination warning: ${paginationErrors.map((e) => e.message).join('; ')} — Ledger rebuild is required.`;
+              try { localStorage.setItem('fleetledger.rebuildRequired','1'); localStorage.setItem('fleetledger.rebuildReason', paginationErrors.map(e=>e.message).join('; ')); window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required')); } catch {}
+            } else {
+              tripsImportMsg = `Pagination error: ${paginationErrors.map((e) => e.message).join('; ')}`;
+            }
+          }
+          if (paginationErrors.length === 0 || maxDaysOnlyForImport) {
             const result = importTripsFromWorkbook({
               existingTrips: trips,
               existingPages: allPages,
@@ -1330,6 +1402,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         }
       }
 
+      if (paginationWarningForImport) {
+        tripsImportMsg = tripsImportMsg ? `${tripsImportMsg} — ${paginationWarningForImport}` : paginationWarningForImport;
+      }
       // Combine messages
       const combined = [tripsImportMsg, leavesImportMsg].filter(Boolean).join(' | ');
       if (combined) setImportMsg(combined);
@@ -1429,7 +1504,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const vehicle = await getVehicleProfile();
     const allPages = await getPages();
     const paginationErrors = validatePaginationForImport(trips, allPages, newOnly);
-    if (paginationErrors.length > 0) { setSheetError(`Pagination: ${paginationErrors.map(e=>e.message).join('; ')}`); return; }
+    const maxDaysOnlySheet = paginationErrors.length > 0 && paginationErrors.every(e => e.message.includes('MAX_DAYS'));
+    if (paginationErrors.length > 0 && !maxDaysOnlySheet) { setSheetError(`Pagination: ${paginationErrors.map(e=>e.message).join('; ')}`); return; }
+    if (maxDaysOnlySheet) {
+      try { localStorage.setItem('fleetledger.rebuildRequired','1'); localStorage.setItem('fleetledger.rebuildReason', paginationErrors.map(e=>e.message).join('; ')); window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required')); } catch {}
+      setSheetError(`Pagination warning: ${paginationErrors.map(e=>e.message).join('; ')} — Ledger rebuild is required. Import will proceed.`);
+      // Do not return — allow import with warning
+    }
 
     setSheetPulling(true);
     setSheetError(null);
@@ -1623,6 +1704,21 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           </div>
         </div>
       </div>
+
+      {(rebuildRequiredAllTrips || paginationViolations.length > 0) && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm" data-testid="alltrips-rebuild-banner">
+          <div className="flex items-start gap-2.5">
+            <span className="text-amber-600 text-lg leading-none mt-0.5">⚠️</span>
+            <div>
+              <p className="text-sm font-bold text-amber-900">Ledger rebuild is required</p>
+              <p className="text-xs text-amber-800 mt-0.5">{rebuildReasonAllTrips || paginationViolations.map(v => `Page ${v.pageNumber}: ${v.violation}`).join('; ')} — ledger has 5+ distinct dates on a page (max 4). Records are added to All Trips, please rebuild to re-paginate.</p>
+            </div>
+          </div>
+          <button onClick={handleRebuildFromAllTrips} disabled={rebuildingAllTrips} className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-sm disabled:opacity-50 shrink-0">
+            {rebuildingAllTrips ? 'Rebuilding…' : 'Rebuild Ledger'}
+          </button>
+        </div>
+      )}
 
       {/* KPI Bar — matches alltripsample QuickKPIBar */}
       <section aria-label="Ledger KPI Metrics" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3" data-purpose="kpi-metrics-grid">
