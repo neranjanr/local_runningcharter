@@ -42,8 +42,102 @@ export async function getPages(): Promise<BookPage[]> {
 
 export async function rebuildLedger(): Promise<{ success: boolean; message: string }> {
   try {
-    const { trips } = await applyChronologicalRenumber();
-    return { success: true, message: `Ledger rebuilt successfully. Recalculated ${trips.length} trips.` };
+    const { getTrips } = await import('./tripStore');
+    const { getVehicleProfile } = await import('./vehicleStore');
+    const { validateTripForPage, getDistinctDates, countTripsForDate, getMonthKey, recalculatePageBalancesFromOpening } = await import('./pagination');
+    const { sortTripsChronologically } = await import('./tripShift');
+    const tripsRaw = await getTrips();
+    const vehicle = await getVehicleProfile();
+    const vehicleId = (vehicle as any)?.id ?? 'veh-1';
+    if (tripsRaw.length === 0) {
+      const { trips } = await applyChronologicalRenumber();
+      try { if (typeof window !== 'undefined') { localStorage.removeItem('fleetledger.rebuildRequired'); localStorage.removeItem('fleetledger.rebuildReason'); } } catch {}
+      return { success: true, message: `Ledger rebuilt successfully. Recalculated ${trips.length} trips.` };
+    }
+    // Repaginate from scratch respecting 4 days / 13 trips / month rollover
+    const sorted = sortTripsChronologically(tripsRaw);
+    const newPages: BookPage[] = [];
+    const newTrips: Trip[] = [];
+    let currentPage: BookPage | null = null;
+    for (const orig of sorted) {
+      if (!currentPage) {
+        currentPage = {
+          id: `page-1`,
+          vehicle_id: vehicleId,
+          page_number: 1,
+          month: getMonthKey(orig.date),
+          start_km: 0,
+          end_km: 0,
+          start_fuel_balance: 0,
+          end_fuel_balance: 0,
+          created_at: new Date().toISOString(),
+        };
+        newPages.push(currentPage);
+      } else {
+        const tripsOnCurrent = newTrips.filter(t => t.page_id === currentPage!.id);
+        const validation = validateTripForPage(tripsOnCurrent, currentPage, orig.date);
+        if (!validation.allowed || validation.requiresNewPage) {
+          const nextNumber = newPages.length + 1;
+          currentPage = {
+            id: `page-${nextNumber}`,
+            vehicle_id: vehicleId,
+            page_number: nextNumber,
+            month: getMonthKey(orig.date),
+            start_km: 0,
+            end_km: 0,
+            start_fuel_balance: 0,
+            end_fuel_balance: 0,
+            created_at: new Date().toISOString(),
+          };
+          newPages.push(currentPage);
+        }
+      }
+      const tripsOnCurrent = newTrips.filter(t => t.page_id === currentPage!.id);
+      const distinct = getDistinctDates(tripsOnCurrent);
+      let dayIndex: number;
+      if (distinct.includes(orig.date)) {
+        dayIndex = distinct.sort().indexOf(orig.date) + 1;
+      } else {
+        const withNew = [...distinct, orig.date].sort();
+        dayIndex = withNew.indexOf(orig.date) + 1;
+      }
+      const tripIndex = countTripsForDate(tripsOnCurrent, orig.date) + 1;
+      newTrips.push({
+        ...orig,
+        page_id: currentPage.id,
+        day_index: dayIndex,
+        trip_index: tripIndex,
+      });
+    }
+    // Recalculate odometer/fuel continuity from book opening
+    const openingKm = roundToIntegerKm((vehicle as any)?.current_odometer ?? (vehicle as any)?.opening_km ?? 0);
+    const openingFuel = roundToOneDecimal((vehicle as any)?.current_fuel_level ?? (vehicle as any)?.opening_fuel ?? 10);
+    const recalculated = recalculatePageBalancesFromOpening({ pages: newPages, trips: newTrips, opening: { openingKm, openingFuel } });
+    // Persist
+    // Clear old pages first (localStorage and API)
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('fleetledger_book_pages', JSON.stringify(recalculated));
+        localStorage.setItem('fleetledger_trips', JSON.stringify(newTrips));
+        localStorage.removeItem('fleetledger.rebuildRequired');
+        localStorage.removeItem('fleetledger.rebuildReason');
+      }
+    } catch {}
+    for (const p of recalculated) {
+      await savePage(p);
+    }
+    try {
+      if (typeof window !== 'undefined') {
+        const TRIPS_KEY = 'fleetledger_trips';
+        localStorage.setItem(TRIPS_KEY, JSON.stringify(newTrips));
+        window.dispatchEvent(new CustomEvent('fleetledger:data-changed'));
+      }
+    } catch {}
+    // Also try bulk API
+    try {
+      await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages: recalculated, trips: newTrips }) });
+    } catch {}
+    return { success: true, message: `Ledger rebuilt successfully. Repaginated ${newTrips.length} trips into ${recalculated.length} pages (was ${newPages.length} before).` };
   } catch (e: any) {
     return { success: false, message: e?.message || 'Failed to rebuild ledger' };
   }
