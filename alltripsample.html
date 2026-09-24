@@ -1,0 +1,138 @@
+<!DOCTYPE html><html lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>New Trip Entry | Fleet Ledger</title>
+<!-- Tailwind CSS v3 with forms and container-queries -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f4f8',
+              100: '#d9e2ec',
+              500: '#1b3b6f',
+              800: '#102a43',
+              900: '#0b1d3a',
+            }
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+<!-- BEGIN: Custom Styles -->
+<style data-purpose="mobile-ergonomics">
+    /* Prevent iOS auto-zoom on inputs */
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+    /* Clean custom radio styling for mobile */
+    .segmented-control input:checked + label {
+      background-color: #ffffff;
+      color: #0b1d3a;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      font-weight: 600;
+    }
+    /* Subtle pulsing highlight for auto-filled reference field */
+    .ring-active-glow {
+      box-shadow: 0 0 0 2px #f59e0b, 0 0 12px rgba(245, 158, 11, 0.25);
+    }
+  </style>
+<style data-purpose="scroll-utilities">
+    /* Hide scrollbar for horizontally scrollable preset chips on iOS/Android */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+<!-- END: Custom Styles -->
+</head>
+
+<!-- BEGIN: TopHeader -->
+<body><header class="bg-white border-b border-slate-200 sticky top-0 z-30 px-3 py-2 shadow-xs">
+<div class="max-w-3xl mx-auto flex items-center justify-between">
+<a class="inline-flex items-center text-xs font-semibold text-brand-500 hover:text-brand-800 transition-colors py-0.5" href="#">
+<svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+<path d="M10 19l-7-7m0 0l7-7m-7 7h18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path>
+</svg>
+<span class="">Back to Ledger</span>
+</a>
+<div class="flex items-center space-x-2">
+<span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300 tracking-wider">
+FLEET-PRO
+</span>
+</div>
+</div>
+</header>
+<!-- END: TopHeader -->
+<!-- BEGIN: MainContentContainer -->
+<main class="max-w-3xl mx-auto px-2.5 pt-2 pb-4 space-y-2">
+<!-- BEGIN: TitleAndStatusCard (Condensed Compact Header) -->
+<section class="rounded-lg shadow-sm border border-slate-700/80 bg-slate-900 text-white px-3 py-2 flex items-center justify-between gap-2" data-purpose="card-banner"><div class="flex items-center gap-2.5"><div class="w-7 h-7 rounded-md bg-indigo-500/20 border border-indigo-400/40 flex items-center justify-center text-indigo-300 font-bold shrink-0"><svg class="w-4 h-4 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path></svg></div><div><h1 class="text-xs sm:text-sm font-bold tracking-tight text-white leading-none">Quick Trip Data Entry</h1><p class="text-[10px] text-slate-300 mt-0.5 leading-tight font-medium">Reciprocal calculations • Ledger continuity</p></div></div><div class="flex items-center gap-1.5"><span class="text-[10px] font-mono font-bold tracking-wider px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400">SEC-24</span></div></section>
+<!-- END: TitleAndStatusCard -->
+<!-- BEGIN: MetadataSection -->
+<section class="bg-white rounded-lg p-2.5 border border-slate-200 shadow-xs" data-purpose="trip-metadata"><div class="grid grid-cols-2 gap-2.5"><!-- Date Input Field --><div><div class="flex items-center justify-between mb-1"><label class="block text-[11px] font-bold uppercase tracking-wider text-slate-700 leading-none" for="trip-date">Trip Date</label><span class="text-[10px] font-bold text-sky-700 uppercase tracking-tight">Thursday</span></div><div class="relative"><input class="w-full bg-slate-50 border border-slate-300 rounded-md py-1 px-2 font-medium text-slate-800 focus:bg-white focus:ring-1 focus:ring-brand-500 focus:border-brand-500 text-xs transition-all h-8" id="trip-date" name="trip_date" type="date" value="2026-09-24"></div><p class="text-[9px] text-slate-400 mt-0.5 font-medium">Fiscal Q3 • Auto-stamped</p></div><!-- Trip Type Segmented Control --><div><div class="flex items-center justify-between mb-1"><label class="block text-[11px] font-bold uppercase tracking-wider text-slate-700 leading-none">Trip Type</label><span class="text-[9px] text-slate-400 font-mono">Ledger</span></div><div class="grid grid-cols-2 p-0.5 bg-slate-100 rounded-md border border-slate-200 segmented-control gap-1 h-8 items-center" role="radiogroup"><div><input checked="" class="sr-only" id="type-official" name="trip_type" type="radio" value="official"><label class="flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold text-slate-700 cursor-pointer transition-all select-none leading-none" for="type-official"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span class="">Official</span><span class="text-[9px] font-mono px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold">OFF</span></label></div><div><input class="sr-only" id="type-private" name="trip_type" type="radio" value="private"><label class="flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold text-slate-600 cursor-pointer transition-all select-none leading-none" for="type-private"><span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span><span class="">Private</span><span class="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-200 text-slate-700 font-bold">PRI</span></label></div></div><p class="text-[9px] text-slate-400 mt-0.5 truncate font-medium">Official requires logging</p></div></div></section>
+<!-- END: MetadataSection -->
+<!-- BEGIN: OdometerReciprocalCard -->
+<section class="rounded-lg p-2.5 bg-sky-50 border border-sky-100 shadow-xs relative overflow-hidden border-l-4 border-l-brand-500" data-purpose="odometer-reciprocal"><div class="flex items-center justify-between pb-1.5 mb-2 border-b border-sky-100"><div class="flex items-center gap-1.5"><span class="p-1 rounded bg-brand-500 text-white shadow-xs"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></span><h2 class="text-[11px] font-bold uppercase tracking-wider text-slate-900 leading-none">Odometer Reciprocal <span class="text-slate-500 font-normal">— START + DISTANCE = END</span></h2></div><span class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-sky-100 text-brand-800 border border-brand-500/30">Auto Sync</span></div><div class="grid grid-cols-3 gap-2"><div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none" for="start-km">Start KM</label><span class="text-[9px] font-bold text-slate-600 bg-slate-200 px-1 py-0.2 rounded border border-slate-300 leading-none">LOCKED</span></div><input class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-bold text-sm rounded-md py-1 px-2 focus:outline-hidden h-8 shadow-xs" id="start-km" name="start_km" readonly="" type="number" value="357258"><span class="inline-block text-[9px] font-bold tracking-tight text-sky-700 bg-sky-100 px-1 py-0.2 rounded mt-0.5 truncate w-full">Auto-filled</span></div><div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none" for="end-km">End KM</label><span class="text-[9px] text-slate-400 leading-none font-mono">Auto</span></div><input class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-slate-800 focus:border-slate-800 h-8 shadow-xs" id="end-km" inputmode="numeric" name="end_km" placeholder="End KM" type="number"><p class="text-[9px] text-slate-400 mt-0.5 truncate font-medium">Reciprocal</p></div><div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none" for="distance-km">Distance</label><span class="text-[9px] text-brand-800 font-bold leading-none">KM</span></div><input class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-slate-800 focus:border-slate-800 h-8 shadow-xs" id="distance-km" inputmode="numeric" name="distance_km" placeholder="KM" type="number"><p class="text-[9px] text-slate-400 mt-0.5 truncate font-medium">Integer</p></div></div><div class="mt-1.5 pt-1 border-t border-sky-100 flex items-center justify-between text-[10px] text-slate-500 font-mono leading-none"><span class="">DISTANCE = ROUND(END - START)</span><span class="font-bold text-slate-700">INTEGER KM</span></div></section>
+<!-- END: OdometerReciprocalCard -->
+<!-- BEGIN: TimeReciprocalCard -->
+<section class="rounded-lg p-2.5 bg-slate-50 border border-slate-200 shadow-xs border-l-4 border-l-emerald-500" data-purpose="time-reciprocal"><div class="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200"><div class="flex items-center gap-1.5"><span class="p-1 rounded bg-emerald-500 text-white shadow-xs"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></span><h2 class="text-[11px] font-bold uppercase tracking-wider text-slate-900 leading-none">Time Reciprocal <span class="text-slate-500 font-normal">— END - DURATION = START</span></h2></div><div class="flex items-center space-x-2 bg-white rounded border border-slate-200 px-1.5 py-0.5 shadow-xs"><label class="inline-flex items-center cursor-pointer text-[10px] font-bold text-slate-900"><input checked="" class="text-brand-500 focus:ring-0 w-3 h-3 mr-1" name="traffic_mode" type="radio" value="traffic">Traffic</label><label class="inline-flex items-center cursor-pointer text-[10px] text-slate-600"><input class="text-brand-500 focus:ring-0 w-3 h-3 mr-1" name="traffic_mode" type="radio" value="light_traffic">Light</label></div></div><div class="grid grid-cols-3 gap-2 items-start"><div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none" for="start-time">Start Time</label><button class="px-1.5 py-0.2 bg-slate-800 hover:bg-slate-900 active:scale-95 text-white text-[9px] font-bold rounded leading-none transition-all" title="Auto Estimate Start Time" type="button">AUTO</button></div><div class="relative"><input class="w-full bg-white border border-slate-300 text-slate-800 font-mono font-semibold rounded-md py-1 px-1.5 text-xs focus:bg-white focus:ring-1 focus:ring-slate-800 h-8 shadow-xs" id="start-time" name="start_time" placeholder="-- : --" type="text"></div><div class="grid grid-cols-4 gap-0.5 mt-1"><button class="py-0.5 px-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center" type="button">-10</button><button class="py-0.5 px-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center" type="button">-5</button><button class="py-0.5 px-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center" type="button">+5</button><button class="py-0.5 px-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center" type="button">+10</button></div></div><div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none" for="end-time">End Time</label><span class="text-[9px] font-bold text-emerald-800 leading-none bg-emerald-100 px-1 py-0.2 rounded">NOW</span></div><div class="relative"><input class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:ring-1 focus:ring-slate-800 focus:border-slate-800 h-8 shadow-xs" id="end-time" name="end_time" type="text" value="09:09 AM"></div><p class="text-[9px] text-emerald-800 font-medium mt-1 truncate">Current time</p></div><div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none" for="duration">Duration</label><span class="text-[9px] text-slate-400 leading-none font-mono">HH:MM</span></div><input class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:bg-white focus:ring-1 focus:ring-slate-800 h-8 shadow-xs" id="duration" name="duration" placeholder="00:00" type="text" value="00:55"><p class="text-[9px] text-slate-500 mt-1 truncate font-medium">Span calc</p></div></div><div class="mt-1 pt-1 border-t border-slate-200 text-[9px] text-slate-500 leading-none font-mono truncate">FORMULA: START = END - CEIL((KM/SPEED)*60 /5)*5 • OVERNIGHT OK</div></section>
+<!-- END: TimeReciprocalCard -->
+<!-- BEGIN: RouteAndPurposeSection -->
+<section class="rounded-lg p-2.5 bg-white border border-slate-200 shadow-xs border-l-4 border-l-indigo-400/40" data-purpose="route-details"><div class="flex items-center justify-between gap-1 mb-1"><label class="text-[11px] font-bold uppercase tracking-wider text-slate-800 leading-none flex items-center gap-1.5" for="route-input"><span class="w-1.5 h-1.5 rounded-full bg-brand-500"></span>Route &amp; Purpose <span class="text-red-500 font-bold">*</span></label><span class="text-[9px] text-slate-500 font-medium">Tap preset to fill</span></div><div class="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 pt-0.5" data-purpose="preset-chips"><button class="whitespace-nowrap px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 hover:bg-brand-50 text-slate-800 border border-slate-300 shadow-xs active:scale-95 transition leading-tight" type="button">Home - Office</button><button class="whitespace-nowrap px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 hover:bg-brand-50 text-slate-800 border border-slate-300 shadow-xs active:scale-95 transition leading-tight" type="button">Office - Home</button><button class="whitespace-nowrap px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 hover:bg-brand-50 text-slate-800 border border-slate-300 shadow-xs active:scale-95 transition leading-tight" type="button">HO - Panni</button><button class="whitespace-nowrap px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 hover:bg-brand-50 text-slate-800 border border-slate-300 shadow-xs active:scale-95 transition leading-tight" type="button">Panni - HO</button><button class="whitespace-nowrap px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 hover:bg-brand-50 text-slate-800 border border-slate-300 shadow-xs active:scale-95 transition leading-tight" type="button">Port Customs</button></div><div><input class="w-full bg-slate-50 border border-slate-300 rounded-md py-1 px-2.5 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-1 focus:ring-brand-500 focus:border-brand-500 h-8 shadow-xs" id="route-input" name="route_purpose" placeholder="e.g., HQ Fleet Yard → Regional Port Customs" required="" type="text"></div></section>
+<!-- END: RouteAndPurposeSection -->
+<!-- BEGIN: FuelDetailsSection -->
+<section class="bg-slate-50 rounded-lg p-2.5 border border-slate-200 shadow-xs" data-purpose="fuel-card"><div class="flex items-center justify-between mb-1.5"><h3 class="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5 leading-none"><span class="p-0.5 rounded bg-slate-200 text-slate-700 border border-slate-300"><svg class="w-3 h-3 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></span>Fuel Refill <span class="text-slate-400 font-normal">(Optional)</span></h3><span class="text-[9px] text-slate-400 font-mono">Order Date = Trip Date</span></div><div class="grid grid-cols-2 gap-2"><div><div class="relative"><input class="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:bg-white focus:ring-1 focus:ring-brand-500 h-8" id="fuel-litres" inputmode="decimal" name="fuel_pumped_l" placeholder="Pumped (L) e.g. 35.0" step="0.01" type="number"><span class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span></div></div><div><input class="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:bg-white focus:ring-1 focus:ring-brand-500 h-8" id="fuel-order-no" name="fuel_order_no" placeholder="Order # e.g. #FO-88912" type="text"></div></div></section>
+<!-- END: FuelDetailsSection -->
+</main>
+<!-- END: MainContentContainer -->
+<!-- BEGIN: StickyBottomActionBar -->
+<aside class="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 z-40 shadow-lg" data-purpose="form-actions">
+<div class="max-w-3xl mx-auto flex items-center justify-between gap-2">
+<!-- Quick Status Hint / Cancel Button -->
+<button class="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 active:bg-slate-100 transition-colors h-9 leading-none" type="button">
+Clear / Reset
+</button>
+<!-- Primary Action Buttons Group -->
+<div class="flex items-center gap-1.5 flex-1 sm:flex-initial justify-end">
+<button class="hidden sm:inline-flex items-center justify-center px-3 py-1.5 rounded-md border border-brand-500/30 text-brand-800 text-xs font-bold hover:bg-brand-50 transition-colors h-9 leading-none" type="button">
+Save &amp; Add Another
+</button>
+<!-- Main Save Trip Action Button -->
+<button class="w-full sm:w-auto px-5 py-1.5 bg-slate-900 hover:bg-black active:scale-[0.98] text-white text-xs sm:text-sm font-bold rounded-md shadow-sm transition-all flex items-center justify-center gap-1.5 h-9 leading-none" type="submit">
+<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+<path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"></path>
+</svg>
+<span class="">Save Trip</span>
+</button>
+</div>
+</div>
+</aside>
+<!-- END: StickyBottomActionBar -->
+<!-- BEGIN: InteractiveHelperScript -->
+<script data-purpose="chip-selection">
+    document.addEventListener('DOMContentLoaded', () => {
+      const routeInput = document.getElementById('route-input');
+      const chips = document.querySelectorAll('[data-purpose="preset-chips"] button');
+      
+      chips.forEach(chip => {
+        chip.addEventListener('click', () => {
+          routeInput.value = chip.textContent.trim();
+          routeInput.focus();
+        });
+      });
+    });
+  </script>
+<!-- END: InteractiveHelperScript -->
+
+
+</body></html>
