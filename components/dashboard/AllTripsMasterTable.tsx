@@ -24,7 +24,8 @@ import {
 import { getPages, savePage, rebuildLedger } from '@/lib/pageStore';
 import { getVehicleProfile } from '@/lib/vehicleStore';
 import { getTrips } from '@/lib/tripStore';
-import { estimateStartTime, roundToIntegerKm, roundToOneDecimal } from '@/lib/tripCalculations';
+import { estimateStartTime, roundToIntegerKm, roundToOneDecimal, calculateTripDistance, calculateEndKm, parseTimeToMinutes, formatMinutesToTime, calculateDurationMinutes } from '@/lib/tripCalculations';
+import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
@@ -93,10 +94,23 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [gapFillForm, setGapFillForm] = useState<{ date: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [gapFillError, setGapFillError] = useState<string | null>(null);
   const [insertTarget, setInsertTarget] = useState<{ anchor: Trip; sortedIdx: number } | null>(null);
-  const [insertForm, setInsertForm] = useState<{ date: string; start_km: string; end_km: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', start_km: '', end_km: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+  const [insertForm, setInsertForm] = useState<{ date: string; start_km: string; end_km: string; distance: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', start_km: '', end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [insertError, setInsertError] = useState<string | null>(null);
   const [insertConfirm, setInsertConfirm] = useState<{ delta: number; downstreamCount: number; preview: Array<{ before: Trip; after: Trip }>; newTrip: Trip } | null>(null);
   const [removeTarget, setRemoveTarget] = useState<{ trip: Trip; sortedIdx: number; delta: number; downstream: Trip[] } | null>(null);
+  // Insert After — Speed Slab / Traffic parity with QuickTripForm
+  const [insertTrafficMode, setInsertTrafficMode] = useState<'traffic' | 'light'>('traffic');
+  const [isInsertTrafficMode, setIsInsertTrafficMode] = useState<boolean>(false);
+  useEffect(() => {
+    loadSpeedConfig().then(c => setIsInsertTrafficMode(c.mode === 'traffic')).catch(()=>{});
+    const handler = () => setIsInsertTrafficMode(getStoredSpeedConfigSync().mode === 'traffic');
+    window.addEventListener('fleetledger:speed-config-changed', handler);
+    window.addEventListener('storage', handler as EventListener);
+    return () => {
+      window.removeEventListener('fleetledger:speed-config-changed', handler);
+      window.removeEventListener('storage', handler as EventListener);
+    };
+  }, []);
 
   // Focus retention (Inserted → new row, Remove/Delete → predecessor)
   const [focusedTripId, setFocusedTripId] = useState<string | null>(null);
@@ -130,12 +144,22 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     window.addEventListener('storage', h);
     return () => { window.removeEventListener('fleetledger:data-changed', h); window.removeEventListener('storage', h); };
   }, []);
+  // Start Time Audit state
+  // Start Time Audit state (types + state only; handlers after focus helpers)
+  type AuditReason = 'Empty' | 'Equal' | 'Inverted' | 'Short';
+  interface AuditRow { trip: Trip; reason: AuditReason; estimated: string | null; durationMin: number | null; estMin: number | null; deltaMin: number | null; }
+  const [showStartAudit, setShowStartAudit] = useState(false);
+  const [startAuditRows, setStartAuditRows] = useState<AuditRow[]>([]);
+  const [selectedStartIds, setSelectedStartIds] = useState<Set<string>>(new Set());
+  const [auditFixing, setAuditFixing] = useState(false);
+
   // Sheet Push state
   const [sheetPushing, setSheetPushing] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
   const [showPushPreview, setShowPushPreview] = useState(false);
-  const [pushPreview, setPushPreview] = useState<{ dbCount: number; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number; mergedRows: BufferTrip[]; leavesDbCount: number; leavesPreserved: BufferLeave[]; leavesOverwriting: number; leavesInvalid: number; mergedLeaves: BufferLeave[] } | null>(null);
+  const [pushPreview, setPushPreview] = useState<{ dbCount: number; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number; mergedRows: BufferTrip[]; mergedRowsExact: BufferTrip[]; dbRows: BufferTrip[]; leavesDbCount: number; leavesPreserved: BufferLeave[]; leavesOverwriting: number; leavesInvalid: number; mergedLeaves: BufferLeave[]; mergedLeavesExact: BufferLeave[]; leavesDbRows: BufferLeave[] } | null>(null);
   const [pushExpanded, setPushExpanded] = useState(false);
+  const [pushExactMirror, setPushExactMirror] = useState(false);
 
   const availableMonths = useMemo(() => getAvailableMonths(trips, pages), [trips, pages]);
 
@@ -319,6 +343,78 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       setSortDirection(col === 'date' ? 'asc' : 'asc');
     }
   };
+
+  // Start Time Audit handlers (after focus helpers)
+  const computeAuditRows = useCallback((): AuditRow[] => {
+    const cfg = getStoredSpeedConfigSync();
+    const tm = cfg.mode === 'traffic' ? 'traffic' as const : undefined;
+    const rows: AuditRow[] = [];
+    const sorted = sortTripsChronologically(trips);
+    for (const t of sorted) {
+      const dist = roundToIntegerKm(Number(t.trip_distance) || 0);
+      const est = t.end_time && dist > 0 ? estimateStartTime(t.end_time, dist, tm) : null;
+      const s = (t.start_time || '').trim();
+      const e = (t.end_time || '').trim();
+      if (!s) {
+        if (est) {
+          rows.push({ trip: t, reason: 'Empty', estimated: est, durationMin: null, estMin: est ? calculateDurationMinutes(est, e) : null, deltaMin: null });
+        }
+        continue;
+      }
+      if (s === e) {
+        const dur = e ? calculateDurationMinutes(s, e) : null;
+        const estMin = est && e ? calculateDurationMinutes(est, e) : null;
+        rows.push({ trip: t, reason: 'Equal', estimated: est, durationMin: dur, estMin, deltaMin: estMin!=null && dur!=null ? estMin - dur : null });
+        continue;
+      }
+      if (e && parseTimeToMinutes(s) > parseTimeToMinutes(e)) {
+        const dur = calculateDurationMinutes(s, e);
+        const isShortOvernight = dur < 360;
+        if (!isShortOvernight) {
+          const estMin = est && e ? calculateDurationMinutes(est, e) : null;
+          rows.push({ trip: t, reason: 'Inverted', estimated: est, durationMin: dur, estMin, deltaMin: estMin!=null ? estMin - dur : null });
+          continue;
+        }
+      }
+      if (est && e) {
+        const actualDur = calculateDurationMinutes(s, e);
+        const estDur = calculateDurationMinutes(est, e);
+        if (actualDur < estDur) {
+          rows.push({ trip: t, reason: 'Short', estimated: est, durationMin: actualDur, estMin: estDur, deltaMin: estDur - actualDur });
+        }
+      }
+    }
+    return rows;
+  }, [trips]);
+  const handleOpenStartAudit = useCallback(() => {
+    const rows = computeAuditRows();
+    setStartAuditRows(rows);
+    setSelectedStartIds(new Set(rows.filter(r=>r.estimated).map(r=>r.trip.id)));
+    setShowStartAudit(true);
+  }, [computeAuditRows]);
+  const handleFixSelectedStarts = useCallback(async () => {
+    const toFix = startAuditRows.filter(r=> selectedStartIds.has(r.trip.id) && r.estimated);
+    if (toFix.length===0) return;
+    setAuditFixing(true);
+    let fixed = 0;
+    let earliestId: string | null = null;
+    let earliestDate = '';
+    for (const row of toFix) {
+      const tid = row.trip.id;
+      const newStart = row.estimated!;
+      try {
+        preserveTableScroll();
+        await updateTrip(tid, { start_time: newStart });
+        fixed++;
+        if (!earliestId || row.trip.date < earliestDate) { earliestId = tid; earliestDate = row.trip.date; }
+      } catch {}
+    }
+    setAuditFixing(false);
+    setShowStartAudit(false);
+    setImportMsg(`Fixed ${fixed} start time${fixed!==1?'s':''} (Traffic estimate)`);
+    notifyDataChanged();
+    if (earliestId) focusTrip(earliestId);
+  }, [startAuditRows, selectedStartIds, preserveTableScroll, notifyDataChanged, focusTrip]);
 
   const SortIcon = ({ col }: { col: SortColumn }) => {
     if (sortColumn !== col) return <span className="text-rule-line-strong ml-1">↕</span>;
@@ -585,11 +681,50 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     focusTrip(newTrip.id, { clearFilter: gapNeedsClear });
   };
 
+  // Insert After helpers — mirror QuickTripForm reciprocal + Estimated Start Time
+  const parseIntKmInsert = (str: string): number => {
+    const n = parseFloat(str);
+    return isNaN(n) ? NaN : Math.round(n);
+  };
+  const maybeAutoEstimateInsert = (nextDistanceStr: string, nextEndTime: string, currentStartTime: string) => {
+    if (currentStartTime !== '') return null;
+    const d = parseIntKmInsert(nextDistanceStr);
+    if (isNaN(d) || d <= 0) return null;
+    if (!nextEndTime || !nextEndTime.includes(':')) return null;
+    const tm = isInsertTrafficMode ? insertTrafficMode : undefined;
+    const estimated = estimateStartTime(nextEndTime, d, tm);
+    return estimated;
+  };
+  const nudgeInsertStartTime = (deltaMin: number) => {
+    if (!insertForm.start_time || !insertForm.start_time.includes(':')) return;
+    const cur = parseTimeToMinutes(insertForm.start_time);
+    const next = formatMinutesToTime(cur + deltaMin);
+    setInsertForm(prev => ({ ...prev, start_time: next }));
+  };
+  const handleAutoInsertEstimate = () => {
+    const d = parseIntKmInsert(insertForm.distance);
+    // distance may be empty — derive from start/end
+    let distStr = insertForm.distance;
+    let distNum = d;
+    if ((isNaN(distNum) || distNum <= 0) && insertForm.start_km && insertForm.end_km) {
+      const s = parseIntKmInsert(insertForm.start_km);
+      const e = parseIntKmInsert(insertForm.end_km);
+      if (!isNaN(s) && !isNaN(e)) { distNum = calculateTripDistance(s, e); distStr = String(distNum); }
+    }
+    if (isNaN(distNum) || distNum <= 0) { setInsertError('Enter Distance and End Time to estimate Start Time.'); return; }
+    if (!insertForm.end_time || !insertForm.end_time.includes(':')) { setInsertError('Enter End Time to estimate Start Time.'); return; }
+    const tm = isInsertTrafficMode ? insertTrafficMode : undefined;
+    const estimated = estimateStartTime(insertForm.end_time, distNum, tm);
+    if (!estimated) { setInsertError('Cannot estimate Start Time (check Distance and End Time).'); return; }
+    setInsertForm(prev => ({ ...prev, start_time: estimated }));
+    setInsertError(null);
+  };
+
   // Insert After handlers
   const openInsert = (trip: Trip) => {
     const idx = sortedIdToIndex.get(trip.id) ?? -1;
     setInsertTarget({ anchor: trip, sortedIdx: idx });
-    setInsertForm({ date: trip.date, start_km: String(roundToIntegerKm(trip.end_km)), end_km: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+    setInsertForm({ date: trip.date, start_km: String(roundToIntegerKm(trip.end_km)), end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
     setInsertError(null);
     setOpenMenuId(null);
   };
@@ -918,13 +1053,18 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         overwritingCount: payload.overwritingCount,
         invalidIgnored: payload.invalidIgnored,
         mergedRows: payload.rows,
+        mergedRowsExact: payload.rowsExact,
+        dbRows: payload.dbRows,
         leavesDbCount: dbLeaves.length,
         leavesPreserved: leavesPayload.preserved,
         leavesOverwriting: leavesPayload.overwritingCount,
         leavesInvalid: leavesPayload.invalidIgnored,
         mergedLeaves: leavesPayload.leaves,
+        mergedLeavesExact: leavesPayload.leavesExact,
+        leavesDbRows: leavesPayload.dbRows,
       });
       setPushExpanded(false);
+      setPushExactMirror(false);
       setShowPushPreview(true);
     } catch (e: unknown) {
       const m = e instanceof Error ? e.message : String(e);
@@ -945,14 +1085,21 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setSheetPushing(true);
     setPushError(null);
     try {
-      await pushAllWithLeaves(pushPreview.mergedRows, pushPreview.mergedLeaves);
+      const rowsToPush = pushExactMirror ? pushPreview.mergedRowsExact : pushPreview.mergedRows;
+      const leavesToPush = pushExactMirror ? pushPreview.mergedLeavesExact : pushPreview.mergedLeaves;
+      await pushAllWithLeaves(rowsToPush, leavesToPush);
       const iso = new Date().toISOString();
       setLastPushAt(iso);
       setLastPushAtState(iso);
-      const preservedMsg = pushPreview.preserved.length > 0 ? ` (+${pushPreview.preserved.length} preserved)` : '';
-      const leavesPreservedMsg = pushPreview.leavesPreserved.length > 0 ? ` (+${pushPreview.leavesPreserved.length} leaves preserved)` : '';
-      const leavesMsg = pushPreview.leavesDbCount > 0 || pushPreview.leavesPreserved.length > 0 ? ` + ${pushPreview.leavesDbCount} leaves${leavesPreservedMsg}` : '';
-      setImportMsg(`Exported — ${pushPreview.dbCount} rows${preservedMsg}${leavesMsg}`);
+      if (pushExactMirror) {
+        const leavesMsg = pushPreview.leavesDbCount > 0 ? ` + ${pushPreview.leavesDbCount} leaves` : '';
+        setImportMsg(`Exported (exact mirror) — ${pushPreview.dbCount} rows${leavesMsg} — sheet now == app DB`);
+      } else {
+        const preservedMsg = pushPreview.preserved.length > 0 ? ` (+${pushPreview.preserved.length} preserved)` : '';
+        const leavesPreservedMsg = pushPreview.leavesPreserved.length > 0 ? ` (+${pushPreview.leavesPreserved.length} leaves preserved)` : '';
+        const leavesMsg = pushPreview.leavesDbCount > 0 || pushPreview.leavesPreserved.length > 0 ? ` + ${pushPreview.leavesDbCount} leaves${leavesPreservedMsg}` : '';
+        setImportMsg(`Exported — ${pushPreview.dbCount} rows${preservedMsg}${leavesMsg}`);
+      }
       setShowPushPreview(false);
       setPushPreview(null);
     } catch (e: unknown) {
@@ -1381,73 +1528,159 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     );
   };
 
+  // KPI derived - matches alltripsample KPI bar (Total, Working, Off-day, Telemetry, Discrepancy)
+  const kpiTotal = trips.length;
+  const kpiWorking = offDaySummary.workingDayKm;
+  const kpiOffDay = offDaySummary.offDayKm;
+  const kpiGapCount = gapPairs.length;
+  const kpiGapKm = gapPairs.reduce((s, g) => s + Math.abs(g.delta), 0);
+  const liveTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
   return (
-    <div className="bg-paper-sheet rounded-xl border border-rule-line shadow-sm flex flex-col">
+    <div className="flex flex-col gap-4">
       <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFile} />
 
-      {/* Header */}
-      <div className="p-4 flex flex-col gap-3 border-b border-rule-line">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <h3 className="text-sm font-bold tracking-tight text-on-surface">{title}</h3>
-            <span className="text-xs font-mono text-on-surface-variant" data-testid="master-visible-count">
-              {filtered.length} of {trips.length} trips
-            </span>
+      {/* Header — matches alltripsample MainHeader */}
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-4 py-3.5">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center justify-center p-1.5 rounded-lg bg-indigo-50 text-indigo-600 ring-1 ring-indigo-500/10">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" strokeLinecap="round" strokeLinejoin="round"></path>
+                </svg>
+              </span>
+              <h3 className="text-xl font-bold tracking-tight text-slate-900">{title}</h3>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">v4.2 Live Ledger</span>
+            </div>
+            <p className="text-xs text-slate-500">
+              Scrollable historical ledger with odometer continuity tracking, telemetry sync, and fuel logs. <span className="font-mono text-slate-600" data-testid="master-visible-count">{filtered.length} of {trips.length} trips</span>
+            </p>
           </div>
-          <div className="flex items-center gap-1 flex-wrap">
+          <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto">
             <div className="flex-shrink-0">
               <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => notifyDataChanged()} />
             </div>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importing || sheetPulling || sheetPushing}
-              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[10px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 min-w-[78px] max-w-[88px] leading-tight whitespace-normal text-center"
-              title="Import trips from All Trips Excel file"
-            >
-              <span className="text-[13px] leading-none">📥</span> <span className="whitespace-normal break-words leading-none">{importing ? 'Importing...' : 'Import from Excel'}</span>
+            <button onClick={() => fileInputRef.current?.click()} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-emerald-900 bg-emerald-50 border border-emerald-200/80 hover:bg-emerald-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" title="Import Excel File">
+              <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"></path></svg>
+              <span className="block whitespace-normal">Import<br />Excel</span>
             </button>
-            <button
-              onClick={handleExport}
-              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-slate-surface text-on-primary rounded-lg text-[10px] font-semibold hover:bg-primary transition-colors shadow-sm min-w-[78px] max-w-[88px] leading-tight whitespace-normal text-center"
-              title="Export all trips to All Trips Excel"
-            >
-              <span className="text-[13px] leading-none">📊</span> <span className="whitespace-normal break-words leading-none">Export to Excel</span>
+            <button onClick={handleExport} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-emerald-900 bg-emerald-50 border border-emerald-200/80 hover:bg-emerald-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0" title="Export Excel File">
+              <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"></path></svg>
+              <span className="block whitespace-normal">Export<br />Excel</span>
             </button>
-            <button
-              onClick={handlePullFromSheet}
-              disabled={sheetPulling || importing || sheetPushing}
-              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-cyan-600 text-white rounded-lg text-[10px] font-semibold hover:bg-cyan-700 transition-colors shadow-sm disabled:opacity-50 min-w-[86px] max-w-[98px] leading-tight whitespace-normal text-center"
-              data-testid="pull-from-sheet-btn"
-              title={lastPullAt ? `Last Sheet pull: ${new Date(lastPullAt).toLocaleString()}` : 'Pull new rows from Buffer Sheet via Apps Script'}
-            >
-              <span className="text-[13px] leading-none">☁️↓</span> <span className="whitespace-normal break-words leading-none">{sheetPulling ? 'Pulling…' : 'Import from Google Sheet'}</span>
+            <button onClick={handlePullFromSheet} disabled={sheetPulling || importing || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-blue-900 bg-blue-50 border border-indigo-200/60 hover:bg-indigo-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" data-testid="pull-from-sheet-btn" title={lastPullAt ? `Last Sheet pull: ${new Date(lastPullAt).toLocaleString()}` : 'Pull / Import Google Sheet'}>
+              <svg className="w-3.5 h-3.5 text-blue-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.75 3.75 0 0118 19.5H6.75z"></path></svg>
+              <span className="block whitespace-normal">Import<br />Google Sheet</span>
             </button>
-            <button
-              onClick={handlePushToSheet}
-              disabled={sheetPushing || importing || sheetPulling}
-              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-semibold hover:bg-emerald-700 transition-colors shadow-sm disabled:opacity-50 min-w-[86px] max-w-[98px] leading-tight whitespace-normal text-center"
-              data-testid="push-to-sheet-btn"
-              title={lastPushAt ? `Last Sheet push: ${new Date(lastPushAt).toLocaleString()}` : 'Export all trips to Buffer Sheet (atomic rewrite, preserves unimported)'}
-            >
-              <span className="text-[13px] leading-none">☁️↑</span> <span className="whitespace-normal break-words leading-none">{sheetPushing ? 'Exporting…' : 'Export to Google Sheet'}</span>
+            <button onClick={handlePushToSheet} disabled={sheetPushing || importing || sheetPulling} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-blue-900 bg-blue-50 border border-indigo-200/60 hover:bg-indigo-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" data-testid="push-to-sheet-btn" title={lastPushAt ? `Last Sheet push: ${new Date(lastPushAt).toLocaleString()}` : 'Push / Export Google Sheet'}>
+              <svg className="w-3.5 h-3.5 text-blue-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75v6.75m0 0l-3-3m3 3l3-3m-8.25 3a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.75 3.75 0 0118 19.5H6.75z"></path></svg>
+              <span className="block whitespace-normal">Export<br />Google Sheet</span>
             </button>
-            <button
-              onClick={() => setShowSheetSettings(true)}
-              className="px-2 py-1.5 bg-paper-sheet border border-rule-line rounded-lg text-xs hover:bg-paper-gutter flex-shrink-0"
-              title="Buffer Sheet Settings"
-              data-testid="sheet-settings-btn"
-            >
-              ⚙️
+            <button onClick={() => setShowSheetSettings(true)} className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-lg transition shadow-sm text-left leading-tight shrink-0" title="Google Sheet Settings" data-testid="sheet-settings-btn">
+              <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+              <span className="block whitespace-normal">Sheet<br />Settings</span>
             </button>
-            <button
-              onClick={handleRebuildLedger}
-              disabled={importing || sheetPulling || sheetPushing}
-              className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 bg-paper-sheet border border-rule-line text-on-surface rounded-lg text-[10px] font-semibold hover:bg-paper-gutter transition-colors disabled:opacity-50 min-w-[78px] max-w-[88px] leading-tight whitespace-normal text-center"
-            >
-              <span className="text-[13px] leading-none">🔄</span> <span className="whitespace-normal break-words leading-none">Rebuild Ledger</span>
+            <button onClick={handleRebuildLedger} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg text-indigo-700 bg-indigo-50 border border-indigo-200/60 hover:bg-indigo-100 shadow-sm transition text-left leading-tight shrink-0 disabled:opacity-50">
+              <svg className="w-3.5 h-3.5 text-indigo-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"></path></svg>
+              <span className="block whitespace-normal">Rebuild<br />Ledger</span>
             </button>
+            <button onClick={handleOpenStartAudit} disabled={auditFixing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" data-testid="verify-start-times-btn" title="Verify Start Times">
+              <svg className="w-3.5 h-3.5 text-amber-600 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+              <span className="block whitespace-normal">Estimate Fuel<br />Economies</span>
+            </button>
+            <a href="/trips/new" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white shadow hover:bg-indigo-700 transition shrink-0">
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg>
+              <span className="block whitespace-normal">New<br />Trip</span>
+            </a>
           </div>
         </div>
+      </div>
+
+      {/* KPI Bar — matches alltripsample QuickKPIBar */}
+      <section aria-label="Ledger KPI Metrics" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3" data-purpose="kpi-metrics-grid">
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Total Entries</p>
+            <p className="text-xl font-bold tracking-tight text-slate-900 mt-0.5 font-mono">{kpiTotal.toLocaleString()}</p>
+          </div>
+          <div className="h-9 w-9 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Working Dist.</p>
+            <div className="flex items-baseline gap-1 mt-0.5">
+              <p className="text-xl font-bold tracking-tight text-slate-900 font-mono">{kpiWorking.toLocaleString()}</p>
+              <span className="text-xs text-slate-400 font-medium">km</span>
+            </div>
+          </div>
+          <div className="h-9 w-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-medium text-xs">{sums.officialKm.toLocaleString().slice(0,4)}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Off-day Dist.</p>
+            <div className="flex items-baseline gap-1 mt-0.5">
+              <p className="text-xl font-bold tracking-tight text-slate-900 font-mono">{kpiOffDay.toLocaleString()}</p>
+              <span className="text-xs text-slate-400 font-medium">km</span>
+            </div>
+          </div>
+          <div className="h-9 w-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-medium text-xs">{offDaySummary.offDayTrips} tr</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Telemetry Health</p>
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-xs font-semibold text-slate-800">Live {liveTime}</span>
+            </div>
+          </div>
+          <div className="h-9 w-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+          </div>
+        </div>
+        <div className={`rounded-xl border p-3.5 flex items-center justify-between shadow-sm col-span-2 sm:col-span-1 ${kpiGapCount>0 ? 'bg-amber-50/60 border-amber-300/70' : 'bg-white border-slate-200/80'}`}>
+          <div>
+            <p className={`text-[11px] font-semibold uppercase tracking-wider ${kpiGapCount>0 ? 'text-amber-800' : 'text-slate-400'}`}>Discrepancy</p>
+            <p className={`text-xs font-medium mt-1 ${kpiGapCount>0 ? 'text-amber-900' : 'text-slate-600'}`}>{kpiGapCount>0 ? `${kpiGapCount} Gap${kpiGapCount>1?'s':''} (${kpiGapKm.toLocaleString()} km)` : 'No gaps — ledger clean'}</p>
+          </div>
+          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-bold shadow-sm ${kpiGapCount>0 ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white'}`}>{kpiGapCount>0 ? 'Action Req' : 'Clean'}</span>
+        </div>
+      </section>
+
+      {/* Continuity Gap Banner — matches alltripsample ContinuityGapBanner */}
+      {gapPairs.length > 0 && (
+        <section aria-label="Continuity Gap Alert" className="rounded-xl border-l-4 border-l-rose-600 bg-gradient-to-r from-rose-50/90 via-amber-50/60 to-white border border-rose-200/70 p-4 shadow-sm" data-purpose="continuity-gap-alert">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="p-2 rounded-lg bg-rose-100 text-rose-700 shrink-0 mt-0.5">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">Continuity Gap Detected: {gapPairs.length} Odometer Mismatch{gapPairs.length>1?'es':''}</h2>
+                  <span className="text-[11px] px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold uppercase tracking-wide">Row #{globalSeqMap.get(gapPairs[0].successor.id) ?? '?'}</span>
+                </div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Trip on <strong className="text-slate-800 font-medium">{new Date(gapPairs[0].successor.date+'T00:00:00').toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric', year:'numeric'})}</strong> Start ODO (<span className="font-mono font-medium text-rose-700">{gapPairs[0].actual.toLocaleString()}</span>) does not match previous End ODO (<span className="font-mono font-medium text-slate-800">{gapPairs[0].expected.toLocaleString()}</span>). <span className="text-rose-700 font-semibold font-mono">Missing: +{Math.abs(gapPairs[0].delta).toLocaleString()} km.</span>
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center flex-wrap gap-2.5 shrink-0">
+              <button onClick={() => openGapFill(gapPairs[0])} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 text-white hover:bg-rose-700 shadow-sm transition" type="button">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+                <span>Auto-Fill Missing {Math.abs(gapPairs[0].delta).toLocaleString()} KM</span>
+              </button>
+              <button onClick={() => { const id=gapPairs[0].successor.id; focusTrip(id, {clearFilter: false}); }} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition shadow-sm" type="button">
+                <span>Jump to Row #{globalSeqMap.get(gapPairs[0].successor.id) ?? '?'}</span>
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+              </button>
+              <span className="text-xs text-slate-500 px-2 font-medium">{gapPairs.length>1 ? `+${gapPairs.length-1} more` : ''}</span>
+            </div>
+          </div>
+        </section>
+      )}
 
         {importMsg && (
           <div className={`text-xs px-3 py-2 rounded-lg ${importMsg.includes('failed') || importMsg.includes('error') || importMsg.includes('Overlap') || importMsg.includes('Sheet not modified') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
@@ -1472,85 +1705,80 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           </div>
         )}
 
-        <div className="flex flex-col lg:flex-row gap-2">
-          <div className="flex-1 relative">
-            <input
-              aria-label="Search trips"
-              placeholder="Search places, date, distance, order no..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full px-3 py-2 pr-8 border border-rule-line rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-telemetry-cyan/30 focus:border-telemetry-cyan"
-            />
-            {search && (
-              <button
-                aria-label="Clear search"
-                onClick={() => setSearch('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface text-sm"
-              >
-                ✕
-              </button>
+      {/* FilterAndControlBar — matches alltripsample */}
+      <section className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-3" data-purpose="ledger-filter-controls">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-xl">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <svg className="h-4 w-4 text-slate-400" fill="currentColor" viewBox="0 0 20 20"><path clipRule="evenodd" d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z" fillRule="evenodd"></path></svg>
+            </div>
+            <input aria-label="Search trips" className="block w-full rounded-lg border-0 py-1.5 pl-9 pr-8 text-xs text-slate-800 ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 bg-slate-50/50 hover:bg-white transition" placeholder="Search places (e.g. HO, Panni), date, distance, order no..." type="text" value={search} onChange={(e) => setSearch(e.target.value)} />
+            {search ? (
+              <button className="absolute inset-y-0 right-0 flex items-center pr-2.5 text-slate-400 hover:text-slate-600" type="button" onClick={() => setSearch('')} aria-label="Clear search">✕</button>
+            ) : (
+              <span className="absolute inset-y-0 right-0 flex items-center pr-2.5 text-slate-400"><span className="text-[10px] bg-slate-200/80 px-1.5 py-0.5 rounded text-slate-600 font-mono">⌘K</span></span>
             )}
           </div>
-          <div className="flex gap-2">
-            <select
-              aria-label="Filter by trip type"
-              value={tripType}
-              onChange={(e) => setTripType(e.target.value as typeof tripType)}
-              className="px-3 py-2 border border-rule-line rounded-lg text-sm bg-paper-sheet focus:outline-none focus:ring-2 focus:ring-telemetry-cyan/30"
-            >
-              <option value="All">All Types</option>
-              <option value="Official">Official</option>
-              <option value="Private">Private</option>
-            </select>
-            <select
-              aria-label="Filter by month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="px-3 py-2 border border-rule-line rounded-lg text-sm bg-paper-sheet focus:outline-none focus:ring-2 focus:ring-telemetry-cyan/30"
-            >
-              <option value="All">All Months</option>
-              {availableMonths.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-            <select
-              aria-label="Filter by day type"
-              value={dayTypeFilter}
-              onChange={(e) => setDayTypeFilter(e.target.value as typeof dayTypeFilter)}
-              className="px-3 py-2 border border-rule-line rounded-lg text-sm bg-paper-sheet focus:outline-none focus:ring-2 focus:ring-telemetry-cyan/30"
-            >
-              <option value="All">All Days</option>
-              <option value="Off">Off-days only</option>
-              <option value="Working">Working days only</option>
-            </select>
-          </div>
-        </div>
-        {/* Off-day summary bar */}
-        {filtered.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 text-[11px] px-1">
-            <span className="px-2 py-1 rounded-full bg-rose-50 border border-rose-200">Off-day: {offDaySummary.offDayTrips} trips • {offDaySummary.offDayKm.toLocaleString()} km</span>
-            <span className="px-2 py-1 rounded-full bg-slate-900 text-slate-100">Working: {offDaySummary.workingDayTrips} • {offDaySummary.workingDayKm.toLocaleString()} km</span>
-            <span className="px-2 py-1 rounded-full bg-sky-50 border border-sky-200">Leave: {offDaySummary.onLeave}</span>
-            <span className="px-2 py-1 rounded-full bg-amber-50 border border-amber-200">Mercantile: {offDaySummary.onMercantile}</span>
-            <span className="px-2 py-1 rounded-full bg-purple-50 border border-purple-200">Poya: {offDaySummary.onPoya}</span>
-            <a href="/calendar" className="px-2 py-1 rounded-full bg-paper-gutter border border-rule-line hover:bg-paper-sheet">Open Calendar →</a>
-            <button
-              onClick={handleGoToLatest}
-              data-testid="go-to-latest-btn"
-              className="ml-auto px-3 py-1 rounded-full bg-slate-900 text-white border border-slate-700 text-[11px] font-semibold hover:bg-slate-800 flex items-center gap-1"
-              title="Jump to the last row of the table"
-            >
-              Go to Latest records…
+          <div className="flex items-center flex-wrap gap-2">
+            <div className="relative inline-block">
+              <select aria-label="Filter by trip type" value={tripType} onChange={(e) => setTripType(e.target.value as typeof tripType)} className="text-xs rounded-lg border-slate-300 py-1.5 pl-2.5 pr-8 font-medium text-slate-700 bg-white focus:border-indigo-500 focus:ring-indigo-500 shadow-sm cursor-pointer">
+                <option value="All">All Types</option>
+                <option value="Official">Official</option>
+                <option value="Private">Private</option>
+              </select>
+            </div>
+            <div className="relative inline-block">
+              <select aria-label="Filter by month" value={month} onChange={(e) => setMonth(e.target.value)} className="text-xs rounded-lg border-slate-300 py-1.5 pl-2.5 pr-8 font-medium text-slate-700 bg-white focus:border-indigo-500 focus:ring-indigo-500 shadow-sm cursor-pointer">
+                <option value="All">All Months</option>
+                {availableMonths.map((m) => (<option key={m} value={m}>{m}</option>))}
+              </select>
+            </div>
+            <div className="relative inline-block">
+              <select aria-label="Filter by day type" value={dayTypeFilter} onChange={(e) => setDayTypeFilter(e.target.value as typeof dayTypeFilter)} className="text-xs rounded-lg border-slate-300 py-1.5 pl-2.5 pr-8 font-medium text-slate-700 bg-white focus:border-indigo-500 focus:ring-indigo-500 shadow-sm cursor-pointer">
+                <option value="All">All Days</option>
+                <option value="Off">Off-days only</option>
+                <option value="Working">Working days only</option>
+              </select>
+            </div>
+            <a href="/calendar" className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg text-slate-700 hover:bg-slate-100 transition border border-slate-200">
+              <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 9v7.5" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+              <span>Calendar</span>
+            </a>
+            <button onClick={handleGoToLatest} data-testid="go-to-latest-btn" className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition border border-indigo-200/60" type="button">
+              <span>Latest Records</span>
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" strokeLinecap="round" strokeLinejoin="round"></path></svg>
             </button>
           </div>
-        )}
-      </div>
+        </div>
+        <div className="flex items-center flex-wrap gap-2 pt-2 border-t border-slate-100 text-xs">
+          <span className="text-slate-400 text-[11px] font-medium uppercase tracking-wider mr-1">Quick Filters:</span>
+          <button onClick={() => { setTripType('All'); setDayTypeFilter('All'); }} className={`px-2.5 py-1 rounded-md text-xs font-medium shadow-sm border ${tripType==='All' && dayTypeFilter==='All' ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80 border-slate-200'}`}>
+            All <span className="ml-1 opacity-70">{filtered.length}</span>
+          </button>
+          <button onClick={() => { setTripType('Official'); }} className="px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition border border-emerald-200/80">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>
+            Working: {offDaySummary.workingDayTrips} <span className="text-emerald-600/70 text-[11px] ml-1">({offDaySummary.workingDayKm.toLocaleString()} km)</span>
+          </button>
+          <button onClick={() => setDayTypeFilter(dayTypeFilter==='Off' ? 'All' : 'Off')} className={`px-2.5 py-1 rounded-md text-xs font-medium transition border ${dayTypeFilter==='Off' ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80 border-slate-200'}`}>
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5"></span>
+            Off-day: {offDaySummary.offDayTrips} <span className="text-slate-400 text-[11px] ml-1">({offDaySummary.offDayKm.toLocaleString()} km)</span>
+          </button>
+          <button className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200/80 transition border border-slate-200">Leave: {offDaySummary.onLeave}</button>
+          <button className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200/80 transition border border-slate-200">Mercantile: {offDaySummary.onMercantile}</button>
+          <button className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200/80 transition border border-slate-200">Poya: {offDaySummary.onPoya}</button>
+          <div className="ml-auto text-[11px] text-slate-400 flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>Sheet Push: {lastPushAt ? new Date(lastPushAt).toLocaleString() : '—'}</span>
+          </div>
+        </div>
+      </section>
 
-      {/* Table - scrollable with visible scrollbars: horizontal scroll restored */}
-      <div ref={tableContainerRef} className={`overflow-auto ${compact ? 'max-h-[420px]' : 'max-h-[65vh] min-h-[280px]'} overflow-y-auto overflow-x-auto scrollbar-thin border-t border-rule-line`} style={{ scrollbarWidth: 'thin' }}>
-        <table className="w-full min-w-[1020px] text-left border-collapse">
-          <thead className="sticky top-0 bg-paper-gutter z-10">
-            <tr className="text-[8px] font-bold tracking-widest uppercase text-on-surface-variant border-b border-rule-line-strong">
+      {/* LedgerMasterTable — matches alltripsample */}
+      <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden" data-purpose="ledger-table-container">
+        <div ref={tableContainerRef} className={`overflow-x-auto overflow-y-auto ${compact ? 'max-h-[420px]' : 'max-h-[640px] min-h-[280px]'} relative`} style={{ scrollbarWidth: 'thin' }}>
+          <table className="w-full text-left border-collapse text-xs table-sticky-header">
+            <thead>
+              <tr className="bg-slate-100 text-slate-700 border-b border-slate-200 uppercase font-semibold text-[11px] tracking-wider select-none sticky top-0 z-20 shadow-sm">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
               <th className="py-2.5 px-2 border-r border-rule-line w-40">
                 <button onClick={() => handleSort('date')} className="flex items-center hover:text-on-surface">
@@ -1719,18 +1947,22 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               })
             )}
           </tbody>
-        </table>
-      </div>
-
-      {/* Footer */}
-      <div className="p-3 bg-paper-gutter rounded-b-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-[11px] font-semibold tracking-widest uppercase text-on-surface-variant border-t border-rule-line" data-testid="master-footer-sums">
-        <span data-testid="master-footer-count">
-          {filtered.length} rows • Sorted by {sortColumn} ({sortDirection})
-        </span>
-        <span data-testid="master-footer-distances" className="font-mono normal-case tracking-normal text-xs font-bold">
-          Official {sums.officialKm.toLocaleString()} KM • Private {sums.privateKm.toLocaleString()} KM • Total {sums.totalKm.toLocaleString()} KM
-        </span>
-      </div>
+          </table>
+        </div>
+        <footer className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-slate-600 sticky bottom-0 z-20 shadow-sm" data-purpose="continuous-scroll-bar" data-testid="master-footer-sums">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>Continuous Ledger</span>
+            <span className="text-slate-700 font-medium" data-testid="master-footer-count">{filtered.length} rows • Sorted by {sortColumn} ({sortDirection}) • Displaying {filtered.length} of {trips.length} trips</span>
+          </div>
+          <div className="flex items-center gap-3 self-end sm:self-auto">
+            <span data-testid="master-footer-distances" className="font-mono text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded text-[11px] border border-slate-200/80">Official {sums.officialKm.toLocaleString()} KM • Private {sums.privateKm.toLocaleString()} KM • Total {sums.totalKm.toLocaleString()} KM</span>
+            <button onClick={() => { tableContainerRef.current?.scrollTo({top:0, behavior:'smooth'}); window.scrollTo({top:0, behavior:'smooth'}); }} className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition shadow-sm cursor-pointer" type="button">
+              <svg className="w-3.5 h-3.5 text-slate-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"></path></svg>
+              <span>Scroll to Top</span>
+            </button>
+          </div>
+        </footer>
+      </section>
 
       {/* Portal ⋯ menu - fixed outside scroll container to avoid clipping, auto-flips above for last rows */}
       {openMenuId && menuAnchorRect && typeof document !== 'undefined' && createPortal(
@@ -1950,38 +2182,132 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <h3 className="text-sm font-bold text-on-surface mb-1">Insert After {insertTarget.anchor.date} ({insertTarget.anchor.start_km}→{insertTarget.anchor.end_km})</h3>
             <p className="text-xs text-on-surface-variant mb-3">Downstream trips will shift by Δ = End − Start. Confirmation shows preview.</p>
             {insertError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="insert-error">{insertError}</div>}
+            {/* ODO Reciprocal — Start + Distance = End (Integer KM) */}
+            <div className="p-3 bg-paper-ledger dark:bg-zinc-800/50 rounded-lg border border-rule-line mb-3">
+              <h4 className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Odometer Reciprocal — Start + Distance = End</h4>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <label className="flex flex-col gap-1">Date *
+                  <input type="date" value={insertForm.date} min={insertTarget.anchor.date} max={sortedAll[insertTarget.sortedIdx+1]?.date} onChange={e=>setInsertForm({...insertForm, date:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-date" />
+                </label>
+                <label className="flex flex-col gap-1">Trip Type
+                  <select value={insertForm.trip_type} onChange={e=>setInsertForm({...insertForm, trip_type:e.target.value as any})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-type">
+                    <option value="Official">Official</option>
+                    <option value="Private">Private</option>
+                  </select>
+                </label>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-xs mt-3">
+                <label className="flex flex-col gap-1">Start KM *
+                  <input type="number" step="1" value={insertForm.start_km} onChange={e=>{
+                    const val=e.target.value;
+                    const s=parseIntKmInsert(val);
+                    let nextEnd=insertForm.end_km;
+                    let nextDist=insertForm.distance;
+                    if(!isNaN(s)){
+                      if(insertForm.distance!=='' && !isNaN(parseIntKmInsert(insertForm.distance))){
+                        const d=parseIntKmInsert(insertForm.distance);
+                        nextEnd=String(calculateEndKm(s,d));
+                        nextDist=String(d);
+                      } else if(insertForm.end_km!=='' && !isNaN(parseIntKmInsert(insertForm.end_km))){
+                        const eKm=parseIntKmInsert(insertForm.end_km);
+                        nextDist=String(calculateTripDistance(s,eKm));
+                      }
+                    }
+                    const est = !isNaN(parseIntKmInsert(nextDist)) && insertForm.end_time && insertForm.start_time==='' ? maybeAutoEstimateInsert(nextDist, insertForm.end_time, '') : null;
+                    setInsertForm(prev=>({ ...prev, start_km: val, end_km: nextEnd, distance: nextDist, ...(est ? { start_time: est } : {}) }));
+                  }} className="border border-rule-line rounded px-2 py-1" data-testid="insert-start" />
+                </label>
+                <label className="flex flex-col gap-1">End KM *
+                  <input type="number" step="1" value={insertForm.end_km} onChange={e=>{
+                    const val=e.target.value;
+                    const end=parseIntKmInsert(val);
+                    const start=parseIntKmInsert(insertForm.start_km);
+                    let nextDist=insertForm.distance;
+                    if(!isNaN(end) && !isNaN(start)){
+                      nextDist=String(calculateTripDistance(start,end));
+                    } else if(val===''){ nextDist=''; }
+                    const est = nextDist && insertForm.end_time && insertForm.start_time==='' ? maybeAutoEstimateInsert(nextDist, insertForm.end_time, '') : null;
+                    setInsertForm(prev=>({ ...prev, end_km: val, distance: nextDist, ...(est ? { start_time: est } : {}) }));
+                  }} className="border border-rule-line rounded px-2 py-1" data-testid="insert-end" />
+                </label>
+                <label className="flex flex-col gap-1">Distance (KM) *
+                  <input type="number" step="1" value={insertForm.distance} onChange={e=>{
+                    const val=e.target.value;
+                    const d=parseIntKmInsert(val);
+                    const start=parseIntKmInsert(insertForm.start_km);
+                    let nextEnd=insertForm.end_km;
+                    if(!isNaN(d) && !isNaN(start)){
+                      nextEnd=String(calculateEndKm(start,d));
+                    }
+                    const est = val && insertForm.end_time && insertForm.start_time==='' ? maybeAutoEstimateInsert(val, insertForm.end_time, '') : null;
+                    setInsertForm(prev=>({ ...prev, distance: val, end_km: nextEnd, ...(est ? { start_time: est } : {}) }));
+                  }} placeholder="Enter Distance" className="border border-rule-line rounded px-2 py-1" data-testid="insert-distance" />
+                </label>
+              </div>
+              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mt-2">Formula: Distance (int) = round(End − Start) • Integer KM</p>
+            </div>
+            {/* Time Reciprocal — End − Duration = Start • Estimated Start Time */}
+            {isInsertTrafficMode && (
+              <div className="flex items-center gap-3 px-2 py-2 bg-amber-50 border border-amber-200 rounded-lg mb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-amber-800">Traffic Mode</span>
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                  <input type="radio" name="insertTrafficMode" value="traffic" checked={insertTrafficMode === 'traffic'} onChange={() => setInsertTrafficMode('traffic')} className="accent-amber-600" />
+                  <span className="text-sm font-medium">Traffic</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs">
+                  <input type="radio" name="insertTrafficMode" value="light" checked={insertTrafficMode === 'light'} onChange={() => setInsertTrafficMode('light')} className="accent-emerald-600" />
+                  <span className="text-sm font-medium">Light Traffic</span>
+                </label>
+                <span className="text-[10px] text-zinc-500 ml-auto">Selects Speed Slab set for Auto estimate</span>
+              </div>
+            )}
+            <div className="p-3 bg-paper-ledger dark:bg-zinc-800/50 rounded-lg border border-rule-line mb-3">
+              <h4 className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-2">Time Reciprocal — Estimated Start Time</h4>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="flex flex-col gap-1">
+                  <label>Start Time <span className="text-zinc-400 font-normal text-[10px]">Optional</span></label>
+                  <div className="flex gap-1">
+                    <input type="time" value={insertForm.start_time} onChange={e=>setInsertForm({...insertForm, start_time:e.target.value})} className="flex-1 border border-rule-line rounded px-2 py-1" data-testid="insert-start-time" />
+                    <button type="button" aria-label="Auto" onClick={handleAutoInsertEstimate} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider border border-zinc-300 rounded bg-white hover:bg-zinc-50" title="Estimate Start Time as End − (Distance/speed) ceil 5 min" data-testid="insert-auto-btn">Auto</button>
+                  </div>
+                  <div className="flex gap-1 mt-1">
+                    <button type="button" onClick={()=>nudgeInsertStartTime(-10)} disabled={!insertForm.start_time} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40" title="-10 min" data-testid="insert-nudge-m10">−10</button>
+                    <button type="button" onClick={()=>nudgeInsertStartTime(-5)} disabled={!insertForm.start_time} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40" title="-5 min" data-testid="insert-nudge-m5">−5</button>
+                    <button type="button" onClick={()=>nudgeInsertStartTime(5)} disabled={!insertForm.start_time} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40" title="+5 min" data-testid="insert-nudge-p5">+5</button>
+                    <button type="button" onClick={()=>nudgeInsertStartTime(10)} disabled={!insertForm.start_time} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40" title="+10 min" data-testid="insert-nudge-p10">+10</button>
+                  </div>
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Auto: End − (Distance/speed) ceil 5 min</span>
+                </div>
+                <label className="flex flex-col gap-1">End Time *
+                  <input type="time" value={insertForm.end_time} onChange={e=>{
+                    const val=e.target.value;
+                    const dStr = insertForm.distance !== '' ? insertForm.distance : (insertForm.start_km && insertForm.end_km && !isNaN(parseIntKmInsert(insertForm.start_km)) && !isNaN(parseIntKmInsert(insertForm.end_km)) ? String(calculateTripDistance(parseIntKmInsert(insertForm.start_km), parseIntKmInsert(insertForm.end_km))) : '');
+                    const est = dStr && insertForm.start_time==='' ? maybeAutoEstimateInsert(dStr, val, '') : null;
+                    setInsertForm(prev=>({ ...prev, end_time: val, ...(est ? { start_time: est } : {}) }));
+                  }} className="border border-rule-line rounded px-2 py-1" data-testid="insert-end-time" />
+                  <span className="text-[10px] text-zinc-500">defaults to entry • empty Start auto-fills</span>
+                </label>
+              </div>
+              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mt-2">Formula: Estimated Start = End − ceil((Distance/speed)*60 /5)*5 • Supports overnight wrap • Only auto-fills when Start empty</p>
+            </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
-              <label className="flex flex-col gap-1">Date *
-                <input type="date" value={insertForm.date} min={insertTarget.anchor.date} max={sortedAll[insertTarget.sortedIdx+1]?.date} onChange={e=>setInsertForm({...insertForm, date:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-date" />
-              </label>
-              <label className="flex flex-col gap-1">Trip Type
-                <select value={insertForm.trip_type} onChange={e=>setInsertForm({...insertForm, trip_type:e.target.value as any})} className="border border-rule-line rounded px-2 py-1">
-                  <option value="Official">Official</option>
-                  <option value="Private">Private</option>
-                </select>
-              </label>
-              <label className="flex flex-col gap-1">Start KM *
-                <input type="number" value={insertForm.start_km} onChange={e=>setInsertForm({...insertForm, start_km:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-start" />
-              </label>
-              <label className="flex flex-col gap-1">End KM *
-                <input type="number" value={insertForm.end_km} onChange={e=>setInsertForm({...insertForm, end_km:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-end" />
-              </label>
-              <div className="col-span-2 text-[11px] text-on-surface-variant">Distance auto: {insertForm.start_km && insertForm.end_km && !isNaN(parseInt(insertForm.start_km,10)) && !isNaN(parseInt(insertForm.end_km,10)) ? roundToIntegerKm(parseInt(insertForm.end_km,10) - parseInt(insertForm.start_km,10)) : '-'} km</div>
-              <label className="flex flex-col gap-1">End Time *
-                <input type="time" value={insertForm.end_time} onChange={e=>setInsertForm({...insertForm, end_time:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-end-time" />
-              </label>
-              <label className="flex flex-col gap-1">Start Time
-                <input type="time" value={insertForm.start_time} onChange={e=>setInsertForm({...insertForm, start_time:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
-              </label>
               <label className="flex flex-col gap-1">Fuel Pumped
                 <input type="number" step="0.1" value={insertForm.fuel_pumped_amount} onChange={e=>setInsertForm({...insertForm, fuel_pumped_amount:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
               </label>
               <label className="flex flex-col gap-1">Fuel Order No
                 <input value={insertForm.fuel_order_no} onChange={e=>setInsertForm({...insertForm, fuel_order_no:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
               </label>
-              <label className="col-span-2 flex flex-col gap-1">Places Visited *
-                <input value={insertForm.places_visited} onChange={e=>setInsertForm({...insertForm, places_visited:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-places" />
-              </label>
+              <div className="col-span-2 flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium">Places Visited / Route & Purpose <span className="text-red-500">*</span></span>
+                  <div className="flex gap-1.5">
+                    <button type="button" data-testid="insert-quick-places-home-office" onClick={()=>setInsertForm(prev=>({ ...prev, places_visited: 'Home - Office' }))} className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${insertForm.places_visited === 'Home - Office' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-zinc-50 border-zinc-300 text-zinc-700 hover:bg-sky-50 hover:border-sky-300'}`} title="Fill Places Visited with Home - Office">Home - Office</button>
+                    <button type="button" data-testid="insert-quick-places-office-home" onClick={()=>setInsertForm(prev=>({ ...prev, places_visited: 'Office - Home' }))} className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${insertForm.places_visited === 'Office - Home' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-zinc-50 border-zinc-300 text-zinc-700 hover:bg-sky-50 hover:border-sky-300'}`} title="Fill Places Visited with Office - Home">Office - Home</button>
+                  </div>
+                </div>
+                <input value={insertForm.places_visited} onChange={e=>setInsertForm({...insertForm, places_visited:e.target.value})} placeholder="e.g., HQ Fleet Yard → Regional Port Customs" className="border border-rule-line rounded px-2 py-1" data-testid="insert-places" />
+                <p className="text-[11px] text-zinc-500">Tap a chip to fill — you can still edit freely after.</p>
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={()=>setInsertTarget(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
@@ -2077,9 +2403,16 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               Trips — DB {pushPreview.dbCount} | Preserved {pushPreview.preserved.length} (unimported) | Overwriting {pushPreview.overwritingCount} | Invalid {pushPreview.invalidIgnored}
             </p>
             <p className="text-xs text-on-surface-variant mb-2">
-              Leaves — DB {pushPreview.leavesDbCount} | Preserved {pushPreview.leavesPreserved.length} | Overwriting {pushPreview.leavesOverwriting} | Invalid {pushPreview.leavesInvalid} · Leaves total {pushPreview.mergedLeaves.length}
+              Leaves — DB {pushPreview.leavesDbCount} | Preserved {pushPreview.leavesPreserved.length} | Overwriting {pushPreview.leavesOverwriting} | Invalid {pushPreview.leavesInvalid} · Leaves total {pushExactMirror ? pushPreview.mergedLeavesExact.length : pushPreview.mergedLeaves.length}
             </p>
-            <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">Sheet will be cleared and rewritten atomically (LockService, {pushPreview.mergedRows.length} trips + {pushPreview.mergedLeaves.length} leaves).</p>
+            <label className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg border bg-white cursor-pointer" data-testid="push-exact-mirror-toggle">
+              <input type="checkbox" checked={pushExactMirror} onChange={e=>setPushExactMirror(e.target.checked)} className="mt-0.5" data-testid="push-exact-mirror-checkbox" />
+              <span className="flex flex-col">
+                <span className="text-xs font-bold text-slate-800">Exact mirror — make sheet exactly equal app DB (delete preserved rows)</span>
+                <span className="text-[11px] text-on-surface-variant">Uncheck = default safe merge (DB + preserved unimported buffer rows appended). Check = sheet will be cleared and rewritten with only {pushPreview.dbCount} DB trips + {pushPreview.leavesDbCount} leaves — the 2026-09-20 {pushPreview.preserved.length>0 ? `and ${pushPreview.preserved.length} preserved` : ''} row(s) will be removed. Use this to propagate deletions like your 2026-09-20 SLIIT record.</span>
+              </span>
+            </label>
+            <p className={`text-xs font-semibold rounded px-2 py-1 mb-3 border ${pushExactMirror ? 'text-red-700 bg-red-50 border-red-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>Sheet will be cleared and rewritten atomically (LockService, {pushExactMirror ? pushPreview.mergedRowsExact.length : pushPreview.mergedRows.length} trips + {pushExactMirror ? pushPreview.mergedLeavesExact.length : pushPreview.mergedLeaves.length} leaves){pushExactMirror ? ' — EXACT MIRROR (preserved rows will be deleted)' : ''}.</p>
             {(() => { const { sheetId, scriptUrl } = getSheetSettings(); if (!sheetId || !scriptUrl) return <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-3" data-testid="push-blocked-banner">Blocked by: Settings — configure Sheet ID and Apps Script URL</div>; return null; })()}
             {pushError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2" data-testid="sheet-push-preview-error">{pushError}</div>}
 
@@ -2112,10 +2445,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               <button
                 disabled={(()=>{ const { sheetId, scriptUrl } = getSheetSettings(); return !sheetId || !scriptUrl || sheetPushing; })()}
                 onClick={handlePushConfirm}
-                className="px-4 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                className={`px-4 py-2 text-sm font-semibold text-white rounded-lg disabled:opacity-50 ${pushExactMirror ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                 data-testid="confirm-sheet-push"
               >
-                {sheetPushing ? 'Exporting…' : `Confirm Export (${pushPreview.mergedRows.length} rows)`}
+                {sheetPushing ? 'Exporting…' : pushExactMirror ? `Confirm Exact Mirror (${pushPreview.mergedRowsExact.length} rows — delete ${pushPreview.preserved.length} preserved)` : `Confirm Export (${pushPreview.mergedRows.length} rows)`}
               </button>
             </div>
           </div>
@@ -2205,6 +2538,91 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={()=>{ setShowPullPreview(false); setPullComparison(null); setLeavesPullComparison(null); }} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
               <button disabled={sheetPulling || (selectedNew.size===0 && selectedChanged.size===0 && selectedLeaveNew.size===0 && selectedLeaveChanged.size===0)} onClick={handleSheetImportConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-lg hover:bg-cyan-700 disabled:opacity-50" data-testid="confirm-sheet-pull">{sheetPulling?'Importing…':`Import Selected (${selectedNew.size+selectedChanged.size+selectedLeaveNew.size+selectedLeaveChanged.size})`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Start Time Audit Modal */}
+      {showStartAudit && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="start-audit-modal" onClick={()=>setShowStartAudit(false)}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-4xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-1">Verify Start Times — Audit (Traffic)</h3>
+            <p className="text-xs text-on-surface-variant mb-2">Scanned {trips.length} trips • Found {startAuditRows.length} anomalies via Traffic slabs (End − Distance/speed ceil 5 min). Check to fix Start → Estimated.</p>
+            <div className="flex flex-wrap gap-1 mb-3 text-[11px]">
+              <span className="px-2 py-1 rounded-full bg-sky-100 border border-sky-300">Empty {startAuditRows.filter(r=>r.reason==='Empty').length}</span>
+              <span className="px-2 py-1 rounded-full bg-red-100 border border-red-300">Equal {startAuditRows.filter(r=>r.reason==='Equal').length}</span>
+              <span className="px-2 py-1 rounded-full bg-red-100 border border-red-300">Inverted {startAuditRows.filter(r=>r.reason==='Inverted').length}</span>
+              <span className="px-2 py-1 rounded-full bg-amber-100 border border-amber-300">Short {startAuditRows.filter(r=>r.reason==='Short').length}</span>
+              <span className="ml-auto text-on-surface-variant">Est via Traffic slabs</span>
+            </div>
+            {startAuditRows.length===0 ? (
+              <div className="text-center py-8 text-sm text-on-surface-variant border border-dashed rounded-lg">No anomalies — all Start times consistent with Traffic estimate and End.</div>
+            ) : (
+              <div className="border border-rule-line rounded-lg overflow-auto max-h-[52vh]">
+                <table className="w-full text-xs">
+                  <thead className="bg-paper-gutter sticky top-0">
+                    <tr>
+                      <th className="px-1 py-1"><input type="checkbox" checked={startAuditRows.filter(r=>r.estimated).length>0 && selectedStartIds.size===startAuditRows.filter(r=>r.estimated).length} onChange={e=>{
+                        if(e.target.checked) setSelectedStartIds(new Set(startAuditRows.filter(r=>r.estimated).map(r=>r.trip.id)));
+                        else setSelectedStartIds(new Set());
+                      }} data-testid="audit-select-all" /></th>
+                      <th className="px-1 py-1 text-left">#</th>
+                      <th className="px-1 py-1 text-left">Date</th>
+                      <th className="px-1 py-1 text-right">KM</th>
+                      <th className="px-1 py-1 text-left">Reason</th>
+                      <th className="px-1 py-1 font-mono">Start</th>
+                      <th className="px-1 py-1 font-mono">End</th>
+                      <th className="px-1 py-1 font-mono">Est(Traffic)</th>
+                      <th className="px-1 py-1 font-mono">Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {startAuditRows.map((row, i)=>{
+                      const t=row.trip;
+                      const checked=selectedStartIds.has(t.id);
+                      const disabled=!row.estimated;
+                      const reasonCls = row.reason==='Empty' ? 'bg-sky-100 border-sky-300 text-sky-800' : row.reason==='Equal' || row.reason==='Inverted' ? 'bg-red-100 border-red-300 text-red-800' : 'bg-amber-100 border-amber-300 text-amber-800';
+                      return (
+                        <tr key={t.id} className="border-t border-rule-line" data-testid={`audit-row-${i}`}>
+                          <td className="px-1 py-1 text-center"><input type="checkbox" disabled={disabled} checked={checked} onChange={e=>{
+                            const ns=new Set(selectedStartIds); if(e.target.checked) ns.add(t.id); else ns.delete(t.id); setSelectedStartIds(ns);
+                          }} data-testid={`audit-check-${i}`} title={disabled?'Cannot estimate — check End/Distance':''} /></td>
+                          <td className="px-1 py-1 font-mono">{String((globalSeqMap.get(t.id) ?? i+1)).padStart(2,'0')}</td>
+                          <td className="px-1 py-1 whitespace-nowrap">{t.date}</td>
+                          <td className="px-1 py-1 font-mono text-right">{Math.round(t.start_km)}→{Math.round(t.end_km)} ({Math.round(t.trip_distance)})</td>
+                          <td className="px-1 py-1"><span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-bold ${reasonCls}`}>{row.reason}</span></td>
+                          <td className="px-1 py-1 font-mono">{t.start_time || '—'}</td>
+                          <td className="px-1 py-1 font-mono">{t.end_time || '—'}</td>
+                          <td className="px-1 py-1 font-mono font-bold">{row.estimated ?? '—'}</td>
+                          <td className="px-1 py-1 font-mono">{row.durationMin!=null && row.estMin!=null ? `${row.durationMin}m → ${row.estMin}m${row.deltaMin!=null && row.deltaMin>0 ? ` (+${row.deltaMin}m)` : ''}` : row.durationMin!=null ? `${row.durationMin}m` : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button onClick={()=>{
+                const by=(r:AuditReason)=> startAuditRows.filter(x=>x.reason===r && x.estimated).map(x=>x.trip.id);
+                setSelectedStartIds(new Set(by('Empty')));
+              }} className="px-2 py-1 text-xs border rounded hover:bg-paper-gutter">Select Empty</button>
+              <button onClick={()=>{
+                const by=(r:AuditReason)=> startAuditRows.filter(x=>x.reason===r && x.estimated).map(x=>x.trip.id);
+                setSelectedStartIds(new Set([...by('Equal'), ...by('Inverted')]));
+              }} className="px-2 py-1 text-xs border rounded hover:bg-paper-gutter">Select Equal/Inverted</button>
+              <button onClick={()=>{
+                const by=(r:AuditReason)=> startAuditRows.filter(x=>x.reason===r && x.estimated).map(x=>x.trip.id);
+                setSelectedStartIds(new Set(by('Short')));
+              }} className="px-2 py-1 text-xs border rounded hover:bg-paper-gutter">Select Short</button>
+              <span className="ml-auto text-xs text-on-surface-variant">{selectedStartIds.size} selected</span>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>setShowStartAudit(false)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Close</button>
+              <button disabled={auditFixing || selectedStartIds.size===0} onClick={handleFixSelectedStarts} className="px-4 py-2 text-sm font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50" data-testid="audit-fix-btn">
+                {auditFixing ? 'Fixing…' : `Fix Selected (${selectedStartIds.size}) → Estimated`}
+              </button>
             </div>
           </div>
         </div>

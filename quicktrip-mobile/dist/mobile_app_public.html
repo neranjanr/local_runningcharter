@@ -2,75 +2,93 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <meta name="theme-color" content="#0f172a"/>
 <title>QuickTrip Mobile — Buffer Sheet</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: { brand: { 50:'#f0f4f8', 100:'#d9e2ec', 500:'#1b3b6f', 800:'#102a43', 900:'#0b1d3a' } },
+        fontFamily: { sans:['-apple-system','BlinkMacSystemFont','"Segoe UI"', 'Roboto','Helvetica','Arial','sans-serif'], mono:['ui-monospace','SFMono-Regular','Menlo','Monaco','Consolas','monospace'] }
+      }
+    }
+  }
+</script>
 <style>
-*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
-body{margin:0;background:#f1f5f9;color:#0f172a}
-header{background:#0f172a;color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10}
-header h1{font-size:14px;margin:0;line-height:1}
-header p{margin:2px 0 0;font-size:11px;color:#cbd5e1}
-.card{max-width:720px;margin:12px auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,.08)}
-.badge{font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:999px}
-.badge-amber{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
-.badge-zinc{background:#e2e8f0;color:#475569}
-.form{padding:14px;display:grid;gap:12px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-@media(max-width:520px){.grid3{grid-template-columns:1fr}}
-label{font-size:11px;font-weight:700;color:#334155;display:block;margin-bottom:4px}
-input,select{width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff}
-input:focus{outline:2px solid #0ea5e9;border-color:#0ea5e9}
-.hint{font-size:10px;color:#64748b;margin-top:4px}
-.group{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px}
-.group h3{margin:0 0 8px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b}
-.btn{width:100%;padding:13px;border:0;border-radius:12px;background:#0f172a;color:#fff;font-weight:800;font-size:15px}
-.btn:disabled{opacity:.5}
-.msg{margin:10px 14px 0;padding:10px;border-radius:10px;font-size:13px}
-.msg-ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
-.msg-err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{text-align:left;background:#f1f5f9;padding:6px 6px;font-size:11px}
-td{padding:7px 6px;border-top:1px solid #f1f5f9;vertical-align:top}
-.mono{font-family:ui-monospace,Menlo,monospace}
-.top-actions{display:flex;gap:8px}
-.top-actions button{padding:7px 10px;border-radius:10px;border:1px solid #334155;background:#1e293b;color:#fff;font-size:12px;font-weight:700}
-.settings{margin:10px 14px 0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;display:none}
-.settings.open{display:block}
-small{font-size:11px;color:#64748b}
+  input, select, textarea { font-size: 16px !important; }
+  .segmented-control input:checked + label { background-color:#ffffff; color:#0b1d3a; box-shadow:0 1px 3px rgba(0,0,0,0.1); font-weight:600; }
+  .ring-active-glow { box-shadow:0 0 0 2px #f59e0b, 0 0 12px rgba(245,158,11,0.25); }
+  .no-scrollbar::-webkit-scrollbar{display:none} .no-scrollbar{-ms-overflow-style:none; scrollbar-width:none}
 </style>
 </head>
-<body>
-<header>
-  <div>
-    <h1>QuickTrip Mobile <span style="font-weight:400;color:#7dd3fc">• Buffer Sheet</span></h1>
-    <p id="statusLine">Works offline — no login • <span id="queueInfo">0 queued</span> • <span id="onlineInfo"></span></p>
+<body class="bg-slate-50/70 text-slate-800 antialiased min-h-screen">
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30 px-3 py-2 shadow-sm">
+  <div class="max-w-3xl mx-auto flex items-center justify-between">
+    <div class="flex flex-col">
+      <h1 class="text-sm font-bold tracking-tight text-slate-900">QuickTrip Mobile <span class="font-normal text-sky-600">• Buffer Sheet</span></h1>
+      <p id="statusLine" class="text-[11px] text-slate-500">Works offline — no login • <span id="queueInfo">0 queued</span> • <span id="onlineInfo"></span></p>
+    </div>
+    <div class="flex items-center gap-1.5 shrink-0">
+      <button id="settingsBtn" class="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-xs font-semibold hover:bg-slate-200">Settings</button>
+      <button id="refreshBtn" class="px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">↻</button>
+    </div>
   </div>
-  <div class="top-actions"><button id="settingsBtn">Settings</button><button id="refreshBtn">↻</button></div>
 </header>
 
-<div class="card">
-  <div id="settingsPanel" class="settings">
-    <label>Apps Script Web App URL (…/exec) — paste once</label>
-    <input id="scriptUrlInput" placeholder="https://script.google.com/macros/s/AKfy.../exec"/>
-    <p class="hint">Bound Script deployed as <b>Anyone with the link</b> (no Google login). This URL is the only secret — keep it private. Saved in this phone's localStorage.</p>
+<main class="max-w-3xl mx-auto px-2.5 pt-2 pb-24 space-y-2">
+  <div id="settingsPanel" class="hidden bg-white rounded-lg border border-slate-200 shadow-sm p-3 space-y-2">
+    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600">Buffer Sheet Settings</h3>
+    <label class="block text-[11px] font-bold text-slate-600">Apps Script Web App URL (…/exec) — paste once</label>
+    <input id="scriptUrlInput" placeholder="https://script.google.com/macros/s/AKfy.../exec" class="w-full bg-white border border-slate-300 rounded-md py-2 px-2 text-xs"/>
+    <p class="text-[10px] text-slate-500">Bound Script deployed as <b>Anyone with the link</b> (no Google login). This URL is the only secret — keep it private. Saved in this phone's localStorage.</p>
     <div style="display:flex;gap:8px;margin-top:8px">
       <button id="saveSettingsBtn" style="flex:1;padding:9px;border-radius:10px;border:0;background:#0ea5e9;color:#fff;font-weight:800">Save</button>
       <button id="flushBtn" style="padding:9px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-weight:700">Flush queue</button>
     </div>
-    <small>Edit <code>SCRIPT_URL_DEFAULT</code> at top of this file to hard-code and skip this step. Public template: <code>mobile_app_public.html</code> has no URL — run <code>npm run build:mobile</code> or <code>start-service.ps1</code> to generate <code>Mobile_with_url_private.html</code> with your private URL (gitignored, written by PS1).</small>
+    <small class="text-[11px] text-slate-500">Edit <code>SCRIPT_URL_DEFAULT</code> at top of this file to hard-code and skip this step. Public template: <code>mobile_app_public.html</code> has no URL — run <code>npm run build:mobile</code> or <code>start-service.ps1</code> to generate <code>Mobile_with_url_private.html</code> with your private URL (gitignored).</small>
   </div>
 
   <div id="msgBox"></div>
 
-  <form id="tripForm" class="form" novalidate>
-    <div class="grid2">
-      <div><label>Date</label><input id="date" type="date" required/><div id="dow" class="hint" style="color:#0ea5e9;font-weight:800;letter-spacing:.06em;text-transform:uppercase"></div></div>
-      <div><label>Trip Type</label>
-        <div style="display:flex;gap:12px;margin-top:6px"><label style="font-weight:600;display:flex;gap:6px;align-items:center"><input type="radio" name="tripType" value="Official" checked/> Official</label><label style="font-weight:600;display:flex;gap:6px;align-items:center"><input type="radio" name="tripType" value="Private"/> Private</label></div>
+  <section class="rounded-lg shadow-sm border border-slate-800 bg-slate-900 text-white px-3 py-2 flex items-center justify-between gap-2" data-purpose="card-banner">
+    <div class="flex items-center gap-2">
+      <div class="w-6 h-6 rounded bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 font-bold shrink-0">
+        <svg class="w-3.5 h-3.5 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+      </div>
+      <div>
+        <h1 class="text-xs sm:text-sm font-bold tracking-tight leading-none">Quick Trip — Buffer Sheet</h1>
+        <p class="text-[10px] text-slate-300 leading-tight">Same maths as web • Offline queue</p>
       </div>
     </div>
+    <span class="text-[10px] font-mono font-bold tracking-wider px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400">SEC-24</span>
+  </section>
+
+  <form id="tripForm" novalidate class="space-y-2">
+    <section class="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="trip-metadata">
+      <div class="grid grid-cols-2 gap-2.5">
+        <div>
+          <div class="flex items-center justify-between mb-1"><label class="block text-[11px] font-bold uppercase tracking-wider text-slate-600 leading-none">Trip Date</label><span id="dow" class="text-[10px] font-bold text-sky-600 uppercase tracking-tight"></span></div>
+          <input id="date" type="date" required class="w-full bg-slate-50 border border-slate-300 rounded-md py-1 px-2 font-medium text-slate-800 focus:bg-white focus:ring-1 focus:ring-indigo-500 text-xs h-8"/>
+          <p class="text-[9px] text-slate-400 mt-0.5">Fiscal Q3</p>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1"><label class="block text-[11px] font-bold uppercase tracking-wider text-slate-600 leading-none">Trip Type</label><span class="text-[9px] text-slate-400">Ledger</span></div>
+          <div class="grid grid-cols-2 p-0.5 bg-slate-100 rounded-md border border-slate-200 gap-1 h-8 items-center" role="radiogroup">
+            <div>
+              <input name="tripType" value="Official" type="radio" id="mOfficial" checked class="sr-only"/>
+              <label for="mOfficial" class="flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold cursor-pointer transition-all select-none leading-none bg-white text-slate-900 shadow-sm font-bold" id="labelOfficial"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Official <span class="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">OFF</span></label>
+            </div>
+            <div>
+              <input name="tripType" value="Private" type="radio" id="mPrivate" class="sr-only"/>
+              <label for="mPrivate" class="flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold cursor-pointer transition-all select-none leading-none text-slate-600" id="labelPrivate"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Private <span class="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-100 text-amber-800 font-bold">PRI</span></label>
+            </div>
+          </div>
+          <p class="text-[9px] text-slate-400 mt-0.5 truncate">Official requires logging</p>
+        </div>
+      </div>
+    </section>
 
     <div id="trafficModeGroup" style="display:none;gap:8px;align-items:center;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;margin-bottom:6px">
       <span style="font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#92400e">Traffic Mode</span>
@@ -79,58 +97,74 @@ small{font-size:11px;color:#64748b}
       <small style="margin-left:auto">picks slab set</small>
     </div>
 
-    <div class="group">
-      <h3>Odometer — Start + Distance = End (Integer KM)</h3>
-      <div class="grid3">
-        <div><label>Start KM</label><input id="startKm" type="number" step="1" inputmode="numeric" required/><div id="startBadge" class="hint"><span class="badge badge-amber">Auto from last End</span></div></div>
-        <div><label>End KM</label><input id="endKm" type="number" step="1" inputmode="numeric" placeholder="End"/><div class="hint">or fill Distance → auto End</div></div>
-        <div><label>Distance (KM)</label><input id="distance" type="number" step="1" inputmode="numeric" placeholder="Distance"/></div>
+    <section class="bg-white rounded-lg p-2.5 border border-sky-200 shadow-sm relative overflow-hidden" data-purpose="odometer-reciprocal">
+      <div class="flex items-center justify-between pb-1.5 mb-2 border-b border-sky-100">
+        <div class="flex items-center gap-1.5"><span class="p-0.5 rounded bg-sky-100 text-sky-700"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg></span><h2 class="text-[11px] font-bold uppercase tracking-wider text-sky-950 leading-none">Odometer Reciprocal <span class="text-slate-400 font-normal">— START + DISTANCE = END</span></h2></div>
+        <span class="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200">Auto Sync</span>
+      </div>
+      <div class="grid grid-cols-3 gap-2">
+        <div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none">Start KM</label><span class="text-[9px] font-bold text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 leading-none">LOCKED</span></div><input id="startKm" type="number" step="1" inputmode="numeric" required class="w-full bg-amber-50/50 border border-amber-400 text-slate-900 font-mono font-bold text-sm rounded-md py-1 px-2 focus:outline-none ring-active-glow h-8"/><div id="startBadge" class="text-[10px] mt-0.5"><span style="font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d">Auto from last End</span></div></div>
+        <div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none">End KM</label><span class="text-[9px] text-slate-400 leading-none">Auto</span></div><input id="endKm" type="number" step="1" inputmode="numeric" placeholder="End" class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-sky-500 h-8"/><div class="text-[9px] text-slate-400 mt-0.5">or fill Distance → auto End</div></div>
+        <div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none">Distance</label><span class="text-[9px] text-slate-400 leading-none">KM</span></div><input id="distance" type="number" step="1" inputmode="numeric" placeholder="Distance" class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-sky-500 h-8"/><p class="text-[9px] text-slate-400 mt-0.5 truncate">Integer</p></div>
+      </div>
+      <div class="mt-1.5 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-mono leading-none"><span>DISTANCE = ROUND(END - START)</span><span class="font-bold text-slate-600">INTEGER KM</span></div>
+    </section>
+
+    <section class="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="time-reciprocal">
+      <div class="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-100">
+        <div class="flex items-center gap-1.5"><span class="p-0.5 rounded bg-indigo-100 text-indigo-700"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg></span><h2 class="text-[11px] font-bold uppercase tracking-wider text-slate-800 leading-none">Time Reciprocal <span class="text-slate-400 font-normal">— END - DURATION = START</span></h2></div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 items-start">
+        <div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none">Start <span style="color:#94a3b8;font-weight:400">Opt</span></label><button type="button" id="autoBtn" class="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-900 active:scale-95 text-white text-[9px] font-bold rounded leading-none">AUTO</button></div><div style="display:flex;gap:6px"><input id="startTime" type="time" style="flex:1" class="w-full bg-slate-50 border border-slate-300 text-slate-800 font-mono font-semibold rounded-md py-1 px-1.5 text-xs focus:bg-white focus:ring-1 focus:ring-indigo-500 h-8"/><button type="button" id="autoBtn2" style="display:none"></button></div><div style="display:flex;gap:4px;margin-top:6px"><button type="button" id="nudgeM10" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">−10</button><button type="button" id="nudgeM5" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">−5</button><button type="button" id="nudgeP5" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">+5</button><button type="button" id="nudgeP10" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">+10</button></div><div class="text-[9px] text-slate-400 mt-1">Auto: End − (Distance/speed) slabs ceil 5 min</div></div>
+        <div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none">End Time *</label><span class="text-[9px] font-bold text-sky-600 leading-none">NOW</span></div><input id="endTime" type="time" required class="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:ring-1 focus:ring-indigo-500 h-8"/><div class="text-[9px] text-sky-600 font-medium mt-1">defaults to now</div></div>
+        <div><div class="flex items-center justify-between mb-0.5"><label class="text-[11px] font-bold text-slate-700 leading-none">Duration</label><span class="text-[9px] text-slate-400 leading-none">HH:MM</span></div><input id="duration" type="text" placeholder="00:55" inputmode="numeric" class="w-full bg-slate-50 border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:bg-white focus:ring-1 focus:ring-indigo-500 h-8"/><div class="text-[9px] text-slate-500 mt-1">Enter to compute Start</div></div>
+      </div>
+      <div class="mt-1 pt-1 border-t border-slate-100 text-[9px] text-slate-400 leading-none font-mono truncate">FORMULA: START = END - CEIL((KM/SPEED)*60 /5)*5 • OVERNIGHT OK</div>
+    </section>
+
+    <section class="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="route-details">
+      <div class="flex items-center justify-between gap-1 mb-1"><label class="text-[11px] font-bold uppercase tracking-wider text-slate-700 leading-none">Route &amp; Purpose <span class="text-red-500 font-bold">*</span></label><span class="text-[9px] text-slate-400 italic">Tap preset to fill</span></div>
+      <div class="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 pt-0.5" data-purpose="preset-chips">
+        <button type="button" id="quickHomeOffice" class="whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-95 transition leading-tight">Home - Office</button>
+        <button type="button" id="quickOfficeHome" class="whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-95 transition leading-tight">Office - Home</button>
+        <button type="button" class="whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-95 transition leading-tight" onclick="document.getElementById('places').value='HO - Panni';document.getElementById('places').dispatchEvent(new Event('input'))">HO - Panni</button>
+        <button type="button" class="whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-95 transition leading-tight" onclick="document.getElementById('places').value='Panni - HO';document.getElementById('places').dispatchEvent(new Event('input'))">Panni - HO</button>
+        <button type="button" class="whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-95 transition leading-tight" onclick="document.getElementById('places').value='Port Customs';document.getElementById('places').dispatchEvent(new Event('input'))">Port Customs</button>
+      </div>
+      <input id="places" type="text" placeholder="HQ Fleet Yard → Regional Port Customs" required class="w-full bg-white border border-slate-300 rounded-md py-1 px-2.5 text-xs text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-indigo-500 h-8"/>
+      <div class="text-[10px] text-slate-500 mt-1">Tap a chip to fill — you can still edit after.</div>
+    </section>
+
+    <section class="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="fuel-card">
+      <div class="flex items-center justify-between mb-1.5"><h3 class="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1 leading-none"><svg class="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>Fuel Refill <span class="text-slate-400 font-normal">(Optional)</span></h3><span class="text-[9px] text-slate-400">Order Date = Trip Date</span></div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><div class="relative"><input id="fuelPumped" type="number" step="0.1" inputmode="decimal" placeholder="Pumped (L) e.g. 35.0" class="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8"/><span class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span></div></div>
+        <div><input id="fuelOrderNo" type="text" placeholder="Order # e.g. #FO-88912" class="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8"/></div>
+      </div>
+    </section>
+
+    <div class="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 z-40 shadow-lg">
+      <div class="max-w-3xl mx-auto flex items-center justify-between gap-2">
+        <button type="button" id="clearBtn" class="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 active:bg-slate-100 transition-colors h-9 leading-none">Clear / Reset</button>
+        <button class="flex-1 sm:flex-none px-5 py-1.5 bg-slate-900 hover:bg-black active:scale-[0.98] text-white text-sm font-bold rounded-md shadow-sm transition-all flex items-center justify-center gap-1.5 h-9 leading-none" id="saveBtn" type="submit"><svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"></path></svg><span>Save to Buffer Sheet</span></button>
       </div>
     </div>
-
-    <div class="group">
-      <h3>Time — End − Duration = Start • Estimated Start</h3>
-      <div class="grid3">
-        <div><label>Start <span style="color:#94a3b8;font-weight:400">Opt</span></label><div style="display:flex;gap:6px"><input id="startTime" type="time" style="flex:1"/><button type="button" id="autoBtn" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;font-weight:800;font-size:11px">AUTO</button></div><div style="display:flex;gap:4px;margin-top:6px"><button type="button" id="nudgeM10" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">−10</button><button type="button" id="nudgeM5" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">−5</button><button type="button" id="nudgeP5" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">+5</button><button type="button" id="nudgeP10" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:11px;font-weight:700">+10</button></div><div class="hint">Auto: End − (Distance/speed) slabs ceil 5 min</div></div>
-        <div><label>End Time *</label><input id="endTime" type="time" required/><div class="hint" style="color:#0ea5e9;font-weight:700">defaults to now</div></div>
-        <div><label>Duration HH:MM</label><input id="duration" type="text" placeholder="00:55" inputmode="numeric"/><div class="hint">Enter to compute Start</div></div>
-      </div>
-    </div>
-
-    <div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
-        <label style="margin:0">Places Visited / Route & Purpose *</label>
-        <span style="display:flex;gap:6px">
-          <button type="button" id="quickHomeOffice" style="padding:4px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;font-size:11px;font-weight:800;color:#334155">Home - Office</button>
-          <button type="button" id="quickOfficeHome" style="padding:4px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;font-size:11px;font-weight:800;color:#334155">Office - Home</button>
-        </span>
-      </div>
-      <input id="places" type="text" placeholder="HQ Fleet Yard → Regional Port Customs" required/>
-      <div class="hint">Tap a chip to fill — you can still edit after.</div>
-    </div>
-    <div class="grid2">
-      <div><label>Fuel Pumped (L) <span style="color:#94a3b8">Opt</span></label><input id="fuelPumped" type="number" step="0.1" inputmode="decimal" placeholder="35.0"/></div>
-      <div><label>Fuel Order No <span style="color:#94a3b8">Opt</span></label><input id="fuelOrderNo" type="text" placeholder="#FO-88912"/></div>
-    </div>
-
-    <button class="btn" id="saveBtn" type="submit">Save to Buffer Sheet</button>
-    <small style="text-align:center;display:block">File: <code>mobile_app_public.html</code> — copy phone file <code>Mobile_with_url_private.html</code> (generated via <code>start-service.ps1</code> / <code>npm run build:mobile</code>) to phone, open in Chrome → Add to Home Screen. Public template has no URL.</small>
   </form>
 
-  <div style="padding:14px;border-top:1px solid #e2e8f0">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3 style="margin:0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#64748b">Last 10 in Buffer Sheet</h3><small id="last10Info"></small></div>
-    <div id="last10Wrap" style="overflow:auto"><table id="last10Table"><thead><tr><th>Date</th><th>KM</th><th>Dist</th><th>Places</th></tr></thead><tbody id="last10Body"><tr><td colspan="4" style="color:#94a3b8">No records yet — check Settings.</td></tr></tbody></table></div>
+  <section class="bg-white rounded-lg border border-slate-200 shadow-sm p-3">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h3 style="margin:0;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#64748b">Last 10 in Buffer Sheet</h3><small id="last10Info" class="text-xs text-slate-400"></small></div>
+    <div id="last10Wrap" style="overflow:auto"><table id="last10Table" class="w-full text-left border-collapse text-xs"><thead><tr class="bg-slate-50"><th class="px-2 py-1">Date</th><th class="px-2 py-1">KM</th><th class="px-2 py-1">Dist</th><th class="px-2 py-1">Places</th></tr></thead><tbody id="last10Body"><tr><td colspan="4" style="color:#94a3b8" class="py-2 text-center">No records yet — check Settings.</td></tr></tbody></table></div>
     <div id="queueNote" style="margin-top:8px;font-size:12px;color:#d97706;display:none"></div>
-  </div>
-</div>
+    <small class="text-[11px] text-slate-400 mt-2 block">File: <code>mobile_app_public.html</code> — copy phone file <code>Mobile_with_url_private.html</code> (generated via <code>start-service.ps1</code> / <code>npm run build:mobile</code>) to phone, open in Chrome → Add to Home Screen.</small>
+  </section>
+</main>
 
 <script>
 // ====== CONFIG — paste your Script URL here to hard-code (skips Settings) ======
 const SCRIPT_URL_DEFAULT = ""; // public template — no secret; generate private file via start-service.ps1 / npm run build:mobile (reads PS1 $ScriptUrl or config/sheet.local.json)
-const SPEED_CONFIG = {"mode":"default"}; // INJECTED by npm run build:mobile — do not edit manually (speed slabs from Settings)
+const SPEED_CONFIG = {"mode":"traffic","traffic":[{"upper":20,"speed":15},{"upper":50,"speed":20},{"upper":100,"speed":25},{"upper":null,"speed":35}],"light":[{"upper":20,"speed":20},{"upper":50,"speed":25},{"upper":100,"speed":30},{"upper":null,"speed":40}]}; // INJECTED by npm run build:mobile — do not edit manually (speed slabs from Settings)
 // ============================================================================
-let trafficMode = 'traffic'; // transient helper when SPEED_CONFIG.mode === 'traffic'
-
+let trafficMode = 'traffic';
 const QUEUE_KEY="mobile.queue";
 const $=id=>document.getElementById(id);
 const pad=n=>String(n).padStart(2,"0");
@@ -152,32 +186,19 @@ function getSpeedForSlabs(distanceKm, slabs){ for(const s of slabs){ if(s.upper=
 function getSpeedForDistance(distanceKm, mode){ const m = mode || trafficMode; const cfg = (typeof SPEED_CONFIG !== 'undefined' ? SPEED_CONFIG : {mode:'default'}); if(!distanceKm || distanceKm<=0 || !isFinite(distanceKm)) return 15; if(cfg.mode==='default'){ if(distanceKm < 10) return 15; if(distanceKm < 20) return 20; if(distanceKm < 40) return 25; if(distanceKm <= 60) return 30; return 35; } if(cfg.mode==='custom'){ return getSpeedForSlabs(distanceKm, cfg.slabs); } if(cfg.mode==='traffic'){ const set = m==='light' ? cfg.light : cfg.traffic; return getSpeedForSlabs(distanceKm, set); } return 15; }
 function estMinutes(dist, mode){if(!dist||dist<=0||!isFinite(dist)) return null;const speed=getSpeedForDistance(dist, mode);const raw=(dist/speed)*60;const ceiled=Math.ceil(raw/5)*5;return ceiled>0?ceiled:null}
 function estStart(end,dist,mode){const mins=estMinutes(dist, mode);if(mins==null||!end||!end.includes(":")) return null;return calcStartFromEndDur(end,mins)}
-
-function getScriptUrl(){
-  const ls=localStorage.getItem("mobile.scriptUrl")||"";
-  if(ls) return ls;
-  if(SCRIPT_URL_DEFAULT) return SCRIPT_URL_DEFAULT;
-  return "";
-}
+function getScriptUrl(){ const ls=localStorage.getItem("mobile.scriptUrl")||""; if(ls) return ls; if(SCRIPT_URL_DEFAULT) return SCRIPT_URL_DEFAULT; return ""; }
 function isOnline(){return navigator.onLine}
-function updateOnlineInfo(){
-  $("onlineInfo").textContent=isOnline()?"Online":"Offline";
-  $("queueInfo").textContent=`${getQueue().length} queued`;
-}
+function updateOnlineInfo(){ $("onlineInfo").textContent=isOnline()?"Online":"Offline"; $("queueInfo").textContent=`${getQueue().length} queued`; }
 function getQueue(){try{return JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]")}catch{return []}}
 function setQueue(q){localStorage.setItem(QUEUE_KEY,JSON.stringify(q));updateOnlineInfo()}
 function queueTrip(trip){const q=getQueue();q.push({...trip,_queuedAt:new Date().toISOString()});setQueue(q)}
-function msg(t,m){const b=$("msgBox");b.innerHTML=`<div class="msg ${t==="ok"?"msg-ok":"msg-err"}">${m}</div>`;if(t==="ok") setTimeout(()=>b.innerHTML="",3500)}
-function setBadgeAuto(isAuto){$("startBadge").innerHTML=isAuto?`<span class="badge badge-amber">Auto from last End</span>`:`<span class="badge badge-zinc">Manual override</span>`}
-
-// init
+function msg(t,m){const b=$("msgBox");b.innerHTML=`<div style="margin:10px 14px 0;padding:10px;border-radius:10px;font-size:13px;${t==="ok" ? "background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0" : "background:#fef2f2;color:#991b1b;border:1px solid #fecaca"}">${m}</div>`;if(t==="ok") setTimeout(()=>b.innerHTML="",3500)}
+function setBadgeAuto(isAuto){$("startBadge").innerHTML=isAuto?`<span style="font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d">Auto from last End</span>`:`<span style="font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:999px;background:#e2e8f0;color:#475569">Manual override</span>`}
 $("date").value=todayISO();$("dow").textContent=dayOfWeek($("date").value);$("endTime").value=nowHM();
 if(SCRIPT_URL_DEFAULT && !localStorage.getItem("mobile.scriptUrl")) localStorage.setItem("mobile.scriptUrl",SCRIPT_URL_DEFAULT);
 if(getScriptUrl()) {$("scriptUrlInput").value=getScriptUrl();}
-
 let isAutoStart=true;
 function setStartFromLastEnd(endKmVal){$("startKm").value=String(roundInt(endKmVal));isAutoStart=true;setBadgeAuto(true)}
-
 async function fetchLast10(){
   const url=getScriptUrl();if(!url){$("last10Info").textContent="Set Script URL in Settings";return}
   $("last10Info").textContent="Loading…";
@@ -196,8 +217,8 @@ async function fetchLast10(){
 function renderLast10(rows){
   const last10=rows.slice(-10).reverse();
   const body=$("last10Body");
-  if(last10.length===0){body.innerHTML=`<tr><td colspan="4" style="color:#94a3b8">No records yet</td></tr>`;$("queueNote").style.display="none";return}
-  body.innerHTML=last10.map(r=>`<tr><td class="mono">${r.date}</td><td class="mono">${r.start_km}→${r.end_km}</td><td class="mono">${r.trip_distance}</td><td>${(r.places_visited||"").slice(0,40)} ${r.trip_type==="Private"?`<span style="background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:999px;font-size:10px;font-weight:800">PRI</span>`:""}</td></tr>`).join("");
+  if(last10.length===0){body.innerHTML=`<tr><td colspan="4" style="color:#94a3b8" class="py-2 text-center">No records yet</td></tr>`;$("queueNote").style.display="none";return}
+  body.innerHTML=last10.map(r=>`<tr class="border-t border-slate-100"><td class="px-2 py-1 font-mono">${r.date}</td><td class="px-2 py-1 font-mono">${r.start_km}→${r.end_km}</td><td class="px-2 py-1 font-mono">${r.trip_distance}</td><td class="px-2 py-1">${(r.places_visited||"").slice(0,40)} ${r.trip_type==="Private"?`<span style="background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:999px;font-size:10px;font-weight:800">PRI</span>`:""}</td></tr>`).join("");
   const qlen=getQueue().length;
   if(qlen>0){$("queueNote").style.display="block";$("queueNote").textContent=`${qlen} trip(s) queued locally — will sync when online. Tap Flush queue.`}
   else $("queueNote").style.display="none";
@@ -220,28 +241,23 @@ async function flushQueue(){
   setQueue(remain);
   if(flushed>0){msg("ok",`Synced ${flushed} queued trip(s)`);fetchLast10()} else msg("err","Flush failed — still offline or Script error");
 }
-
-// traffic mode + nudge helpers (ADR-0025)
 function applySpeedConfigVisibility(){ try{ if(typeof SPEED_CONFIG!=='undefined' && SPEED_CONFIG.mode==='traffic'){ $("trafficModeGroup").style.display='flex'; } else { $("trafficModeGroup").style.display='none'; } } catch{} }
 function nudgeStartMobile(delta){ const v=$("startTime").value; if(!v||!v.includes(":")) return; const cur=parseTimeToMin(v); const nxt=minToHM(cur+delta); $("startTime").value=nxt; const et=$("endTime").value; if(et) $("duration").value=formatDur(calcDurationMin(nxt,et)); }
 applySpeedConfigVisibility();
 document.querySelectorAll('input[name="trafficMode"]').forEach(r=>r.addEventListener('change',e=>{ trafficMode=e.target.value; }));
 ["nudgeM10","nudgeM5","nudgeP5","nudgeP10"].forEach(id=>{ const el=$(id); if(!el) return; const delta = id==="nudgeM10"?-10:id==="nudgeM5"?-5:id==="nudgeP5"?5:10; el.onclick=()=>nudgeStartMobile(delta); });
-
-// events
-$("settingsBtn").onclick=()=>$("settingsPanel").classList.toggle("open");
+$("settingsBtn").onclick=()=>{ const p=$("settingsPanel"); p.classList.toggle("hidden"); p.classList.toggle("block"); };
 $("refreshBtn").onclick=fetchLast10;
 $("saveSettingsBtn").onclick=()=>{
   const v=$("scriptUrlInput").value.trim();
   if(!v){msg("err","Paste Script URL (.../exec)");return}
   localStorage.setItem("mobile.scriptUrl",v);
-  $("settingsPanel").classList.remove("open");
+  $("settingsPanel").classList.add("hidden"); $("settingsPanel").classList.remove("block");
   msg("ok","Settings saved — fetching…");
   fetchLast10();
 };
 $("flushBtn").onclick=flushQueue;
 $("date").addEventListener("change",e=>{$("dow").textContent=dayOfWeek(e.target.value)});
-
 function maybeAuto(nextDist,nextEnd,curStart){
   if(curStart!=="") return;
   const d=parseIntKm(nextDist);if(isNaN(d)||d<=0) return;
@@ -250,7 +266,6 @@ function maybeAuto(nextDist,nextEnd,curStart){
   $("startTime").value=est;
   $("duration").value=formatDur(calcDurationMin(est,nextEnd));
 }
-
 $("startKm").addEventListener("input",e=>{
   isAutoStart=false;setBadgeAuto(false);
   const s=parseIntKm(e.target.value);if(isNaN(s)) return;
@@ -289,7 +304,6 @@ $("autoBtn").onclick=()=>{
 };
 function setPlacesQuick(v){
   $("places").value=v;
-  // visual feedback — highlight selected pill
   ["quickHomeOffice","quickOfficeHome"].forEach(id=>{
     const btn=$(id);
     const isSel=( (id==="quickHomeOffice"&&v==="Home - Office") || (id==="quickOfficeHome"&&v==="Office - Home") );
@@ -312,7 +326,9 @@ $("places").addEventListener("input",()=>{
     btn.style.borderColor=isSel?"#0ea5e9":"#cbd5e1";
   });
 });
-
+$("clearBtn").onclick=()=>{
+  $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("startTime").value="";$("duration").value="";$("endTime").value=nowHM();msg("ok","Cleared");
+};
 $("tripForm").addEventListener("submit",async e=>{
   e.preventDefault();
   const places=$("places").value.trim();if(!places){msg("err","Places visited is required");return}
@@ -321,7 +337,7 @@ $("tripForm").addEventListener("submit",async e=>{
   if(isNaN(sKm)||isNaN(eKm)||isNaN(dist)){msg("err","Provide valid odometer values");return}
   if(!date||!endTime){msg("err","Date and End Time required");return}
   if(eKm < sKm){msg("err","End KM cannot be < Start KM");return}
-  const url=getScriptUrl();if(!url){msg("err","Set Script URL in Settings first");$("settingsPanel").classList.add("open");return}
+  const url=getScriptUrl();if(!url){msg("err","Set Script URL in Settings first");$("settingsPanel").classList.remove("hidden");$("settingsPanel").classList.add("block");return}
   const tripType=document.querySelector('input[name="tripType"]:checked').value;
   const trip={
     date, start_km:roundInt(sKm), end_km:roundInt(eKm), trip_distance:roundInt(dist),
@@ -330,7 +346,7 @@ $("tripForm").addEventListener("submit",async e=>{
     fuel_pumped_amount:$("fuelPumped").value?round1(parseFloat($("fuelPumped").value)):0,
     fuel_order_no:$("fuelOrderNo").value||""
   };
-  $("saveBtn").disabled=true;$("saveBtn").textContent="Saving…";
+  $("saveBtn").disabled=true;$("saveBtn").innerHTML="Saving…";
   try{
     if(!isOnline()) throw new Error("offline");
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({action:"appendTrip",trip}),redirect:"follow"});
@@ -343,19 +359,20 @@ $("tripForm").addEventListener("submit",async e=>{
     queueTrip(trip);
     msg("ok", String(err).includes("offline")?"Offline — queued locally, will sync when online":"Queued locally (sheet unreachable) — will sync. "+String(err).slice(0,120));
   }finally{
-    // reset for next entry keep continuity
     const prevEnd=eKm;
     $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("startTime").value="";$("duration").value="";
     $("endTime").value=nowHM();
     setStartFromLastEnd(prevEnd);
-    $("saveBtn").disabled=false;$("saveBtn").textContent="Save to Buffer Sheet";
+    $("saveBtn").disabled=false;$("saveBtn").innerHTML='<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"></path></svg><span>Save to Buffer Sheet</span>';
   }
 });
-
 window.addEventListener("online",()=>{updateOnlineInfo();flushQueue()});
 window.addEventListener("offline",updateOnlineInfo);
 setInterval(()=>{if(isOnline()&&getQueue().length>0) flushQueue()},30000);
 fetchLast10();updateOnlineInfo();
+// handle original mOfficial/mPrivate label toggling
+document.getElementById('mOfficial')?.addEventListener('change',()=>{document.getElementById('labelOfficial').classList.add('bg-white','text-slate-900','shadow-sm','font-bold');document.getElementById('labelOfficial').classList.remove('text-slate-600');document.getElementById('labelPrivate').classList.remove('bg-white','text-slate-900','shadow-sm','font-bold');document.getElementById('labelPrivate').classList.add('text-slate-600');});
+document.getElementById('mPrivate')?.addEventListener('change',()=>{document.getElementById('labelPrivate').classList.add('bg-white','text-slate-900','shadow-sm','font-bold');document.getElementById('labelPrivate').classList.remove('text-slate-600');document.getElementById('labelOfficial').classList.remove('bg-white','text-slate-900','shadow-sm','font-bold');document.getElementById('labelOfficial').classList.add('text-slate-600');});
 </script>
 </body>
 </html>

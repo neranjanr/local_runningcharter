@@ -38,6 +38,7 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
   const [isAutoStartKm, setIsAutoStartKm] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
+  const [saveMode, setSaveMode] = useState<'single' | 'another'>('single');
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [trafficMode, setTrafficMode] = useState<'traffic' | 'light'>('traffic');
@@ -45,7 +46,6 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
 
   useEffect(() => {
     let mounted = true;
-    // Initialize defaults
     const today = getTodayDateString();
     const currentTime = getCurrentTimeString();
     if (mounted) {
@@ -60,7 +60,6 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
       setIsAutoStartKm(true);
       setLoading(false);
     });
-    // Load speed config to know if Traffic selector should show
     loadSpeedConfig().then(c => {
       if (!mounted) return;
       setIsTrafficMode(c.mode === 'traffic');
@@ -95,7 +94,6 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     return isNaN(n) ? NaN : Math.round(n);
   };
 
-  // Helper: auto-suggest Estimated Start Time only when Start Time is empty
   const maybeAutoEstimate = (nextDistanceStr: string, nextEndTime: string, currentStartTime: string) => {
     if (currentStartTime !== '') return;
     const d = parseIntKm(nextDistanceStr);
@@ -155,7 +153,6 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
 
   const handleDistanceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    // allow integer input; keep raw string but parse int for calc
     setDistance(val);
     const d = parseIntKm(val);
     const start = parseIntKm(startKm);
@@ -163,8 +160,6 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
       const end = calculateEndKm(start, d);
       setEndKm(String(end));
       maybeAutoEstimate(String(d), endTime, startTime);
-    } else if (val === '') {
-      // don't auto clear end
     }
   };
 
@@ -174,9 +169,6 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     if (val && endTime) {
       const dur = calculateDurationMinutes(val, endTime);
       setDuration(formatDurationMinutes(dur));
-    } else if (val === '' ) {
-      // if cleared, keep duration as is? Don't auto-clear duration
-      // but clearing startTime does not block save (optional)
     }
   };
 
@@ -187,12 +179,10 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
       const dur = calculateDurationMinutes(startTime, val);
       setDuration(formatDurationMinutes(dur));
     } else if (val && duration) {
-      // if duration exists but start empty, recalc start
       const durMin = parseDurationToMinutes(duration);
       const start = calculateStartTimeFromEndAndDuration(val, durMin);
       setStartTime(start);
     } else {
-      // Auto-estimate when start empty and distance present
       maybeAutoEstimate(distance, val, startTime);
     }
   };
@@ -229,11 +219,39 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     setErrorMessage('');
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const resetForNext = (prevEndKm: number) => {
+    setStartKm(String(roundToIntegerKm(prevEndKm)));
+    setIsAutoStartKm(true);
+    setEndKm('');
+    setDistance('');
+    setPlacesVisited('');
+    setFuelPumped('');
+    setFuelOrderNo('');
+    setStartTime('');
+    setDuration('');
+    setEndTime(getCurrentTimeString());
+  };
+
+  const handleClear = async () => {
+    const lastEnd = await getLastEndKm();
+    const rounded = roundToIntegerKm(lastEnd);
+    setStartKm(String(rounded));
+    setIsAutoStartKm(true);
+    setEndKm('');
+    setDistance('');
+    setPlacesVisited('');
+    setFuelPumped('');
+    setFuelOrderNo('');
+    setStartTime('');
+    setDuration('');
+    setEndTime(getCurrentTimeString());
     setErrorMessage('');
     setSuccessMessage('');
+  };
 
+  const doSave = async (mode: 'single' | 'another') => {
+    setErrorMessage('');
+    setSuccessMessage('');
     if (!placesVisited.trim()) {
       setErrorMessage('Places visited is required.');
       return;
@@ -249,9 +267,8 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
       setErrorMessage('Please fill date and End Time fields.');
       return;
     }
-    // startTime is now optional - empty string allowed
-
     setSaving(true);
+    setSaveMode(mode);
     try {
       const fuelAmt = fuelPumped ? parseFloat(fuelPumped) : 0;
       await saveTrip({
@@ -266,24 +283,15 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
         fuel_pumped_amount: isNaN(fuelAmt) ? 0 : roundToOneDecimal(fuelAmt),
         fuel_order_no: fuelOrderNo,
       });
-      setSuccessMessage('Trip saved successfully!');
+      setSuccessMessage(mode === 'another' ? 'Trip saved — ready for next entry.' : 'Trip saved successfully!');
       showToast('Trip Added', 2000);
-      // Redirect to Dashboard after toast visible (~2s)
-      setTimeout(() => {
-        if (typeof window !== 'undefined') window.location.href = '/';
-      }, 2100);
-      // Reset end/distance/places for next entry, keep continuity: new start is previous end
-      setStartKm(String(roundToIntegerKm(eKm)));
-      setIsAutoStartKm(true);
-      setEndKm('');
-      setDistance('');
-      setPlacesVisited('');
-      setFuelPumped('');
-      setFuelOrderNo('');
-      // Keep times? Reset start/duration but keep end as current time for next
-      setStartTime('');
-      setDuration('');
-      setEndTime(getCurrentTimeString());
+      if (mode === 'single') {
+        setTimeout(() => {
+          if (typeof window !== 'undefined') window.location.href = '/';
+        }, 2100);
+      }
+      const prevEnd = eKm;
+      resetForNext(prevEnd);
       if (onSuccess) onSuccess();
       setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err) {
@@ -293,325 +301,300 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doSave('single');
+  };
+
   if (loading) {
     return <div className="p-8 text-center text-zinc-500">Loading trip form...</div>;
   }
 
   return (
-    <div className="max-w-3xl mx-auto bg-paper-sheet dark:bg-zinc-900 shadow-xl rounded-xl border border-rule-line dark:border-zinc-800 overflow-hidden">
-      <div className="bg-slate-surface text-on-primary px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-telemetry-cyan text-xl">➕</span>
+    <div className="max-w-3xl mx-auto px-2.5 pt-2 pb-24 space-y-2">
+      {/* TitleAndStatusCard — matches addtripsample.html TitleAndStatusCard */}
+      <section className="rounded-lg shadow-sm border border-slate-800 bg-slate-900 text-white px-3 py-2.5 flex items-center justify-between gap-2" data-purpose="card-banner">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 font-bold shrink-0">
+            <svg className="w-3.5 h-3.5 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+            </svg>
+          </div>
           <div>
-            <h2 className="text-base font-bold tracking-tight">Quick Trip Data Entry</h2>
-            <p className="text-xs text-on-primary-container">Smart reciprocal calculations • Ledger continuity</p>
+            <h1 className="text-xs sm:text-sm font-bold tracking-tight leading-none">Quick Trip Data Entry</h1>
+            <p className="text-[10px] text-slate-300 leading-tight">Reciprocal calculations • Ledger continuity</p>
           </div>
         </div>
-        <span className="hidden sm:inline-flex items-center gap-1 text-xs bg-primary-container text-tertiary-fixed px-2.5 py-1 rounded-full font-semibold uppercase tracking-wider">
+        <span className="text-[10px] font-mono font-bold tracking-wider px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400">
           SEC-24
         </span>
-      </div>
+      </section>
 
       {successMessage && (
-        <div className="mx-6 mt-6 p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-lg text-sm font-medium">
+        <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-xs font-medium">
           {successMessage}
         </div>
       )}
       {errorMessage && (
-        <div className="mx-6 mt-6 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg text-sm font-medium">
+        <div className="p-2.5 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs font-medium">
           {errorMessage}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} noValidate className="p-6 space-y-6">
-        {/* Date Row */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label htmlFor="trip-date" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Date
-            </label>
-            <input
-              id="trip-date"
-              aria-label="Date"
-              type="date"
-              value={date}
-              onChange={handleDateChange}
-              required
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-            />
-            <p className="mt-1 text-xs font-semibold text-telemetry-cyan uppercase tracking-wider">
-              {dayOfWeek}
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Trip Type</label>
-            <div className="flex items-center gap-4 mt-2">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="tripType"
-                  value="Official"
-                  checked={tripType === 'Official'}
-                  onChange={() => setTripType('Official')}
-                  className="accent-teal-600"
-                />
-                <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Official</span>
-                <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase">OFF</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="tripType"
-                  value="Private"
-                  checked={tripType === 'Private'}
-                  onChange={() => setTripType('Private')}
-                  className="accent-amber-600"
-                />
-                <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">Private</span>
-                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase">PRI</span>
-              </label>
+      <form onSubmit={handleSubmit} noValidate className="space-y-2">
+        {/* MetadataSection */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="trip-metadata">
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 leading-none" htmlFor="trip-date">
+                  Trip Date
+                </label>
+                <span className="text-[10px] font-bold text-sky-600 uppercase tracking-tight">{dayOfWeek}</span>
+              </div>
+              <div className="relative">
+                <input className="w-full bg-slate-50 border border-slate-300 rounded-md py-1 px-2 font-medium text-slate-800 focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 text-xs transition-all h-8" id="trip-date" name="trip_date" type="date" value={date} onChange={handleDateChange} required />
+              </div>
+              <p className="text-[9px] text-slate-400 mt-0.5">Fiscal Q3</p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 leading-none">
+                  Trip Type
+                </label>
+                <span className="text-[9px] text-slate-400">Ledger</span>
+              </div>
+              <div className="grid grid-cols-2 p-0.5 bg-slate-100 rounded-md border border-slate-200 gap-1 h-8 items-center" role="radiogroup">
+                <div>
+                  <input checked={tripType==='Official'} onChange={()=>setTripType('Official')} className="sr-only" id="type-official" name="trip_type" type="radio" value="official" />
+                  <label htmlFor="type-official" onClick={()=>setTripType('Official')} className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold cursor-pointer transition-all select-none leading-none ${tripType==='Official' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'}`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    <span>Official</span>
+                    <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">OFF</span>
+                  </label>
+                </div>
+                <div>
+                  <input checked={tripType==='Private'} onChange={()=>setTripType('Private')} className="sr-only" id="type-private" name="trip_type" type="radio" value="private" />
+                  <label htmlFor="type-private" onClick={()=>setTripType('Private')} className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold cursor-pointer transition-all select-none leading-none ${tripType==='Private' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'}`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                    <span>Private</span>
+                    <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-100 text-amber-800 font-bold">PRI</span>
+                  </label>
+                </div>
+              </div>
+              <p className="text-[9px] text-slate-400 mt-0.5 truncate">Official requires logging</p>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Odometer Section */}
-        <div className="p-4 bg-paper-ledger dark:bg-zinc-800/50 rounded-xl border border-rule-line dark:border-zinc-700 space-y-4">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Odometer Reciprocal — Start + Distance = End (Integer KM)</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* OdometerReciprocalCard */}
+        <section className="bg-white rounded-lg p-2.5 border border-sky-200 shadow-sm relative overflow-hidden" data-purpose="odometer-reciprocal">
+          <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-sky-100">
+            <div className="flex items-center gap-1.5">
+              <span className="p-0.5 rounded bg-sky-100 text-sky-700">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path d="M13 10V3L4 14h7v7l9-11h-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                </svg>
+              </span>
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-sky-950 leading-none">
+                Odometer Reciprocal <span className="text-slate-400 font-normal">— START + DISTANCE = END</span>
+              </h2>
+            </div>
+            <span className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200">
+              Auto Sync
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
             <div>
-              <label htmlFor="start-km" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                Start KM
-              </label>
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[11px] font-bold text-slate-700 leading-none" htmlFor="start-km">Start KM</label>
+                <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 leading-none">LOCKED</span>
+              </div>
               <input
+                className={`w-full border text-slate-900 font-mono font-bold text-sm rounded-md py-1 px-2 focus:outline-none h-8 ${isAutoStartKm ? 'bg-amber-50/50 border-amber-400 ring-2 ring-amber-400 ring-offset-0' : 'bg-white border-slate-300'}`}
                 id="start-km"
                 aria-label="Start KM"
+                name="start_km"
                 type="number"
                 step="1"
                 value={startKm}
                 onChange={handleStartKmChange}
                 required
-                className={`w-full px-3 py-2 border rounded-lg font-mono focus:ring-2 focus:outline-none ${
-                  isAutoStartKm
-                    ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-100 focus:ring-amber-500'
-                    : 'bg-white dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:ring-cyan-500'
-                }`}
               />
-              <span className={`mt-1 inline-block text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${isAutoStartKm ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200' : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'}`}>
+              <span className="inline-block text-[9px] font-bold tracking-tight text-amber-800 bg-amber-100/80 px-1 py-0.5 rounded mt-0.5 truncate w-full">
                 {isAutoStartKm ? 'Auto-filled from last End KM' : 'Manual override'}
               </span>
             </div>
-
             <div>
-              <label htmlFor="end-km" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                End KM
-              </label>
-              <input
-                id="end-km"
-                aria-label="End KM"
-                type="number"
-                step="1"
-                value={endKm}
-                onChange={handleEndKmChange}
-                placeholder="Enter End KM"
-                className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[11px] font-bold text-slate-700 leading-none" htmlFor="end-km">End KM</label>
+                <span className="text-[9px] text-slate-400 leading-none">Auto</span>
+              </div>
+              <input className="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-sky-500 focus:border-sky-500 h-8" id="end-km" aria-label="End KM" inputMode="numeric" name="end_km" placeholder="End KM" type="number" value={endKm} onChange={handleEndKmChange} />
+              <p className="text-[9px] text-slate-400 mt-0.5 truncate">Reciprocal</p>
             </div>
-
             <div>
-              <label htmlFor="trip-distance" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                Trip Distance (KM)
-              </label>
-              <input
-                id="trip-distance"
-                aria-label="Trip Distance"
-                type="number"
-                step="1"
-                value={distance}
-                onChange={handleDistanceChange}
-                placeholder="Enter Distance"
-                className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[11px] font-bold text-slate-700 leading-none" htmlFor="trip-distance">Distance</label>
+                <span className="text-[9px] text-slate-400 leading-none">KM</span>
+              </div>
+              <input className="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-sky-500 focus:border-sky-500 h-8" id="trip-distance" aria-label="Trip Distance" inputMode="numeric" name="distance_km" placeholder="KM" type="number" value={distance} onChange={handleDistanceChange} />
+              <p className="text-[9px] text-slate-400 mt-0.5 truncate">Integer</p>
             </div>
           </div>
-          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase tracking-wider font-semibold">
-            Formula: Distance (int) = round(End − Start) • Integer KM
-          </p>
-        </div>
+          <div className="mt-1.5 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-mono leading-none">
+            <span>DISTANCE = ROUND(END - START)</span>
+            <span className="font-bold text-slate-600">INTEGER KM</span>
+          </div>
+        </section>
 
-        {/* Time Section */}
-        <div className="p-4 bg-paper-ledger dark:bg-zinc-800/50 rounded-xl border border-rule-line dark:border-zinc-700 space-y-4">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Time Reciprocal — End − Duration = Start • Estimated Start Time</h3>
-          {isTrafficMode && (
-            <div className="flex items-center gap-3 px-2 py-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-200">Traffic Mode</span>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="trafficMode" value="traffic" checked={trafficMode === 'traffic'} onChange={() => setTrafficMode('traffic')} className="accent-amber-600" />
-                <span className="text-sm font-medium">Traffic</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input type="radio" name="trafficMode" value="light" checked={trafficMode === 'light'} onChange={() => setTrafficMode('light')} className="accent-emerald-600" />
-                <span className="text-sm font-medium">Light Traffic</span>
-              </label>
-              <span className="text-[10px] text-zinc-500 ml-auto">Selects Speed Slab set for Auto estimate</span>
+        {/* TimeReciprocalCard */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="time-reciprocal">
+          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-100">
+            <div className="flex items-center gap-1.5">
+              <span className="p-0.5 rounded bg-indigo-100 text-indigo-700">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+                </svg>
+              </span>
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-800 leading-none">
+                Time Reciprocal <span className="text-slate-400 font-normal">— END - DURATION = START</span>
+              </h2>
             </div>
-          )}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {isTrafficMode && (
+              <div className="flex items-center space-x-2 bg-amber-50/70 border border-amber-200/80 rounded px-1.5 py-0.5">
+                <label className="inline-flex items-center cursor-pointer text-[10px] font-bold text-slate-800">
+                  <input checked={trafficMode==='traffic'} onChange={()=>setTrafficMode('traffic')} className="text-amber-600 focus:ring-0 w-3 h-3 mr-1" name="trafficModeMain" type="radio" value="traffic" />
+                  Traffic
+                </label>
+                <label className="inline-flex items-center cursor-pointer text-[10px] text-slate-600">
+                  <input checked={trafficMode==='light'} onChange={()=>setTrafficMode('light')} className="text-amber-600 focus:ring-0 w-3 h-3 mr-1" name="trafficModeMain" type="radio" value="light" />
+                  Light
+                </label>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-2 items-start">
             <div>
-              <label htmlFor="start-time" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                Start Time <span className="text-zinc-400 font-normal text-xs">Optional</span>
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="start-time"
-                  aria-label="Start Time"
-                  type="time"
-                  value={startTime}
-                  onChange={handleStartTimeChange}
-                  className="flex-1 px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  aria-label="Auto"
-                  onClick={handleAutoEstimate}
-                  className="px-3 py-2 text-xs font-bold uppercase tracking-wider border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-600 transition-colors"
-                  title="Estimate Start Time as End − (Distance/speed) configurable slabs ceiled to 5 min"
-                >
-                  Auto
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[11px] font-bold text-slate-700 leading-none" htmlFor="start-time">
+                  Start Time
+                </label>
+                <button type="button" aria-label="Auto" onClick={handleAutoEstimate} className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-900 active:scale-95 text-white text-[9px] font-bold rounded leading-none" title="Auto Estimate Start Time">
+                  AUTO
                 </button>
               </div>
-              <div className="flex gap-1 mt-2">
-                <button type="button" onClick={() => nudgeStartTime(-10)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="-10 min">−10</button>
-                <button type="button" onClick={() => nudgeStartTime(-5)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="-5 min">−5</button>
-                <button type="button" onClick={() => nudgeStartTime(5)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="+5 min">+5</button>
-                <button type="button" onClick={() => nudgeStartTime(10)} disabled={!startTime} className="flex-1 py-1 text-xs font-mono border rounded-lg bg-white dark:bg-zinc-700 disabled:opacity-40" title="+10 min">+10</button>
+              <div className="relative">
+                <input className="w-full bg-slate-50 border border-slate-300 text-slate-800 font-mono font-semibold rounded-md py-1 px-1.5 text-xs focus:bg-white focus:ring-1 focus:ring-indigo-500 h-8" id="start-time" aria-label="Start Time" name="start_time" placeholder="--:--" type="time" value={startTime} onChange={handleStartTimeChange} />
               </div>
-              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase tracking-wider">Auto: End − (Distance/speed) slabs ceil 5 min • Empty allowed</span>
+              <div className="grid grid-cols-4 gap-0.5 mt-1">
+                <button type="button" onClick={()=>nudgeStartTime(-10)} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center">-10</button>
+                <button type="button" onClick={()=>nudgeStartTime(-5)} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center">-5</button>
+                <button type="button" onClick={()=>nudgeStartTime(5)} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center">+5</button>
+                <button type="button" onClick={()=>nudgeStartTime(10)} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center">+10</button>
+              </div>
             </div>
-
             <div>
-              <label htmlFor="end-time" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                End Time
-              </label>
-              <input
-                id="end-time"
-                aria-label="End Time"
-                type="time"
-                value={endTime}
-                onChange={handleEndTimeChange}
-                required
-                className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
-              <span className="mt-1 inline-block text-[10px] font-semibold text-telemetry-cyan uppercase">defaults to current time</span>
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[11px] font-bold text-slate-700 leading-none" htmlFor="end-time">End Time</label>
+                <span className="text-[9px] font-bold text-sky-600 leading-none">NOW</span>
+              </div>
+              <div className="relative">
+                <input className="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 h-8" id="end-time" aria-label="End Time" name="end_time" type="time" value={endTime} onChange={handleEndTimeChange} required />
+              </div>
+              <p className="text-[9px] text-sky-600 font-medium mt-1 truncate">Current time</p>
             </div>
-
             <div>
-              <label htmlFor="duration" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                Duration (HH:MM)
-              </label>
-              <input
-                id="duration"
-                aria-label="Duration"
-                type="text"
-                placeholder="00:55"
-                value={duration}
-                onChange={handleDurationChange}
-                className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
-              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase tracking-wider">Enter Duration to compute Start</span>
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[11px] font-bold text-slate-700 leading-none" htmlFor="duration">Duration</label>
+                <span className="text-[9px] text-slate-400 leading-none">HH:MM</span>
+              </div>
+              <input className="w-full bg-slate-50 border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:bg-white focus:ring-1 focus:ring-indigo-500 h-8" id="duration" aria-label="Duration" name="duration" placeholder="00:00" type="text" value={duration} onChange={handleDurationChange} />
+              <p className="text-[9px] text-slate-500 mt-1 truncate">Span calc</p>
             </div>
           </div>
-          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 uppercase tracking-wider font-semibold">
-            Formula: Estimated Start = End − ceil((Distance/speed)*60 /5)*5 • speed &lt;10→15 &lt;20→20 &lt;40→25 ≤60→30 &gt;60→35 • Supports overnight wrap • Only auto-fills when Start empty
-          </p>
-        </div>
+          <div className="mt-1 pt-1 border-t border-slate-100 text-[9px] text-slate-400 leading-none font-mono truncate">
+            FORMULA: START = END - CEIL((KM/SPEED)*60 /5)*5 • OVERNIGHT OK
+          </div>
+        </section>
 
-        {/* Places & Fuel */}
-        <div className="space-y-4">
+        {/* RouteAndPurposeSection */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="route-details">
+          <div className="flex items-center justify-between gap-1 mb-1">
+            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 leading-none" htmlFor="places-visited">
+              Route &amp; Purpose <span className="text-red-500 font-bold">*</span>
+            </label>
+            <span className="text-[9px] text-slate-400 italic">Tap preset to fill</span>
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto pb-1 pt-0.5" data-purpose="preset-chips" style={{scrollbarWidth:'none'}}>
+            <button type="button" onClick={()=>setPlacesVisited('Home - Office')} data-testid="quick-places-home-office" className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Home - Office' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>
+              Home - Office
+            </button>
+            <button type="button" onClick={()=>setPlacesVisited('Office - Home')} data-testid="quick-places-office-home" className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Office - Home' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>
+              Office - Home
+            </button>
+            <button type="button" onClick={()=>setPlacesVisited('HO - Panni')} className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='HO - Panni' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>
+              HO - Panni
+            </button>
+            <button type="button" onClick={()=>setPlacesVisited('Panni - HO')} className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Panni - HO' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>
+              Panni - HO
+            </button>
+            <button type="button" onClick={()=>setPlacesVisited('Port Customs')} className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Port Customs' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>
+              Port Customs
+            </button>
+          </div>
           <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <label htmlFor="places-visited" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                Places Visited / Route & Purpose <span className="text-red-500">*</span>
-              </label>
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  data-testid="quick-places-home-office"
-                  onClick={() => setPlacesVisited('Home - Office')}
-                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${placesVisited === 'Home - Office' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-zinc-50 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-sky-50 dark:hover:bg-zinc-700 hover:border-sky-300'}`}
-                  title="Fill Places Visited with Home - Office"
-                >
-                  Home - Office
-                </button>
-                <button
-                  type="button"
-                  data-testid="quick-places-office-home"
-                  onClick={() => setPlacesVisited('Office - Home')}
-                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition ${placesVisited === 'Office - Home' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-zinc-50 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 hover:bg-sky-50 dark:hover:bg-zinc-700 hover:border-sky-300'}`}
-                  title="Fill Places Visited with Office - Home"
-                >
-                  Office - Home
-                </button>
+            <input className="w-full bg-white border border-slate-300 rounded-md py-1 px-2.5 text-xs text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 h-8" id="places-visited" aria-label="Places Visited" name="route_purpose" placeholder="e.g., HQ Fleet Yard → Regional Port Customs" required type="text" value={placesVisited} onChange={(e)=>setPlacesVisited(e.target.value)} />
+          </div>
+        </section>
+
+        {/* FuelDetailsSection */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="fuel-card">
+          <div className="flex items-center justify-between mb-1.5">
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1 leading-none">
+              <svg className="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
+              </svg>
+              Fuel Refill <span className="text-slate-400 font-normal">(Optional)</span>
+            </h3>
+            <span className="text-[9px] text-slate-400">Order Date = Trip Date</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className="relative">
+                <input className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" id="fuel-pumped" aria-label="Fuel Pumped" inputMode="decimal" name="fuel_pumped_l" placeholder="Pumped (L) e.g. 35.0" step="0.01" type="number" value={fuelPumped} onChange={(e)=>setFuelPumped(e.target.value)} />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span>
               </div>
             </div>
-            <input
-              id="places-visited"
-              aria-label="Places Visited"
-              type="text"
-              value={placesVisited}
-              onChange={(e) => setPlacesVisited(e.target.value)}
-              placeholder="e.g., HQ Fleet Yard → Regional Port Customs"
-              required
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-            />
-            <p className="mt-1 text-[11px] text-zinc-500">Tap a chip to fill — you can still edit freely after.</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label htmlFor="fuel-pumped" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                Fuel Pumped (L) <span className="text-zinc-400 font-normal text-xs">Optional</span>
-              </label>
-              <input
-                id="fuel-pumped"
-                aria-label="Fuel Pumped"
-                type="number"
-                step="0.1"
-                value={fuelPumped}
-                onChange={(e) => setFuelPumped(e.target.value)}
-                placeholder="e.g., 35.0"
-                className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="fuel-order-no" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                Fuel Order No <span className="text-zinc-400 font-normal text-xs">Optional</span>
-              </label>
-              <input
-                id="fuel-order-no"
-                aria-label="Fuel Order No"
-                type="text"
-                value={fuelOrderNo}
-                onChange={(e) => setFuelOrderNo(e.target.value)}
-                placeholder="e.g., #FO-88912"
-                className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
-              <span className="mt-1 inline-block text-[10px] text-zinc-500 uppercase">Fuel Order Date = Trip Date</span>
+              <input className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" id="fuel-order-no" aria-label="Fuel Order No" name="fuel_order_no" placeholder="Order # e.g. #FO-88912" type="text" value={fuelOrderNo} onChange={(e)=>setFuelOrderNo(e.target.value)} />
             </div>
           </div>
-        </div>
-
-        <div className="flex justify-end gap-3 pt-4 border-t border-rule-line dark:border-zinc-800">
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-6 py-2.5 bg-slate-surface hover:bg-primary text-on-primary font-semibold rounded-lg transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
-          >
-            {saving ? 'Saving...' : 'Save Trip'}
-          </button>
-        </div>
+        </section>
       </form>
+
+      {/* StickyBottomActionBar — matches addtripsample StickyBottomActionBar */}
+      <aside className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 z-40 shadow-lg" data-purpose="form-actions">
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
+          <button type="button" onClick={handleClear} className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 active:bg-slate-100 transition-colors h-9 leading-none">
+            Clear / Reset
+          </button>
+          <div className="flex items-center gap-1.5 flex-1 sm:flex-initial justify-end">
+            <button type="button" onClick={()=>doSave('another')} disabled={saving} className="hidden sm:inline-flex items-center justify-center px-3 py-1.5 rounded-md border border-indigo-500/30 text-indigo-800 text-xs font-bold hover:bg-indigo-50 transition-colors h-9 leading-none disabled:opacity-50">
+              {saving && saveMode==='another' ? 'Saving...' : 'Save & Add Another'}
+            </button>
+            <button type="button" onClick={()=>doSave('another')} disabled={saving} className="sm:hidden inline-flex items-center justify-center px-3 py-1.5 rounded-md border border-indigo-500/30 text-indigo-800 text-[11px] font-bold hover:bg-indigo-50 transition-colors h-9 leading-none disabled:opacity-50">
+              + Another
+            </button>
+            <button type="submit" onClick={(e)=>{ e.preventDefault(); doSave('single'); }} disabled={saving} className="w-full sm:w-auto px-5 py-1.5 bg-slate-900 hover:bg-black active:scale-[0.98] text-white text-xs sm:text-sm font-bold rounded-md shadow-sm transition-all flex items-center justify-center gap-1.5 h-9 leading-none disabled:opacity-50">
+              <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"></path>
+              </svg>
+              <span>{saving && saveMode==='single' ? 'Saving...' : 'Save Trip'}</span>
+            </button>
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }

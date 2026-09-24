@@ -53,7 +53,6 @@ export default function MobileQuickTripForm(){
 
   useEffect(()=>{
     const s=getSettings(); setSheetId(s.sheetId); setScriptUrl(s.scriptUrl);
-    // hydrate queue len
     try{ setQueueLen(JSON.parse(localStorage.getItem(QUEUE_KEY)||'[]').length);}catch{}
     fetchLast10();
     loadSpeedConfig().then(c=> setIsTrafficMode(c.mode==='traffic'));
@@ -72,13 +71,12 @@ export default function MobileQuickTripForm(){
       const url=u+(u.includes('?')?'&':'?')+'action=last10';
       const r=await fetch(url); if(!r.ok) return;
       const j=await r.json(); const rows=(j.rows||j.trips||[]) as BufferTrip[];
-      setLast10(rows.slice(-10).reverse()); // newest first for display but keep sheet order for Start KM
+      setLast10(rows.slice(-10).reverse());
       if(rows.length>0){
         const last = rows[rows.length-1];
         setStartKm(String(roundToIntegerKm(last.end_km)));
         setIsAutoStart(true);
       }
-      // also update queue len
       setQueueLen(JSON.parse(localStorage.getItem(QUEUE_KEY)||'[]').length);
     }catch{}
   }
@@ -118,6 +116,10 @@ export default function MobileQuickTripForm(){
     if(endTime) setDuration(formatDurationMinutes(calculateDurationMinutes(nxt,endTime)));
   };
 
+  const handleClear = () => {
+    setEndKm(''); setDistance(''); setPlacesVisited(''); setFuelPumped(''); setFuelOrderNo(''); setStartTime(''); setDuration(''); setEndTime(getCurrentTimeString()); setMsg(null);
+  };
+
   const onSubmit=async(e:React.FormEvent)=>{
     e.preventDefault(); setMsg(null);
     if(!placesVisited.trim()){ setMsg({t:'err',m:'Places visited is required'}); return; }
@@ -138,12 +140,10 @@ export default function MobileQuickTripForm(){
       setMsg({t:'ok',m:'Saved to Buffer Sheet'});
       await fetchLast10();
     }catch(err){
-      // queue offline
       const q=JSON.parse(localStorage.getItem(QUEUE_KEY)||'[]'); q.push({...trip,_queuedAt:new Date().toISOString()}); localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
       setQueueLen(q.length);
       setMsg({t:'ok',m:(err as Error).message==='offline'?'Offline — queued locally, will sync when online':'Queued locally (sheet unreachable) — will sync'});
     }finally{ setSaving(false);
-      // reset for next entry keep continuity: new start is previous end
       setStartKm(String(roundToIntegerKm(parseIntKm(endKm)||trip.end_km)));
       setIsAutoStart(true); setEndKm(''); setDistance(''); setPlacesVisited(''); setFuelPumped(''); setFuelOrderNo(''); setStartTime(''); setDuration(''); setEndTime(getCurrentTimeString());
       setTimeout(()=>setMsg(null),4000);
@@ -151,76 +151,196 @@ export default function MobileQuickTripForm(){
   };
 
   return (
-    <div className="max-w-3xl mx-auto bg-white dark:bg-zinc-900 shadow-xl rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
-      <div className="bg-slate-800 text-white px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2"><span className="text-cyan-400">➕</span><div><h2 className="text-sm font-bold">Quick Trip — Buffer Sheet</h2><p className="text-[11px] text-zinc-300">Same maths as web • {queueLen>0?`${queueLen} queued`:'Online'}</p></div></div>
-        <button onClick={()=>setShowSettings(v=>!v)} className="text-xs bg-zinc-700 hover:bg-zinc-600 px-2 py-1 rounded">Settings</button>
-      </div>
+    <div className="max-w-3xl mx-auto px-2.5 pt-2 pb-24 space-y-2">
+      {/* TitleAndStatusCard */}
+      <section className="rounded-lg shadow-sm border border-slate-800 bg-slate-900 text-white px-3 py-2.5 flex items-center justify-between gap-2" data-purpose="card-banner">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 font-bold shrink-0">
+            <svg className="w-3.5 h-3.5 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>
+          </div>
+          <div>
+            <h1 className="text-xs sm:text-sm font-bold tracking-tight leading-none">Quick Trip — Buffer Sheet</h1>
+            <p className="text-[10px] text-slate-300 leading-tight">Same maths as web • {queueLen>0?`${queueLen} queued`:'Online'} • Works offline — no login</p>
+          </div>
+        </div>
+        <button onClick={()=>setShowSettings(v=>!v)} className="text-[10px] font-bold tracking-wider px-2 py-1 rounded bg-slate-800 border border-slate-700 text-cyan-400 hover:bg-slate-700">Settings</button>
+      </section>
 
       {showSettings && (
-        <div className="mx-4 mt-4 p-3 bg-zinc-50 dark:bg-zinc-800 rounded border text-sm space-y-2">
-          <label className="block text-xs font-semibold">Sheet ID or URL</label><input value={sheetId} onChange={e=>setSheetId(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/... or ID" className="w-full px-2 py-1 border rounded text-sm"/>
-          <label className="block text-xs font-semibold">Apps Script Web App URL</label><input value={scriptUrl} onChange={e=>setScriptUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="w-full px-2 py-1 border rounded text-sm"/>
-          <div className="flex gap-2"><button onClick={()=>{ let id=sheetId.trim(); const m=id.match(/\/d\/([a-zA-Z0-9-_]+)/); if(m) id=m[1]; localStorage.setItem('mobile.sheetId',id); localStorage.setItem('mobile.scriptUrl',scriptUrl.trim()); setMsg({t:'ok',m:'Settings saved'}); setShowSettings(false); fetchLast10(); }} className="px-3 py-1 bg-cyan-600 text-white rounded text-xs">Save</button><button onClick={flushQueue} className="px-3 py-1 bg-zinc-200 dark:bg-zinc-700 rounded text-xs">Flush queue now</button></div>
-          <p className="text-[11px] text-zinc-500">Seed via NEXT_PUBLIC_SHEET_ID / NEXT_PUBLIC_SCRIPT_URL env as well.</p>
-        </div>
+        <section className="bg-white rounded-lg p-3 border border-slate-200 shadow-sm text-sm space-y-2">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">Buffer Sheet Settings</h3>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Sheet ID or URL</label>
+            <input value={sheetId} onChange={e=>setSheetId(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/... or ID" className="w-full px-2 py-1.5 border border-slate-300 rounded-md text-sm bg-white"/>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Apps Script Web App URL</label>
+            <input value={scriptUrl} onChange={e=>setScriptUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="w-full px-2 py-1.5 border border-slate-300 rounded-md text-sm bg-white"/>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={()=>{ let id=sheetId.trim(); const m=id.match(/\/d\/([a-zA-Z0-9-_]+)/); if(m) id=m[1]; localStorage.setItem('mobile.sheetId',id); localStorage.setItem('mobile.scriptUrl',scriptUrl.trim()); setMsg({t:'ok',m:'Settings saved'}); setShowSettings(false); fetchLast10(); }} className="px-3 py-1.5 bg-sky-600 text-white rounded-md text-xs font-bold">Save</button>
+            <button onClick={flushQueue} className="px-3 py-1.5 bg-slate-100 border border-slate-300 rounded-md text-xs font-semibold">Flush queue now</button>
+            <button onClick={fetchLast10} className="px-3 py-1.5 bg-white border border-slate-300 rounded-md text-xs">Refresh</button>
+          </div>
+          <p className="text-[11px] text-slate-500">Seed via NEXT_PUBLIC_SHEET_ID / NEXT_PUBLIC_SCRIPT_URL env as well.</p>
+        </section>
       )}
 
-      {msg && <div className={`mx-4 mt-4 p-2 rounded text-sm ${msg.t==='ok'?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-red-50 text-red-700 border border-red-200'}`}>{msg.m}</div>}
+      {msg && <div className={`p-2.5 rounded-lg text-xs font-medium border ${msg.t==='ok'?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-red-50 text-red-700 border-red-200'}`}>{msg.m}</div>}
 
-      <form onSubmit={onSubmit} className="p-4 space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="text-xs font-medium">Date</label><input type="date" value={date} onChange={e=>{setDate(e.target.value); setDayOfWeek(getDayOfWeek(e.target.value));}} className="w-full px-2 py-1.5 border rounded text-sm" required/><p className="text-[10px] text-cyan-600 font-bold uppercase">{dayOfWeek}</p></div>
-          <div><label className="text-xs font-medium">Trip Type</label><div className="flex gap-3 mt-1"><label className="flex items-center gap-1 text-sm"><input type="radio" checked={tripType==='Official'} onChange={()=>setTripType('Official')}/>Official</label><label className="flex items-center gap-1 text-sm"><input type="radio" checked={tripType==='Private'} onChange={()=>setTripType('Private')}/>Private</label></div></div>
-        </div>
-
-        <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded border space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Odometer — Start + Distance = End (Integer KM)</p>
-          <div className="grid grid-cols-3 gap-2">
-            <div><label className="text-xs">Start KM</label><input type="number" step="1" value={startKm} onChange={e=>{setStartKm(e.target.value); setIsAutoStart(false); const s=parseIntKm(e.target.value); if(isNaN(s)) return; if(endKm&&!isNaN(parseIntKm(endKm))){ const d=calculateTripDistance(s,parseIntKm(endKm)); setDistance(String(d)); maybeAutoEstimate(String(d),endTime,startTime);} else if(distance) setEndKm(String(calculateEndKm(s,parseIntKm(distance))));}} className={`w-full px-2 py-1.5 border rounded font-mono text-sm ${isAutoStart?'bg-amber-50 border-amber-300':''}`} required/><span className="text-[9px] uppercase font-bold">{isAutoStart?'Auto from last End':'Manual'}</span></div>
-            <div><label className="text-xs">End KM</label><input type="number" step="1" value={endKm} onChange={e=>{setEndKm(e.target.value); const en=parseIntKm(e.target.value), st=parseIntKm(startKm); if(!isNaN(en)&&!isNaN(st)){ const d=calculateTripDistance(st,en); setDistance(String(d)); maybeAutoEstimate(String(d),endTime,startTime);}}} placeholder="End" className="w-full px-2 py-1.5 border rounded font-mono text-sm"/></div>
-            <div><label className="text-xs">Distance</label><input type="number" step="1" value={distance} onChange={e=>{setDistance(e.target.value); const d=parseIntKm(e.target.value), st=parseIntKm(startKm); if(!isNaN(d)&&!isNaN(st)){ setEndKm(String(calculateEndKm(st,d))); maybeAutoEstimate(e.target.value,endTime,startTime);}}} placeholder="Distance" className="w-full px-2 py-1.5 border rounded font-mono text-sm"/></div>
-          </div>
-        </div>
-
-        <div className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded border space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Time — End − Duration = Start • Estimated Start</p>
-          {isTrafficMode && (
-            <div className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 rounded">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-amber-800">Traffic</span>
-              <label className="flex items-center gap-1 text-xs"><input type="radio" checked={trafficMode==='traffic'} onChange={()=>setTrafficMode('traffic')}/>Traffic</label>
-              <label className="flex items-center gap-1 text-xs"><input type="radio" checked={trafficMode==='light'} onChange={()=>setTrafficMode('light')}/>Light</label>
+      <form onSubmit={onSubmit} noValidate className="space-y-2">
+        {/* Metadata */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="trip-metadata">
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 leading-none">Trip Date</label>
+                <span className="text-[10px] font-bold text-sky-600 uppercase tracking-tight">{dayOfWeek}</span>
+              </div>
+              <input className="w-full bg-slate-50 border border-slate-300 rounded-md py-1 px-2 font-medium text-slate-800 focus:bg-white focus:ring-1 focus:ring-indigo-500 text-xs h-8" type="date" value={date} onChange={e=>{setDate(e.target.value); setDayOfWeek(getDayOfWeek(e.target.value));}} required />
             </div>
-          )}
-          <div className="grid grid-cols-3 gap-2">
-            <div><label className="text-xs">Start <span className="text-zinc-400">Opt</span></label><div className="flex gap-1"><input type="time" value={startTime} onChange={e=>{setStartTime(e.target.value); if(e.target.value&&endTime) setDuration(formatDurationMinutes(calculateDurationMinutes(e.target.value,endTime)));}} className="flex-1 px-2 py-1.5 border rounded font-mono text-sm"/><button type="button" onClick={()=>{ const d=parseIntKm(distance); if(isNaN(d)||d<=0||!endTime.includes(':')){ setMsg({t:'err',m:'Need Distance & End Time'}); return; } const tm=isTrafficMode?trafficMode:undefined; const est=estimateStartTime(endTime,d,tm); if(est){ setStartTime(est); setDuration(formatDurationMinutes(calculateDurationMinutes(est,endTime)));}}} className="px-2 py-1 text-[10px] font-bold border rounded bg-white">Auto</button></div><div className="flex gap-1 mt-1"><button type="button" onClick={()=>nudgeStartTime(-10)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">−10</button><button type="button" onClick={()=>nudgeStartTime(-5)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">−5</button><button type="button" onClick={()=>nudgeStartTime(5)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">+5</button><button type="button" onClick={()=>nudgeStartTime(10)} disabled={!startTime} className="flex-1 py-0.5 text-[10px] font-mono border rounded bg-white disabled:opacity-40">+10</button></div></div>
-            <div><label className="text-xs">End</label><input type="time" value={endTime} onChange={e=>{setEndTime(e.target.value); if(startTime) setDuration(formatDurationMinutes(calculateDurationMinutes(startTime,e.target.value))); else maybeAutoEstimate(distance,e.target.value,startTime);}} className="w-full px-2 py-1.5 border rounded font-mono text-sm" required/></div>
-            <div><label className="text-xs">Duration</label><input type="text" placeholder="00:55" value={duration} onChange={e=>{setDuration(e.target.value); const m=parseDurationToMinutes(e.target.value); if(endTime) setStartTime(calculateStartTimeFromEndAndDuration(endTime,m));}} className="w-full px-2 py-1.5 border rounded font-mono text-sm"/></div>
-          </div>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <label className="text-xs font-medium">Places Visited *</label>
-            <div className="flex gap-1.5">
-              <button type="button" data-testid="quick-places-home-office" onClick={()=>setPlacesVisited('Home - Office')} className={`px-2 py-1 rounded-full text-xs font-semibold border transition ${placesVisited==='Home - Office'?'bg-sky-600 border-sky-600 text-white':'bg-zinc-50 border-zinc-300 text-zinc-700 hover:bg-sky-50 hover:border-sky-300'}`}>Home - Office</button>
-              <button type="button" data-testid="quick-places-office-home" onClick={()=>setPlacesVisited('Office - Home')} className={`px-2 py-1 rounded-full text-xs font-semibold border transition ${placesVisited==='Office - Home'?'bg-sky-600 border-sky-600 text-white':'bg-zinc-50 border-zinc-300 text-zinc-700 hover:bg-sky-50 hover:border-sky-300'}`}>Office - Home</button>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 leading-none">Trip Type</label>
+                <span className="text-[9px] text-slate-400">Ledger</span>
+              </div>
+              <div className="grid grid-cols-2 p-0.5 bg-slate-100 rounded-md border border-slate-200 gap-1 h-8 items-center" role="radiogroup">
+                <div>
+                  <input checked={tripType==='Official'} onChange={()=>setTripType('Official')} className="sr-only" id="m-type-official" name="m_trip_type" type="radio" value="official" />
+                  <label htmlFor="m-type-official" onClick={()=>setTripType('Official')} className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold cursor-pointer transition-all select-none leading-none ${tripType==='Official' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'}`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Official <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold">OFF</span>
+                  </label>
+                </div>
+                <div>
+                  <input checked={tripType==='Private'} onChange={()=>setTripType('Private')} className="sr-only" id="m-type-private" name="m_trip_type" type="radio" value="private" />
+                  <label htmlFor="m-type-private" onClick={()=>setTripType('Private')} className={`flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-semibold cursor-pointer transition-all select-none leading-none ${tripType==='Private' ? 'bg-white text-slate-900 shadow-sm font-bold' : 'text-slate-600'}`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Private <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-100 text-amber-800 font-bold">PRI</span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
-          <input value={placesVisited} onChange={e=>setPlacesVisited(e.target.value)} placeholder="HQ → Port Customs" className="w-full px-2 py-1.5 border rounded text-sm" required/>
-          <p className="mt-1 text-[11px] text-zinc-500">Tap a chip to fill — editable after.</p>
-        </div>
-        <div className="grid grid-cols-2 gap-2"><div><label className="text-xs">Fuel Pumped (L)</label><input type="number" step="0.1" value={fuelPumped} onChange={e=>setFuelPumped(e.target.value)} placeholder="35.0" className="w-full px-2 py-1.5 border rounded font-mono text-sm"/></div><div><label className="text-xs">Fuel Order No</label><input value={fuelOrderNo} onChange={e=>setFuelOrderNo(e.target.value)} placeholder="#FO-88912" className="w-full px-2 py-1.5 border rounded text-sm"/></div></div>
+        </section>
 
-        <button type="submit" disabled={saving} className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded font-semibold disabled:opacity-50">{saving?'Saving…':'Save to Buffer Sheet'}</button>
+        {/* Odometer */}
+        <section className="bg-white rounded-lg p-2.5 border border-sky-200 shadow-sm relative overflow-hidden" data-purpose="odometer-reciprocal">
+          <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-sky-100">
+            <div className="flex items-center gap-1.5">
+              <span className="p-0.5 rounded bg-sky-100 text-sky-700"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg></span>
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-sky-950 leading-none">Odometer Reciprocal <span className="text-slate-400 font-normal">— START + DISTANCE = END</span></h2>
+            </div>
+            <span className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200">Auto Sync</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <div className="flex items-center justify-between mb-0.5"><label className="text-[11px] font-bold text-slate-700 leading-none">Start KM</label><span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 leading-none">LOCKED</span></div>
+              <input type="number" step="1" value={startKm} onChange={e=>{setStartKm(e.target.value); setIsAutoStart(false); const s=parseIntKm(e.target.value); if(isNaN(s)) return; if(endKm&&!isNaN(parseIntKm(endKm))){ const d=calculateTripDistance(s,parseIntKm(endKm)); setDistance(String(d)); maybeAutoEstimate(String(d),endTime,startTime);} else if(distance) setEndKm(String(calculateEndKm(s,parseIntKm(distance))));}} className={`w-full border font-mono font-bold text-sm rounded-md py-1 px-2 focus:outline-none h-8 ${isAutoStart?'bg-amber-50/50 border-amber-400 ring-2 ring-amber-400':'bg-white border-slate-300'}`} required />
+              <span className="inline-block text-[9px] font-bold tracking-tight text-amber-800 bg-amber-100/80 px-1 py-0.5 rounded mt-0.5 truncate w-full">{isAutoStart?'Auto-filled':'Manual override'}</span>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-0.5"><label className="text-[11px] font-bold text-slate-700 leading-none">End KM</label><span className="text-[9px] text-slate-400 leading-none">Auto</span></div>
+              <input type="number" step="1" value={endKm} onChange={e=>{setEndKm(e.target.value); const en=parseIntKm(e.target.value), st=parseIntKm(startKm); if(!isNaN(en)&&!isNaN(st)){ const d=calculateTripDistance(st,en); setDistance(String(d)); maybeAutoEstimate(String(d),endTime,startTime);}}} placeholder="End" className="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-sky-500 h-8" />
+              <p className="text-[9px] text-slate-400 mt-0.5 truncate">Reciprocal</p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-0.5"><label className="text-[11px] font-bold text-slate-700 leading-none">Distance</label><span className="text-[9px] text-slate-400 leading-none">KM</span></div>
+              <input type="number" step="1" value={distance} onChange={e=>{setDistance(e.target.value); const d=parseIntKm(e.target.value), st=parseIntKm(startKm); if(!isNaN(d)&&!isNaN(st)){ setEndKm(String(calculateEndKm(st,d))); maybeAutoEstimate(e.target.value,endTime,startTime);}}} placeholder="Distance" className="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold text-sm rounded-md py-1 px-2 placeholder-slate-400 focus:ring-1 focus:ring-sky-500 h-8" />
+              <p className="text-[9px] text-slate-400 mt-0.5 truncate">Integer</p>
+            </div>
+          </div>
+          <div className="mt-1.5 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500 font-mono leading-none"><span>DISTANCE = ROUND(END - START)</span><span className="font-bold text-slate-600">INTEGER KM</span></div>
+        </section>
+
+        {/* Time */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="time-reciprocal">
+          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-100">
+            <div className="flex items-center gap-1.5">
+              <span className="p-0.5 rounded bg-indigo-100 text-indigo-700"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg></span>
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-800 leading-none">Time Reciprocal <span className="text-slate-400 font-normal">— END - DURATION = START</span></h2>
+            </div>
+            {isTrafficMode && (
+              <div className="flex items-center space-x-2 bg-amber-50/70 border border-amber-200/80 rounded px-1.5 py-0.5">
+                <label className="inline-flex items-center cursor-pointer text-[10px] font-bold text-slate-800"><input checked={trafficMode==='traffic'} onChange={()=>setTrafficMode('traffic')} className="text-amber-600 focus:ring-0 w-3 h-3 mr-1" type="radio" value="traffic" /> Traffic</label>
+                <label className="inline-flex items-center cursor-pointer text-[10px] text-slate-600"><input checked={trafficMode==='light'} onChange={()=>setTrafficMode('light')} className="text-amber-600 focus:ring-0 w-3 h-3 mr-1" type="radio" value="light" /> Light</label>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-2 items-start">
+            <div>
+              <div className="flex items-center justify-between mb-0.5"><label className="text-[11px] font-bold text-slate-700 leading-none">Start Time</label><button type="button" onClick={()=>{ const d=parseIntKm(distance); if(isNaN(d)||d<=0||!endTime.includes(':')){ setMsg({t:'err',m:'Need Distance & End Time'}); return; } const tm=isTrafficMode?trafficMode:undefined; const est=estimateStartTime(endTime,d,tm); if(est){ setStartTime(est); setDuration(formatDurationMinutes(calculateDurationMinutes(est,endTime)));}}} className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-900 active:scale-95 text-white text-[9px] font-bold rounded leading-none">AUTO</button></div>
+              <input type="time" value={startTime} onChange={e=>{setStartTime(e.target.value); if(e.target.value&&endTime) setDuration(formatDurationMinutes(calculateDurationMinutes(e.target.value,endTime)));}} className="w-full bg-slate-50 border border-slate-300 text-slate-800 font-mono font-semibold rounded-md py-1 px-1.5 text-xs focus:bg-white focus:ring-1 focus:ring-indigo-500 h-8" />
+              <div className="grid grid-cols-4 gap-0.5 mt-1">
+                <button type="button" onClick={()=>nudgeStartTime(-10)} disabled={!startTime} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center disabled:opacity-40">-10</button>
+                <button type="button" onClick={()=>nudgeStartTime(-5)} disabled={!startTime} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center disabled:opacity-40">-5</button>
+                <button type="button" onClick={()=>nudgeStartTime(5)} disabled={!startTime} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center disabled:opacity-40">+5</button>
+                <button type="button" onClick={()=>nudgeStartTime(10)} disabled={!startTime} className="py-0.5 px-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[9px] font-mono font-semibold leading-none text-center disabled:opacity-40">+10</button>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-0.5"><label className="text-[11px] font-bold text-slate-700 leading-none">End Time</label><span className="text-[9px] font-bold text-sky-600 leading-none">NOW</span></div>
+              <input type="time" value={endTime} onChange={e=>{setEndTime(e.target.value); if(startTime) setDuration(formatDurationMinutes(calculateDurationMinutes(startTime,e.target.value))); else maybeAutoEstimate(distance,e.target.value,startTime);}} className="w-full bg-white border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:ring-1 focus:ring-indigo-500 h-8" required />
+              <p className="text-[9px] text-sky-600 font-medium mt-1 truncate">Current time</p>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-0.5"><label className="text-[11px] font-bold text-slate-700 leading-none">Duration</label><span className="text-[9px] text-slate-400 leading-none">HH:MM</span></div>
+              <input type="text" placeholder="00:55" value={duration} onChange={e=>{setDuration(e.target.value); const m=parseDurationToMinutes(e.target.value); if(endTime) setStartTime(calculateStartTimeFromEndAndDuration(endTime,m));}} className="w-full bg-slate-50 border border-slate-300 text-slate-900 font-mono font-semibold rounded-md py-1 px-2 text-xs focus:bg-white focus:ring-1 focus:ring-indigo-500 h-8" />
+              <p className="text-[9px] text-slate-500 mt-1 truncate">Span calc</p>
+            </div>
+          </div>
+          <div className="mt-1 pt-1 border-t border-slate-100 text-[9px] text-slate-400 leading-none font-mono truncate">FORMULA: START = END - CEIL((KM/SPEED)*60 /5)*5 • OVERNIGHT OK</div>
+        </section>
+
+        {/* Route */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="route-details">
+          <div className="flex items-center justify-between gap-1 mb-1">
+            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 leading-none">Route &amp; Purpose <span className="text-red-500 font-bold">*</span></label>
+            <span className="text-[9px] text-slate-400 italic">Tap preset to fill</span>
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto pb-1 pt-0.5" data-purpose="preset-chips" style={{scrollbarWidth:'none'}}>
+            <button type="button" onClick={()=>setPlacesVisited('Home - Office')} data-testid="quick-places-home-office" className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Home - Office' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>Home - Office</button>
+            <button type="button" onClick={()=>setPlacesVisited('Office - Home')} data-testid="quick-places-office-home" className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Office - Home' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>Office - Home</button>
+            <button type="button" onClick={()=>setPlacesVisited('HO - Panni')} className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='HO - Panni' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>HO - Panni</button>
+            <button type="button" onClick={()=>setPlacesVisited('Panni - HO')} className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Panni - HO' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>Panni - HO</button>
+            <button type="button" onClick={()=>setPlacesVisited('Port Customs')} className={`whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-medium border active:scale-95 transition leading-tight ${placesVisited==='Port Customs' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'}`}>Port Customs</button>
+          </div>
+          <input value={placesVisited} onChange={e=>setPlacesVisited(e.target.value)} placeholder="HQ → Port Customs" className="w-full bg-white border border-slate-300 rounded-md py-1 px-2.5 text-xs text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-indigo-500 h-8" required />
+          <p className="mt-1 text-[11px] text-slate-500">Tap a chip to fill — editable after.</p>
+        </section>
+
+        {/* Fuel */}
+        <section className="bg-white rounded-lg p-2.5 border border-slate-200/90 shadow-sm" data-purpose="fuel-card">
+          <div className="flex items-center justify-between mb-1.5">
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1 leading-none"><svg className="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path></svg>Fuel Refill <span className="text-slate-400 font-normal">(Optional)</span></h3>
+            <span className="text-[9px] text-slate-400">Order Date = Trip Date</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className="relative"><input type="number" step="0.1" value={fuelPumped} onChange={e=>setFuelPumped(e.target.value)} placeholder="Pumped (L) e.g. 35.0" className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" /><span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span></div>
+            </div>
+            <div><input value={fuelOrderNo} onChange={e=>setFuelOrderNo(e.target.value)} placeholder="Order # e.g. #FO-88912" className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" /></div>
+          </div>
+        </section>
       </form>
 
-      <div className="border-t p-4">
-        <div className="flex items-center justify-between mb-2"><h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Last 10 in Buffer Sheet</h3><button onClick={fetchLast10} className="text-xs text-cyan-600 hover:underline">Refresh</button></div>
-        {last10.length===0 ? <p className="text-sm text-zinc-400">No records yet — check Settings / Script URL.</p> : (
-          <div className="overflow-x-auto"><table className="w-full text-xs border-collapse"><thead><tr className="bg-zinc-100 dark:bg-zinc-800 text-left"><th className="px-1 py-1">Date</th><th className="px-1 py-1">KM</th><th className="px-1 py-1">Dist</th><th className="px-1 py-1">Places</th></tr></thead><tbody>{last10.map((r,i)=><tr key={i} className="border-t"><td className="px-1 py-1 whitespace-nowrap">{r.date}</td><td className="px-1 py-1 font-mono">{r.start_km}→{r.end_km}</td><td className="px-1 py-1 font-mono">{r.trip_distance}</td><td className="px-1 py-1 truncate max-w-[160px]">{r.places_visited} {r.trip_type==='Private'&&<span className="ml-1 bg-amber-100 text-amber-700 px-1 rounded text-[10px]">PRI</span>}</td></tr>)}</tbody></table></div>
+      {/* Sticky bottom bar */}
+      <aside className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 z-40 shadow-lg" data-purpose="form-actions">
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
+          <button type="button" onClick={handleClear} className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50 active:bg-slate-100 transition-colors h-9 leading-none">Clear / Reset</button>
+          <div className="flex items-center gap-1.5 flex-1 sm:flex-initial justify-end">
+            <button type="submit" onClick={onSubmit as any} disabled={saving} className="w-full sm:w-auto px-5 py-1.5 bg-slate-900 hover:bg-black active:scale-[0.98] text-white text-xs sm:text-sm font-bold rounded-md shadow-sm transition-all flex items-center justify-center gap-1.5 h-9 leading-none disabled:opacity-50">
+              <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"></path></svg>
+              <span>{saving?'Saving…':'Save to Buffer Sheet'}</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-3">
+        <div className="flex items-center justify-between mb-2"><h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Last 10 in Buffer Sheet</h3><button onClick={fetchLast10} className="text-xs text-sky-600 hover:underline font-medium">Refresh</button></div>
+        {last10.length===0 ? <p className="text-sm text-slate-400">No records yet — check Settings / Script URL.</p> : (
+          <div className="overflow-x-auto"><table className="w-full text-xs border-collapse"><thead><tr className="bg-slate-50 text-slate-600 text-left"><th className="px-2 py-1">Date</th><th className="px-2 py-1">KM</th><th className="px-2 py-1">Dist</th><th className="px-2 py-1">Places</th></tr></thead><tbody>{last10.map((r,i)=><tr key={i} className="border-t border-slate-100"><td className="px-2 py-1 whitespace-nowrap">{r.date}</td><td className="px-2 py-1 font-mono">{r.start_km}→{r.end_km}</td><td className="px-2 py-1 font-mono">{r.trip_distance}</td><td className="px-2 py-1 truncate max-w-[160px]">{r.places_visited} {r.trip_type==='Private'&&<span className="ml-1 bg-amber-100 text-amber-700 px-1 rounded text-[10px] font-bold">PRI</span>}</td></tr>)}</tbody></table></div>
         )}
-        {queueLen>0 && <p className="mt-2 text-xs text-amber-600">{queueLen} trip(s) queued — tap Refresh or wait for online sync.</p>}
+        {queueLen>0 && <p className="mt-2 text-xs text-amber-600 font-medium">{queueLen} trip(s) queued — tap Refresh or wait for online sync.</p>}
       </div>
     </div>
   );

@@ -77,13 +77,16 @@ export function buildDbBufferRows(dbTrips: Trip[]): BufferTrip[] {
 
 /**
  * Build full push payload: DB rows sorted + preserved appended at bottom in original buffer order.
+ * When exactMirror=true, preserved rows are calculated but NOT appended — caller can use rowsExact = DB only.
+ * Return includes both `rows` (with preserved) and `rowsExact` (DB only) so UI can toggle without recompute.
  */
-export function buildPushPayload(params: { dbTrips: Trip[]; bufferRows: BufferTrip[] }): { rows: BufferTrip[]; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number } {
+export function buildPushPayload(params: { dbTrips: Trip[]; bufferRows: BufferTrip[] }): { rows: BufferTrip[]; rowsExact: BufferTrip[]; dbRows: BufferTrip[]; preserved: BufferTrip[]; overwritingCount: number; invalidIgnored: number } {
   const { dbTrips, bufferRows } = params;
   const { preserved, overwritingCount, invalidIgnored } = computePreservedRows({ bufferRows, dbTrips });
   const dbRows = buildDbBufferRows(dbTrips);
   const rows = [...dbRows, ...preserved];
-  return { rows, preserved, overwritingCount, invalidIgnored };
+  const rowsExact = [...dbRows];
+  return { rows, rowsExact, dbRows, preserved, overwritingCount, invalidIgnored };
 }
 
 // --- Leaves ---
@@ -129,10 +132,11 @@ export function buildDbLeavesRows(dbLeaves: LeaveDay[]): BufferLeave[] {
   return sorted.map((l) => ({ date: l.date, note: l.note ?? '' }));
 }
 
-export function buildPushLeavesPayload(params: { dbLeaves: LeaveDay[]; bufferLeaves: BufferLeave[] }): { leaves: BufferLeave[]; preserved: BufferLeave[]; overwritingCount: number; invalidIgnored: number } {
+export function buildPushLeavesPayload(params: { dbLeaves: LeaveDay[]; bufferLeaves: BufferLeave[] }): { leaves: BufferLeave[]; leavesExact: BufferLeave[]; dbRows: BufferLeave[]; preserved: BufferLeave[]; overwritingCount: number; invalidIgnored: number } {
   const { dbLeaves, bufferLeaves } = params;
   const { preserved, overwritingCount, invalidIgnored } = computePreservedLeaves({ bufferLeaves, dbLeaves });
   const dbRows = buildDbLeavesRows(dbLeaves);
   const leaves = [...dbRows, ...preserved];
-  return { leaves, preserved, overwritingCount, invalidIgnored };
+  const leavesExact = [...dbRows];
+  return { leaves, leavesExact, dbRows, preserved, overwritingCount, invalidIgnored };
 }
