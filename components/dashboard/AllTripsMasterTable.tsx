@@ -506,24 +506,22 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       if (min && v < min) { setImportMsg(`Date cannot be before ${min} (predecessor #${globalSeqMap.get(pred!.id) ?? ''} — ${pred!.date}) — ODO order cannot be changed. Allowed ${min} to ${max ?? v}`); cancelEdit(); return; }
       if (max && v > max) { setImportMsg(`Date cannot be after ${max} (successor #${globalSeqMap.get(succ!.id) ?? ''} — ${succ!.date}) — ODO order cannot be changed. Allowed ${min ?? v} to ${max}`); cancelEdit(); return; }
       if (v === trip.date) { cancelEdit(); return; }
-      // Pagination guard: ensure new date doesn't create 5th distinct day on its current page
+      // Pagination guard: allow 5th/6th distinct date but flag rebuild required (per requirement)
       {
         const pageTrips = trips.filter(t => t.page_id === trip.page_id);
         const distinctWithoutEdited = getDistinctDates(pageTrips.filter(t => t.id !== tripId));
         const distinctAfter = new Set(distinctWithoutEdited);
         distinctAfter.add(v);
         if (distinctAfter.size > MAX_DAYS_PER_PAGE) {
-          setImportMsg(`Pagination violation: MAX_DAYS exceeded: ${distinctAfter.size} > ${MAX_DAYS_PER_PAGE} — this page already has ${distinctWithoutEdited.length} distinct dates (${distinctWithoutEdited.join(', ')}). Choose a date already on that page or date ${trip.date} to stay within 4 days/page, or use Insert flow to auto-split pages.`);
-          cancelEdit(); return;
-        }
-        // Month rollover guard: page month vs new date month
-        const page = pages.find(p => p.id === trip.page_id);
-        if (page && getDistinctDates([...pageTrips.filter(t=>t.id!==tripId), {...trip, date: v} as Trip]).length > 1) {
-          // Allow but will be caught by validatePaginationConstraints as month split — inform user
-          const months = new Set([...pageTrips.filter(t=>t.id!==tripId).map(t=>t.date.slice(0,7)), v.slice(0,7)]);
-          if (months.size > 1 && v.slice(0,7) !== page.month) {
-            // Not blocking, but next validate will flag MONTH_ROLLOVER — we let update proceed and rely on recalculate to handle? For now, warn and allow.
-          }
+          // Allow 5th/6th date, add record, but warn rebuild required — persists until ledger rebuild
+          try {
+            localStorage.setItem('fleetledger.rebuildRequired', '1');
+            localStorage.setItem('fleetledger.rebuildReason', `Page ${trip.page_id} will have ${distinctAfter.size} distinct dates (max ${MAX_DAYS_PER_PAGE}) after changing ${trip.date} → ${v}. Distinct: ${Array.from(distinctAfter).sort().join(', ')}`);
+          } catch {}
+          // Also dispatch event so ledger page can react
+          if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required', { detail: { pageId: trip.page_id, distinctAfter: Array.from(distinctAfter) } }));
+          setImportMsg(`Ledger rebuild is required — page ${trip.page_id} will have ${distinctAfter.size} distinct dates (max ${MAX_DAYS_PER_PAGE}) after date change. Record added, please rebuild ledger from ledger page. Distinct: ${Array.from(distinctAfter).sort().join(', ')}`);
+          // Do NOT cancel — allow save to proceed for 5th/6th date
         }
       }
       (fields as Record<string,string>).date = v;
