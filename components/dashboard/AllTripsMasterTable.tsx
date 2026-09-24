@@ -1540,59 +1540,54 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     <div className="flex flex-col gap-4">
       <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFile} />
 
-      {/* Header — matches alltripsample MainHeader */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-4 py-3.5">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center justify-center p-1.5 rounded-lg bg-indigo-50 text-indigo-600 ring-1 ring-indigo-500/10">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" strokeLinecap="round" strokeLinejoin="round"></path>
-                </svg>
-              </span>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">{title}</h3>
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">v4.2 Live Ledger</span>
+      {/* Header — matches addtripsample.html MainHeader (two-row, non-messy) */}
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="px-4 sm:px-6 lg:px-8 py-3.5 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <button type="button" className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition shadow-sm shrink-0" title="Toggle Navigation Menu">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"></path></svg>
+              </button>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h3 className="text-xl font-bold tracking-tight text-slate-900">{title}</h3>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-sm"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>v4.2 Live Ledger</span>
+                </div>
+                <p className="text-xs text-slate-500 flex items-center gap-2 flex-wrap"><span>Scrollable historical ledger with odometer continuity tracking, telemetry sync, and fuel logs</span><span className="text-slate-300 font-bold">·</span><span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200" data-testid="master-visible-count">{filtered.length} of {trips.length} trips</span></p>
+              </div>
             </div>
-            <p className="text-xs text-slate-500">
-              Scrollable historical ledger with odometer continuity tracking, telemetry sync, and fuel logs. <span className="font-mono text-slate-600" data-testid="master-visible-count">{filtered.length} of {trips.length} trips</span>
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto">
-            <div className="flex-shrink-0">
+            <div className="flex items-center flex-wrap gap-2.5 shrink-0">
               <EstimateFuelEconomy trips={trips} pages={pages} vehicle={vehicle} onApplied={() => notifyDataChanged()} />
+              <button type="button" onClick={handleOpenStartAudit} disabled={auditFixing} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 shadow-sm transition cursor-pointer disabled:opacity-50" data-testid="verify-start-times-btn" title="Audit Start Time Issues — scan Empty/Equal/Inverted/Short via Traffic slabs">
+                <svg className="w-3.5 h-3.5 text-slate-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3"></path></svg>
+                <span>Audit Start Time Issues</span>
+              </button>
+              <button type="button" onClick={handleRebuildLedger} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 shadow-sm transition cursor-pointer disabled:opacity-50">
+                <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"></path></svg>
+                <span>Rebuild Ledger</span>
+              </button>
+              <a href="/trips/new" className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow transition shrink-0">
+                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg>
+                <span>New Trip</span>
+              </a>
             </div>
-            <button onClick={() => fileInputRef.current?.click()} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-emerald-900 bg-emerald-50 border border-emerald-200/80 hover:bg-emerald-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" title="Import Excel File">
-              <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"></path></svg>
-              <span className="block whitespace-normal">Import<br />Excel</span>
-            </button>
-            <button onClick={handleExport} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-emerald-900 bg-emerald-50 border border-emerald-200/80 hover:bg-emerald-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0" title="Export Excel File">
-              <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"></path></svg>
-              <span className="block whitespace-normal">Export<br />Excel</span>
-            </button>
-            <button onClick={handlePullFromSheet} disabled={sheetPulling || importing || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-blue-900 bg-blue-50 border border-indigo-200/60 hover:bg-indigo-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" data-testid="pull-from-sheet-btn" title={lastPullAt ? `Last Sheet pull: ${new Date(lastPullAt).toLocaleString()}` : 'Pull / Import Google Sheet'}>
-              <svg className="w-3.5 h-3.5 text-blue-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.75 3.75 0 0118 19.5H6.75z"></path></svg>
-              <span className="block whitespace-normal">Import<br />Google Sheet</span>
-            </button>
-            <button onClick={handlePushToSheet} disabled={sheetPushing || importing || sheetPulling} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-blue-900 bg-blue-50 border border-indigo-200/60 hover:bg-indigo-100 rounded-lg transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" data-testid="push-to-sheet-btn" title={lastPushAt ? `Last Sheet push: ${new Date(lastPushAt).toLocaleString()}` : 'Push / Export Google Sheet'}>
-              <svg className="w-3.5 h-3.5 text-blue-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75v6.75m0 0l-3-3m3 3l3-3m-8.25 3a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.75 3.75 0 0118 19.5H6.75z"></path></svg>
-              <span className="block whitespace-normal">Export<br />Google Sheet</span>
-            </button>
-            <button onClick={() => setShowSheetSettings(true)} className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-lg transition shadow-sm text-left leading-tight shrink-0" title="Google Sheet Settings" data-testid="sheet-settings-btn">
-              <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-              <span className="block whitespace-normal">Sheet<br />Settings</span>
-            </button>
-            <button onClick={handleRebuildLedger} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg text-indigo-700 bg-indigo-50 border border-indigo-200/60 hover:bg-indigo-100 shadow-sm transition text-left leading-tight shrink-0 disabled:opacity-50">
-              <svg className="w-3.5 h-3.5 text-indigo-600 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"></path></svg>
-              <span className="block whitespace-normal">Rebuild<br />Ledger</span>
-            </button>
-            <button onClick={handleOpenStartAudit} disabled={auditFixing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100 transition shadow-sm text-left leading-tight shrink-0 disabled:opacity-50" data-testid="verify-start-times-btn" title="Verify Start Times">
-              <svg className="w-3.5 h-3.5 text-amber-600 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
-              <span className="block whitespace-normal">Estimate Fuel<br />Economies</span>
-            </button>
-            <a href="/trips/new" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white shadow hover:bg-indigo-700 transition shrink-0">
-              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15"></path></svg>
-              <span className="block whitespace-normal">New<br />Trip</span>
-            </a>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 sm:px-3.5 bg-blue-950 border border-blue-900 rounded-xl shadow-sm text-xs">
+            <div className="flex items-center flex-wrap gap-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-blue-200 mr-1"><svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"></path></svg><span>Sync &amp; Integrations:</span></div>
+              <div className="inline-flex items-center rounded-lg border border-blue-800/80 bg-blue-900/60 p-0.5 shadow-sm">
+                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-400 hover:text-emerald-300 hover:bg-blue-800/80 rounded-md transition cursor-pointer disabled:opacity-50"><svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"></path></svg><span>Import Excel</span></button>
+                <span className="h-3.5 w-px bg-blue-800"></span>
+                <button type="button" onClick={handleExport} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-400 hover:text-emerald-300 hover:bg-blue-800/80 rounded-md transition cursor-pointer"><svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"></path></svg><span>Export Excel</span></button>
+              </div>
+              <div className="inline-flex items-center rounded-lg border border-blue-800/80 bg-blue-900/60 p-0.5 shadow-sm">
+                <button type="button" onClick={handlePullFromSheet} disabled={sheetPulling || importing || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:text-cyan-200 hover:bg-blue-800/80 rounded-md transition cursor-pointer disabled:opacity-50" data-testid="pull-from-sheet-btn"><svg className="w-3.5 h-3.5 text-cyan-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.75 3.75 0 0118 19.5H6.75z"></path></svg><span>Import Sheet</span></button>
+                <span className="h-3.5 w-px bg-blue-800"></span>
+                <button type="button" onClick={handlePushToSheet} disabled={sheetPushing || importing || sheetPulling} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:text-cyan-200 hover:bg-blue-800/80 rounded-md transition cursor-pointer disabled:opacity-50" data-testid="push-to-sheet-btn"><svg className="w-3.5 h-3.5 text-cyan-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75v6.75m0 0l-3-3m3 3l3-3m-8.25 3a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.75 3.75 0 0118 19.5H6.75z"></path></svg><span>Export Sheet</span></button>
+              </div>
+              <button type="button" onClick={() => setShowSheetSettings(true)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-200 bg-blue-900/60 hover:bg-blue-800 hover:text-white border border-blue-800 rounded-lg transition shadow-sm cursor-pointer" data-testid="sheet-settings-btn"><svg className="w-3.5 h-3.5 text-blue-300 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg><span>Sheet Settings</span></button>
+            </div>
+            <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-900/80 border border-blue-700 text-[11px] text-blue-200 font-medium shadow-sm"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span><span className="text-white font-medium">Cloud Sync Active</span><span className="text-blue-300 font-normal hidden sm:inline">· Last synced {lastPushAt ? new Date(lastPushAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : lastPullAt ? new Date(lastPullAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'just now'}</span></div>
           </div>
         </div>
       </div>

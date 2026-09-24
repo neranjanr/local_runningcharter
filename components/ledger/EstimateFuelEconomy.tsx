@@ -82,9 +82,10 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
         onClick={handleEstimate}
         disabled={!hasData}
         title={hasData ? 'Estimate Fuel Economies per Fuel-In Segment' : 'Need at least one fuel-in to estimate'}
-        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${hasData ? 'bg-slate-surface text-on-primary border-slate-600 hover:bg-primary' : 'bg-paper-gutter text-on-surface-variant border-rule-line cursor-not-allowed'}`}
+        className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border transition shadow-2xs cursor-pointer ${hasData ? 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100' : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'}`}
       >
-        ⚡ Estimate Fuel Economies
+        <svg className={`w-3.5 h-3.5 shrink-0 ${hasData ? 'text-amber-600' : 'text-slate-400'}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"></path></svg>
+        <span>Estimate Fuel Economies</span>
       </button>
       {open && estimates && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
