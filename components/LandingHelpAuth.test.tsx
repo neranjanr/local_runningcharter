@@ -73,7 +73,7 @@ describe('Ticket 6 — Landing, Help, Toast, Header', () => {
     expect(screen.getByTestId('landing-error')).toHaveTextContent('Not authorized — contact admin');
   });
 
-  it('Help Page renders 18 sections when authenticated', async () => {
+  it('Help Page renders 22 sections when authenticated', async () => {
     mockUseAuth.mockReturnValue({
       user: { id: 'u1', email: 'allowed@gmail.com' } as any,
       isSuperAdmin: false,
@@ -90,16 +90,18 @@ describe('Ticket 6 — Landing, Help, Toast, Header', () => {
       setAllowedEmailsState: vi.fn(),
     });
     render(<HelpPage />);
-    // 18 sections — titles appear twice (TOC + body), so use getAllByText
+    // 22 sections — titles appear twice (TOC + body), so use getAllByText
     expect(screen.getAllByText(/1\. Book Opening/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/2\. Reciprocal Calculations/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/3\. Time Estimation/).length).toBeGreaterThanOrEqual(1);
     // Search box and grouped TOC exist
     expect(screen.getByPlaceholderText(/Search help/)).toBeInTheDocument();
     expect(screen.getAllByText(/Core Concepts/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/11\. Gaps — Fill Gap/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/16\. How to Link Google Sheet/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/17\. How to Set Up Mobile/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/18\. Auth Roles/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/19\. Calendar/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('AppShell header Help link (?) visible only after login', async () => {

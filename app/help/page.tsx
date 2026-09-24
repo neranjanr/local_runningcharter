@@ -135,11 +135,11 @@ After save, page end values and fuel balances are recalculated if KM changed.`,
   },
   {
     id: 'gap-ops',
-    title: '11. Gaps — Fill Gap vs Insert After vs Remove & Shift',
+    title: '11. Gaps — Fill Gap vs Insert After vs Remove & Shift vs Reverse Gap Fill',
     group: 'Operations & Gaps',
     content: `KM Gaps surface as RED badges/alerts where Trip N End KM ≠ Trip N+1 Start KM (chronological by date then Start KM) and where Page N End KM ≠ Page N+1 Start KM.
 
-All three operations are in All Trips Master Table only. Ledger is read-only and shows only the bold Private rows.
+All gap operations are in All Trips Master Table only (Continuity Gap banner). Ledger is read-only and shows only the bold Private rows.
 
 Fill Gap (no shift) — when a KM gap exists (e.g., 100-110 → 120-130, gap 110-120):
   • Successor row's Start KM cell shows a "+ Fill Gap 10 km" chip (RED)
@@ -159,7 +159,18 @@ Remove & Shift (shift -Δ) — row menu → "Remove & Shift" (distinct from plai
   • Removes the selected Trip and shifts every later Trip down by Δ = removed.end - removed.start
   • Confirmation shows "Remove Trip — Shift N trips by -Δ km?" with the same before→after preview
   • Page continuity is patched; empty Pages are retained v1 (not collapsed)
-  • All three operations dispatch fleetledger:data-changed so Dashboard auto-refreshes`,
+
+Reverse Gap Fill (bulk backward shift, Δ clamped to total gaps) — Continuity Gap banner → small "↩ Reverse Gap Fill" button (visible only when positive KM gaps exist, disabled when overlaps):
+  • Example: Jan 0→800, Feb 900→1000 gap 100 but physical final reads 920 (recorded 1000). Δ = 1000−920 = 80, gap compresses 100→20 (Feb 900→820→920)
+  • Dialog asks either Physical ODO or Reverse Shift Δ — reciprocal fields synced (Δ = recordedFinal − physicalOdo), Integer KM, both editable
+  • Default fills to fully close gaps: physical = recordedFinal − totalGaps, Δ = totalGaps; "Fill to max" chip restores this
+  • Validates: 0 < Δ ≤ totalPositiveGapExtent; if Δ > total shows "maximum compressible ODO is …" and disables Confirm; if physical > recorded rejects "Add missing trips instead"
+  • Earliest-first sequential absorption: G1→max(0,G1−Δ), spill S=max(0,Δ−G1) to G2…, shifting the tail segment after each gap backward by its consumed share (trip_distance frozen); per-gap Before→After table shows 800→900 (100→20) etc.
+  • Warning banner: "⚠️ Fuel Position & Closing Balances will be recalculated from Book Opening forward"
+  • Optional checkbox "Also update Vehicle ODO" (default on) writes the physical value to Digital Vehicle Cluster
+  • On confirm: Page KM + fuel chain recomputed via recalculatePageBalancesFromOpening, pagination checked (MAX_DAYS rebuildRequired path), atomic fleetledger:data-changed refresh
+
+All four operations dispatch fleetledger:data-changed so Dashboard auto-refreshes`,
   },
   {
     id: 'focused-trip',
@@ -510,7 +521,7 @@ export default function HelpPage() {
         <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-on-surface">Help — Running Chart Guide</h1>
-            <p className="text-sm text-on-surface-variant">21 sections across 6 groups. Search or browse the table of contents.</p>
+            <p className="text-sm text-on-surface-variant">22 sections across 6 groups. Search or browse the table of contents.</p>
           </div>
           <Link href="/" className="text-sm font-medium text-telemetry-cyan hover:underline shrink-0">
             ← Back to Dashboard
@@ -591,7 +602,7 @@ export default function HelpPage() {
             )}
 
             <p className="mt-6 text-xs text-on-surface-variant">
-              Domain glossary: Book, Page, Trip, Vehicle, Book Opening, Fuel Economy/Position/In-Tank/Drawn/Consumed/Closing Balance, Adjusted Fuel Economy, Page-Wide Trip Sequence, Integer KM, Continuity Alert, All Trips Workbook, Ledger Full-Width Stack, Super Admin, TOTP, Recovery Code, Landing, Help Page (searchable), Trip Import with Estimated Start Time auto-fill, Continuity Break, Transposed Side 2, Focused Trip, Sheet Pull Import, Sheet Push (Export to Google Sheet), Push Preview, Sheet Settings (mobile.lastSheetPullAt/mobile.lastSheetPushAt), Import Preview, Sheet Proxy (GET allRows/last10, POST appendTrip/rewriteSheet + LockService), Digital Vehicle Cluster, Fuel Economy Trend, Monthly Distances Tile, Off-Day/Working Day, LeaveDay (manual-only), Leave History, ODO Gap Period/ODO-Continuous Segment, Trips-On-OffDays & No-Trip Working Days Summaries, All Trips Day Type colors (RED/YELLOW/ORANGE/GREEN). Full manuals: <Link href="/docs/manuals/user-setup.md" className="underline">docs/manuals/user-setup.md</Link> + quicktrip-mobile/README.md.
+              Domain glossary: Book, Page, Trip, Vehicle, Book Opening, Fuel Economy/Position/In-Tank/Drawn/Consumed/Closing Balance, Adjusted Fuel Economy, Page-Wide Trip Sequence, Integer KM, Continuity Alert, All Trips Workbook, Ledger Full-Width Stack, Super Admin, TOTP, Recovery Code, Landing, Help Page (searchable), Trip Import with Estimated Start Time auto-fill, Continuity Break, Transposed Side 2, Focused Trip, Gap Fill / Insert After / Remove & Shift / Reverse Gap Fill, Sheet Pull Import, Sheet Push (Export to Google Sheet), Push Preview, Sheet Settings (mobile.lastSheetPullAt/mobile.lastSheetPushAt), Import Preview, Sheet Proxy (GET allRows/last10, POST appendTrip/rewriteSheet + LockService), Digital Vehicle Cluster, Fuel Economy Trend, Monthly Distances Tile, Off-Day/Working Day, LeaveDay (manual-only), Leave History, ODO Gap Period/ODO-Continuous Segment, Trips-On-OffDays & No-Trip Working Days Summaries, All Trips Day Type colors (RED/YELLOW/ORANGE/GREEN). Full manuals: <Link href="/docs/manuals/user-setup.md" className="underline">docs/manuals/user-setup.md</Link> + quicktrip-mobile/README.md.
             </p>
           </div>
         </div>

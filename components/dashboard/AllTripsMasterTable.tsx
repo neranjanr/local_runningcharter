@@ -29,8 +29,9 @@ import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
-import { sortTripsChronologically, shiftForInsert, shiftForRemove } from '@/lib/tripShift';
+import { sortTripsChronologically, shiftForInsert, shiftForRemove, findNextGapAfter, shiftForInsertBounded, type GapInfo, shiftForReverseGapFill, getTotalPositiveGapExtent } from '@/lib/tripShift';
 import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip, MAX_DAYS_PER_PAGE, getDistinctDates } from '@/lib/pagination';
+import { saveVehicleProfile } from '@/lib/vehicleStore';
 import type { Vehicle } from '@/types';
 import { SheetSettingsDialog } from '@/components/SheetSettingsDialog';
 import { getSheetSettings, fetchAllRows, fetchAllWithLeaves, getLastPullAt, setLastPullAt, pushAllWithLeaves, getLastPushAt, setLastPushAt } from '@/lib/sheetClient';
@@ -96,8 +97,15 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [insertTarget, setInsertTarget] = useState<{ anchor: Trip; sortedIdx: number } | null>(null);
   const [insertForm, setInsertForm] = useState<{ date: string; start_km: string; end_km: string; distance: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', start_km: '', end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [insertError, setInsertError] = useState<string | null>(null);
-  const [insertConfirm, setInsertConfirm] = useState<{ delta: number; downstreamCount: number; preview: Array<{ before: Trip; after: Trip }>; newTrip: Trip } | null>(null);
+  const [insertConfirm, setInsertConfirm] = useState<{ delta: number; downstreamCount: number; preview: Array<{ before: Trip; after: Trip }>; newTrip: Trip; gapInfo: GapInfo | null; boundedPreview?: Array<{ before: Trip; after: Trip }>; unboundedPreview?: Array<{ before: Trip; after: Trip }>; boundedSpill?: number; boundedResidual?: number; selectedMode?: 'bounded' | 'unbounded' } | null>(null);
+  const [insertMode, setInsertMode] = useState<'bounded' | 'unbounded'>('bounded');
   const [removeTarget, setRemoveTarget] = useState<{ trip: Trip; sortedIdx: number; delta: number; downstream: Trip[] } | null>(null);
+  // Reverse Gap Fill state
+  const [showReverseDialog, setShowReverseDialog] = useState(false);
+  const [reversePhysInput, setReversePhysInput] = useState('');
+  const [reverseDeltaInput, setReverseDeltaInput] = useState('');
+  const [reverseUpdateVehicle, setReverseUpdateVehicle] = useState(true);
+  const [reverseError, setReverseError] = useState<string | null>(null);
   // Insert After — Speed Slab / Traffic parity with QuickTripForm
   const [insertTrafficMode, setInsertTrafficMode] = useState<'traffic' | 'light'>('traffic');
   const [isInsertTrafficMode, setIsInsertTrafficMode] = useState<boolean>(false);
@@ -217,6 +225,86 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     for (const p of gapPairs) m.set(p.successor.id, p);
     return m;
   }, [gapPairs]);
+
+  // Reverse Gap Fill derived
+  const positiveGapPairs = useMemo(() => gapPairs.filter(g => g.delta > 0), [gapPairs]);
+  const totalPositiveGapExtent = useMemo(() => positiveGapPairs.reduce((s, g) => s + g.delta, 0), [positiveGapPairs]);
+  const hasNegativeOverlap = useMemo(() => gapPairs.some(g => g.delta < 0), [gapPairs]);
+  const recordedFinalOdo = useMemo(() => sortedAll.length > 0 ? roundToIntegerKm(sortedAll[sortedAll.length - 1].end_km) : 0, [sortedAll]);
+
+  const openReverseDialog = useCallback(() => {
+    const defaultPhys = totalPositiveGapExtent > 0 ? String(recordedFinalOdo - totalPositiveGapExtent) : '';
+    const defaultDelta = totalPositiveGapExtent > 0 ? String(totalPositiveGapExtent) : '';
+    setReversePhysInput(defaultPhys);
+    setReverseDeltaInput(defaultDelta);
+    setReverseError(null);
+    setReverseUpdateVehicle(true);
+    setShowReverseDialog(true);
+  }, [recordedFinalOdo, totalPositiveGapExtent]);
+
+  const handleReversePhysChange = (val: string) => {
+    setReversePhysInput(val);
+    const phys = parseInt(val, 10);
+    if (!isNaN(phys) && !isNaN(recordedFinalOdo)) {
+      const d = recordedFinalOdo - phys;
+      setReverseDeltaInput(String(d));
+    } else {
+      setReverseDeltaInput('');
+    }
+    setReverseError(null);
+  };
+  const handleReverseDeltaChange = (val: string) => {
+    setReverseDeltaInput(val);
+    const d = parseInt(val, 10);
+    if (!isNaN(d) && !isNaN(recordedFinalOdo)) {
+      const phys = recordedFinalOdo - d;
+      setReversePhysInput(String(phys));
+    } else {
+      setReversePhysInput('');
+    }
+    setReverseError(null);
+  };
+  const handleFillToMax = () => {
+    const maxPhys = String(recordedFinalOdo - totalPositiveGapExtent);
+    const maxDelta = String(totalPositiveGapExtent);
+    setReversePhysInput(maxPhys);
+    setReverseDeltaInput(maxDelta);
+    setReverseError(null);
+  };
+  const handleReverseConfirm = async () => {
+    const physNum = parseInt(reversePhysInput, 10);
+    const deltaNum = parseInt(reverseDeltaInput, 10);
+    if (isNaN(physNum) || isNaN(deltaNum)) { setReverseError('Enter a valid integer ODO or Δ'); return; }
+    if (physNum <= 0 || physNum >= 1000000) { setReverseError('Physical ODO must be a positive integer'); return; }
+    if (deltaNum <= 0) {
+      if (physNum > recordedFinalOdo) { setReverseError(`Physical ODO ${physNum.toLocaleString()} > recorded final ${recordedFinalOdo.toLocaleString()} — reverse shift only reduces final ODO. Add missing trips instead.`); return; }
+      setReverseError('Δ must be > 0'); return;
+    }
+    if (deltaNum > totalPositiveGapExtent) {
+      setReverseError(`Δ ${deltaNum.toLocaleString()} km exceeds total gaps ${totalPositiveGapExtent.toLocaleString()} km — maximum compressible ODO is ${(recordedFinalOdo - totalPositiveGapExtent).toLocaleString()} (Δ ${totalPositiveGapExtent}). Click Fill to max.`);
+      return;
+    }
+    if (hasNegativeOverlap) { setReverseError('Fix ODO overlaps (negative gaps) before reverse fill.'); return; }
+    const result = shiftForReverseGapFill(sortedAll, physNum);
+    if (result.gaps.length === 0 && deltaNum !== 0) { setReverseError('No gaps to compress'); return; }
+    const recomputed = await recomputePagesForTrips(result.trips);
+    const violations = validatePaginationConstraints(recomputed, result.trips);
+    const maxDaysV = violations.filter(v => v.violation.includes('MAX_DAYS'));
+    const otherV = violations.filter(v => !v.violation.includes('MAX_DAYS'));
+    if (otherV.length > 0) { setReverseError(`Pagination violation: ${otherV.map(v=>v.violation).join('; ')}`); return; }
+    let toastMsg = `Reverse Gap Fill — reversed ${deltaNum.toLocaleString()} km across ${result.gaps.length} gap${result.gaps.length!==1?'s':''} (final ${recordedFinalOdo.toLocaleString()}→${physNum.toLocaleString()}). Fuel chain recalculated.`;
+    if (maxDaysV.length > 0) {
+      try { localStorage.setItem('fleetledger.rebuildRequired','1'); localStorage.setItem('fleetledger.rebuildReason', maxDaysV.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')); window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required')); } catch {}
+      toastMsg += ` — Ledger rebuild required (${maxDaysV.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')})`;
+    }
+    await persistTripsAndPages(result.trips, recomputed, toastMsg);
+    if (reverseUpdateVehicle) {
+      try { await saveVehicleProfile({ current_odometer: physNum } as Partial<Vehicle>); } catch {}
+    }
+    setShowReverseDialog(false);
+    setReverseError(null);
+    notifyDataChanged();
+  };
 
   // Pagination rebuild-required warning (allow 5th/6th date with warning per user req)
   const paginationViolations = useMemo(() => validatePaginationConstraints(pages, trips), [pages, trips]);
@@ -839,11 +927,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     }
     const delta = e - s;
     const downstream = sortedAll.slice(insertTarget.sortedIdx + 1);
-    // Build preview trips for first 3 downstream
-    const preview = downstream.slice(0, 3).map(t => ({
-      before: t,
-      after: { ...t, start_km: roundToIntegerKm(t.start_km + delta), end_km: roundToIntegerKm(t.end_km + delta), trip_distance: roundToIntegerKm(t.trip_distance) },
-    }));
+    const gapInfo = findNextGapAfter(sortedAll, insertTarget.sortedIdx);
     // Build newTrip for confirm (page assignment deferred to confirm)
     const newTripTemp: Trip = {
       id: `trip-preview`,
@@ -862,7 +946,40 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
       fuel_order_no: insertForm.fuel_order_no.trim(),
     };
-    setInsertConfirm({ delta, downstreamCount: downstream.length, preview, newTrip: newTripTemp });
+    if (!gapInfo) {
+      const preview = downstream.slice(0, 3).map(t => ({
+        before: t,
+        after: { ...t, start_km: roundToIntegerKm(t.start_km + delta), end_km: roundToIntegerKm(t.end_km + delta), trip_distance: roundToIntegerKm(t.trip_distance) },
+      }));
+      setInsertConfirm({ delta, downstreamCount: downstream.length, preview, newTrip: newTripTemp, gapInfo: null, selectedMode: 'unbounded' });
+      setInsertMode('unbounded');
+    } else {
+      const G = gapInfo.gapExtent;
+      const S = Math.max(0, delta - G);
+      const residual = Math.max(0, G - delta);
+      // unbounded preview (all downstream shift by delta)
+      const unboundedPreview = downstream.slice(0, 3).map(t => ({
+        before: t,
+        after: { ...t, start_km: roundToIntegerKm(t.start_km + delta), end_km: roundToIntegerKm(t.end_km + delta), trip_distance: roundToIntegerKm(t.trip_distance) },
+      }));
+      // bounded preview: block until gap shifts by delta, remainder by S
+      const block = sortedAll.slice(insertTarget.sortedIdx + 1, gapInfo.gapSuccIdx);
+      const remainder = sortedAll.slice(gapInfo.gapSuccIdx);
+      const shiftedBlock = block.map(t => ({ ...t, start_km: roundToIntegerKm(t.start_km + delta), end_km: roundToIntegerKm(t.end_km + delta) }));
+      const shiftedRemainder = remainder.map(t => ({ ...t, start_km: roundToIntegerKm(t.start_km + S), end_km: roundToIntegerKm(t.end_km + S) }));
+      // Build preview that shows up to 3 downstream with bounded logic (respect original order)
+      const combinedShifted = [...shiftedBlock, ...shiftedRemainder];
+      const boundedPreview = downstream.slice(0, 3).map((t, idx) => ({
+        before: t,
+        after: { ...t, start_km: roundToIntegerKm(combinedShifted[idx]?.start_km ?? t.start_km), end_km: roundToIntegerKm(combinedShifted[idx]?.end_km ?? t.end_km), trip_distance: roundToIntegerKm(t.trip_distance) },
+      }));
+      // default: bounded when delta <= G (no spill), unbounded with warning when spill
+      const defaultMode: 'bounded' | 'unbounded' = delta <= G ? 'bounded' : 'unbounded';
+      // Use boundedPreview as main preview for backwards compat
+      const preview = defaultMode === 'bounded' ? boundedPreview : unboundedPreview;
+      setInsertConfirm({ delta, downstreamCount: downstream.length, preview, boundedPreview, unboundedPreview, newTrip: newTripTemp, gapInfo, boundedSpill: S, boundedResidual: residual, selectedMode: defaultMode });
+      setInsertMode(defaultMode);
+    }
     setInsertError(null);
   };
 
@@ -902,7 +1019,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         fuel_order_no: insertForm.fuel_order_no.trim(),
         created_at: new Date().toISOString(),
       };
-      const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
+      const useBounded = !!(insertConfirm.gapInfo && (insertConfirm.selectedMode === 'bounded' || insertMode === 'bounded'));
+      const result = useBounded
+        ? shiftForInsertBounded(sortedAll, insertTarget.sortedIdx, newTrip)
+        : shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
       let recomputed = await recomputePagesForTrips(result.trips);
       if (!recomputed.find(p=>p.id===newTrip.page_id)) {
         const month = insertForm.date.slice(0,7);
@@ -912,7 +1032,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         const openingFuel = vp ? roundToOneDecimal((vp as unknown as Record<string, unknown>).current_fuel_level as number ?? 10) : 10;
         recomputed = recalculatePageBalancesFromOpening({ pages: recomputed, trips: result.trips, opening: { openingKm, openingFuel } });
       }
-      await persistTripsAndPages(result.trips, recomputed, `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
+      const modeLabel = useBounded ? `gap-absorbed (gap ${insertConfirm.gapInfo!.gapExtent}→${Math.max(0, insertConfirm.gapInfo!.gapExtent - delta)} km)` : `gap-preserved`;
+      await persistTripsAndPages(result.trips, recomputed, `Trip inserted (${modeLabel}) — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`);
       setInsertConfirm(null);
       setInsertTarget(null);
       setInsertError(null);
@@ -939,7 +1060,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       fuel_order_no: insertForm.fuel_order_no.trim(),
       created_at: new Date().toISOString(),
     };
-    const result = shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
+    const useBounded2 = !!(insertConfirm.gapInfo && (insertConfirm.selectedMode === 'bounded' || insertMode === 'bounded'));
+    const result = useBounded2
+      ? shiftForInsertBounded(sortedAll, insertTarget.sortedIdx, newTrip)
+      : shiftForInsert(sortedAll, insertTarget.sortedIdx, newTrip);
     const recomputed = await recomputePagesForTrips(result.trips);
     const violations = validatePaginationConstraints(recomputed, result.trips);
     const maxDaysV = violations.filter(v => v.violation.includes('MAX_DAYS'));
@@ -948,7 +1072,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       setInsertError(`Pagination violation: ${otherV.map(v=>v.violation).join('; ')}`);
       return;
     }
-    let insertMsg = `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`;
+    let insertMsg = useBounded2 && insertConfirm.gapInfo
+      ? `Trip inserted (gap-absorbed ${insertConfirm.gapInfo.gapExtent}→${Math.max(0, insertConfirm.gapInfo.gapExtent - delta)} km) — ${insertConfirm.downstreamCount} downstream, spill ${(insertConfirm.boundedSpill ?? 0)} km beyond gap`
+      : `Trip inserted — ${insertConfirm.downstreamCount} trips shifted by ${delta} km`;
     if (maxDaysV.length > 0) {
       try { localStorage.setItem('fleetledger.rebuildRequired','1'); localStorage.setItem('fleetledger.rebuildReason', maxDaysV.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')); window.dispatchEvent(new CustomEvent('fleetledger:rebuild-required')); } catch {}
       insertMsg += ` — Ledger rebuild is required (${maxDaysV.map(v=>`Page ${v.pageNumber}: ${v.violation}`).join('; ')}). Please rebuild.`;
@@ -1795,6 +1921,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                 <span>Auto-Fill Missing {Math.abs(gapPairs[0].delta).toLocaleString()} KM</span>
               </button>
+              {positiveGapPairs.length > 0 && (
+                <button
+                  data-testid="reverse-gap-fill-btn"
+                  onClick={openReverseDialog}
+                  disabled={hasNegativeOverlap}
+                  title={hasNegativeOverlap ? 'Fix ODO overlaps (negative gaps) before reverse fill' : `Compress ${totalPositiveGapExtent.toLocaleString()} km across ${positiveGapPairs.length} gap${positiveGapPairs.length>1?'s':''} — final ${recordedFinalOdo.toLocaleString()}→${(recordedFinalOdo-totalPositiveGapExtent).toLocaleString()}`}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm transition ${hasNegativeOverlap ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300' : 'bg-slate-800 text-white hover:bg-slate-900'}`}
+                  type="button"
+                >
+                  <span>↩ Reverse Gap Fill</span>
+                  <span className="text-[10px] font-bold bg-white/20 px-1.5 py-0.5 rounded">{totalPositiveGapExtent.toLocaleString()} km</span>
+                </button>
+              )}
               <button onClick={() => { const id=gapPairs[0].successor.id; focusTrip(id, {clearFilter: false}); }} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition shadow-sm" type="button">
                 <span>Jump to Row #{globalSeqMap.get(gapPairs[0].successor.id) ?? '?'}</span>
                 <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5" strokeLinecap="round" strokeLinejoin="round"></path></svg>
@@ -2478,16 +2617,43 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </div>
       )}
 
-      {/* Insert Confirmation Preview */}
+      {/* Insert Confirmation Preview — dual mode when downstream gap exists */}
       {insertConfirm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="insert-confirm-modal">
           <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
             <h3 className="text-sm font-bold text-on-surface mb-2">Insert Trip — Shift {insertConfirm.downstreamCount} trips by {insertConfirm.delta} km?</h3>
-            <p className="text-xs text-on-surface-variant mb-3">This will insert a new trip and shift all later trips chronologically. Fuel chain will be recomputed forward.</p>
+            {!insertConfirm.gapInfo ? (
+              <p className="text-xs text-on-surface-variant mb-3">This will insert a new trip and shift all later trips chronologically. Fuel chain will be recomputed forward.</p>
+            ) : (
+              <p className="text-xs text-on-surface-variant mb-3">Downstream contains a KM gap <span className="font-mono font-bold text-red-700">{insertConfirm.gapInfo.predecessor.end_km}→{insertConfirm.gapInfo.successor.start_km} ({insertConfirm.gapInfo.gapExtent} km vacuum)</span>. Choose how to handle the vacuum — both previews shown below.</p>
+            )}
+            {insertConfirm.gapInfo && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3" data-testid="gap-choice-cards">
+                <label className={`relative flex flex-col gap-2 p-3 rounded-xl border-2 cursor-pointer text-xs ${insertMode === 'bounded' ? 'border-cyan-500 bg-cyan-50' : 'border-rule-line bg-white hover:border-zinc-300'}`} data-testid="choice-bounded">
+                  <div className="flex items-center gap-2">
+                    <input type="radio" name="gapChoice" value="bounded" checked={insertMode === 'bounded'} onChange={() => { setInsertMode('bounded'); setInsertConfirm(prev => prev ? { ...prev, selectedMode: 'bounded', preview: prev.boundedPreview ?? prev.preview } : prev); }} className="accent-cyan-600" />
+                    <span className="font-bold text-on-surface">Fill to Gap (Bounded)</span>
+                    {insertConfirm.delta <= insertConfirm.gapInfo.gapExtent && <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold">Recommended</span>}
+                  </div>
+                  <span className="text-on-surface-variant">Gap {insertConfirm.gapInfo.gapExtent} → {insertConfirm.boundedResidual} km • Spill {insertConfirm.boundedSpill} km beyond gap • {sortedAll.slice(insertTarget!.sortedIdx + 1, insertConfirm.gapInfo.gapSuccIdx).length} trips until gap shift by {insertConfirm.delta} km{insertConfirm.boundedSpill! > 0 ? `, ${insertConfirm.downstreamCount - sortedAll.slice(insertTarget!.sortedIdx + 1, insertConfirm.gapInfo.gapSuccIdx).length} beyond shift by ${insertConfirm.boundedSpill} km` : ', remainder untouched'}</span>
+                  {insertConfirm.boundedSpill! > 0 && <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">⚠️ Trip {insertConfirm.delta} km larger than {insertConfirm.gapInfo.gapExtent} km vacuum — {insertConfirm.boundedSpill} km will spill beyond gap and shift downstream.</span>}
+                  <span className="text-[11px] text-zinc-500">Preview uses bounded shift table below.</span>
+                </label>
+                <label className={`relative flex flex-col gap-2 p-3 rounded-xl border-2 cursor-pointer text-xs ${insertMode === 'unbounded' ? 'border-cyan-500 bg-cyan-50' : 'border-rule-line bg-white hover:border-zinc-300'}`} data-testid="choice-unbounded">
+                  <div className="flex items-center gap-2">
+                    <input type="radio" name="gapChoice" value="unbounded" checked={insertMode === 'unbounded'} onChange={() => { setInsertMode('unbounded'); setInsertConfirm(prev => prev ? { ...prev, selectedMode: 'unbounded', preview: prev.unboundedPreview ?? prev.preview } : prev); }} className="accent-cyan-600" />
+                    <span className="font-bold text-on-surface">Shift All (Preserve Gap)</span>
+                    {insertConfirm.delta > insertConfirm.gapInfo.gapExtent && <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800 font-bold">Needs confirm</span>}
+                  </div>
+                  <span className="text-on-surface-variant">All {insertConfirm.downstreamCount} trips shift by +{insertConfirm.delta} km • Gap {insertConfirm.gapInfo.gapExtent} km preserved/moved intact.</span>
+                  <span className="text-[11px] text-zinc-500">Preview uses full shift table below.</span>
+                </label>
+              </div>
+            )}
             <div className="border border-rule-line rounded-lg overflow-hidden mb-3">
               <table className="w-full text-xs">
                 <thead className="bg-paper-gutter">
-                  <tr><th className="px-2 py-1 text-left">Trip</th><th className="px-2 py-1 text-right">Before</th><th className="px-2 py-1 text-right">After</th></tr>
+                  <tr><th className="px-2 py-1 text-left">Trip</th><th className="px-2 py-1 text-right">Before</th><th className="px-2 py-1 text-right">After {insertConfirm.gapInfo ? `(${insertMode === 'bounded' ? 'bounded' : 'all'})` : ''}</th></tr>
                 </thead>
                 <tbody>
                   {insertConfirm.preview.map((p, i) => (
@@ -2509,7 +2675,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             {insertError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2">{insertError}</div>}
             <div className="flex justify-end gap-2">
               <button onClick={()=>setInsertConfirm(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
-              <button data-testid="confirm-insert-shift" onClick={handleInsertConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-slate-surface rounded-lg hover:bg-primary">Confirm Insert &amp; Shift</button>
+              <button data-testid="confirm-insert-shift" onClick={handleInsertConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-slate-surface rounded-lg hover:bg-primary">Confirm Insert &amp; Shift {insertConfirm.gapInfo ? `(${insertMode === 'bounded' ? 'Fill to Gap' : 'Shift All'})` : ''}</button>
             </div>
           </div>
         </div>
@@ -2547,6 +2713,87 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <div className="flex justify-end gap-2">
               <button onClick={()=>setRemoveTarget(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
               <button data-testid="confirm-remove-shift" onClick={handleRemoveConfirm} className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700">Remove &amp; Shift</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reverse Gap Fill Dialog */}
+      {showReverseDialog && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="reverse-gap-fill-modal" onClick={() => setShowReverseDialog(false)}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-1">↩ Reverse Gap Fill — Reconcile to Physical ODO</h3>
+            <p className="text-xs text-on-surface-variant mb-3">Recorded final <span className="font-mono font-bold">{recordedFinalOdo.toLocaleString()}</span> km · Total positive gaps <span className="font-mono font-bold text-rose-700">{totalPositiveGapExtent.toLocaleString()} km</span> across {positiveGapPairs.length} gap{positiveGapPairs.length!==1?'s':''}. Enter either physical ODO or reverse-shift Δ (reciprocal: <span className="font-mono">Δ = recorded − physical</span>).</p>
+            <div className="bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 mb-3 text-xs text-amber-800">
+              <span className="font-bold">⚠️ Fuel Position & Closing Balances will be recalculated</span> from the Book Opening forward. Trip distances unchanged; Page KM and fuel chain recomputed. {!hasNegativeOverlap && totalPositiveGapExtent>0 ? ` Max compressible ODO is ${(recordedFinalOdo - totalPositiveGapExtent).toLocaleString()} (Δ ${totalPositiveGapExtent}).` : ''}
+            </div>
+            {hasNegativeOverlap && <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-3">Overlaps detected (negative gaps) — fix overlaps before reverse fill.</div>}
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="font-semibold">Physical ODO (km) *</span>
+                <input data-testid="reverse-phys-input" type="number" step="1" value={reversePhysInput} onChange={e=>handleReversePhysChange(e.target.value)} placeholder={`${recordedFinalOdo - totalPositiveGapExtent}`} className="border border-rule-line rounded px-2 py-1.5 font-mono" />
+                <span className="text-[10px] text-zinc-500">Your odometer now — e.g. 920</span>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="font-semibold">Reverse Shift Δ (km) *</span>
+                <input data-testid="reverse-delta-input" type="number" step="1" value={reverseDeltaInput} onChange={e=>handleReverseDeltaChange(e.target.value)} placeholder={`${totalPositiveGapExtent}`} className="border border-rule-line rounded px-2 py-1.5 font-mono" />
+                <span className="text-[10px] text-zinc-500">Δ = {recordedFinalOdo.toLocaleString()} − physical</span>
+              </label>
+            </div>
+            <div className="flex items-center gap-2 mb-3">
+              <button type="button" onClick={handleFillToMax} className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white border border-slate-300 hover:bg-slate-50" data-testid="reverse-fill-max">Fill to max ({totalPositiveGapExtent.toLocaleString()} km → {(recordedFinalOdo - totalPositiveGapExtent).toLocaleString()})</button>
+              {reversePhysInput && reverseDeltaInput && !isNaN(parseInt(reverseDeltaInput,10)) && (
+                <span className="text-xs text-on-surface-variant font-mono">{recordedFinalOdo.toLocaleString()} → {reversePhysInput} (Δ {reverseDeltaInput}) · Residual {(totalPositiveGapExtent - Math.max(0,parseInt(reverseDeltaInput,10))).toLocaleString()} km</span>
+              )}
+            </div>
+            {/* Per-gap preview */}
+            {(() => {
+              const d = parseInt(reverseDeltaInput,10);
+              if (!reverseDeltaInput || isNaN(d) || d<=0 || d>totalPositiveGapExtent) return null;
+              // compute sequential absorption preview without mutating actual trips
+              let remaining = d;
+              const rows: Array<{ g: GapPair; before: number; after: number; consumed: number }> = [];
+              for (const g of positiveGapPairs) {
+                const consumed = Math.min(g.delta, remaining);
+                rows.push({ g, before: g.delta, after: g.delta - consumed, consumed });
+                remaining -= consumed;
+                if (remaining<=0) {
+                  // remaining gaps untouched — push them with 0 consumed to show full table
+                  const idx = positiveGapPairs.indexOf(g);
+                  for (let k=idx+1;k<positiveGapPairs.length;k++) {
+                    const gg = positiveGapPairs[k];
+                    rows.push({ g: gg, before: gg.delta, after: gg.delta, consumed: 0 });
+                  }
+                  break;
+                }
+              }
+              return (
+                <div className="border border-rule-line rounded-lg overflow-hidden mb-3" data-testid="reverse-preview-table">
+                  <table className="w-full text-xs">
+                    <thead className="bg-paper-gutter"><tr><th className="px-2 py-1 text-left">Gap</th><th className="px-2 py-1 text-right">Before</th><th className="px-2 py-1 text-right">After</th><th className="px-2 py-1 text-right">Compressed</th></tr></thead>
+                    <tbody>
+                      {rows.map((r,i)=>(
+                        <tr key={i} className="border-t border-rule-line">
+                          <td className="px-2 py-1 font-mono">{r.g.expected.toLocaleString()}→{r.g.actual.toLocaleString()}</td>
+                          <td className="px-2 py-1 text-right font-mono">{r.before.toLocaleString()} km</td>
+                          <td className="px-2 py-1 text-right font-mono font-bold">{r.after.toLocaleString()} km</td>
+                          <td className="px-2 py-1 text-right font-mono">{r.consumed.toLocaleString()} km</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-zinc-500 px-2 py-1">Earliest-first absorption — Jan gaps compress before Feb, etc.</p>
+                </div>
+              );
+            })()}
+            {reverseError && <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-3" data-testid="reverse-error">{reverseError}</div>}
+            <label className="flex items-center gap-2 text-xs mb-4 cursor-pointer">
+              <input type="checkbox" checked={reverseUpdateVehicle} onChange={e=>setReverseUpdateVehicle(e.target.checked)} data-testid="reverse-update-vehicle" />
+              <span>Also update Vehicle ODO to entered physical value (Digital Cluster visor)</span>
+            </label>
+            <div className="flex justify-end gap-2">
+              <button onClick={()=>setShowReverseDialog(false)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Cancel</button>
+              <button data-testid="confirm-reverse-gap-fill" onClick={handleReverseConfirm} disabled={hasNegativeOverlap || !reversePhysInput || !reverseDeltaInput || isNaN(parseInt(reverseDeltaInput,10)) || parseInt(reverseDeltaInput,10)<=0 || parseInt(reverseDeltaInput,10)>totalPositiveGapExtent} className="px-4 py-2 text-sm font-semibold text-white bg-slate-800 rounded-lg hover:bg-slate-900 disabled:opacity-50">Confirm Reverse Fill</button>
             </div>
           </div>
         </div>

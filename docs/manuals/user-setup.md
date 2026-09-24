@@ -304,9 +304,10 @@ Any one-file transfer works:
 
 - **DAY column (Day Type) — compact:** `w-16 min-w-[56px] max-w-[64px]` narrow, header `DAY` `text-[8px]` (`-2px` from `10px`), badges `text-[9px]` (`-2px` from `11px`) centered (`components/dashboard/AllTripsMasterTable.tsx:1403,1489`). Weekday → no badge (`—` in `text-on-surface-variant`); `Sat`/`Sun` → **RED** `bg-red-100 border-red-300`; `Poya` → **YELLOW** `bg-yellow-100 border-yellow-300` (priority over all); `PH` (Public) → **BLUE** `bg-sky-100`; `MH` (Mercantile) → **AMBER** `bg-amber-100`; `BH` (Bank) → **RED**; `HOL` (other) → **SLATE** `bg-slate-100`; `Leave` → **ORANGE** `bg-orange-100` with dot (`bg-orange-500`). Priority `Leave > Poya > MH > PH > BH > Sat/Sun > Weekday` (`getDayBadge` in `AllTripsMasterTable.tsx:782`, `CONTEXT.md:150`).
 - **Off-day summary bar:** `flex-wrap` chips `Off-day N trips • X km | Working N | Leave | Mercantile | Poya | Open Calendar →` plus RHS `Go to Latest records…` (`go-to-latest-btn`) `ml-auto bg-slate-900 text-white rounded-full` that `scrollIntoView({block:'center'})` to last filtered row (or chronological latest `sortedAll`) with focused `ring-2` flash (`handleGoToLatest` `AllTripsMasterTable.tsx:755`).
-- **⋯ actions column:** `sticky right-0 w-10 min-w-[40px] bg-paper-gutter shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]` stays visible without horizontal-scroll hiding; menu rendered via `createPortal` fixed to `document.body` at `getBoundingClientRect()` + `6px` gap, auto-flips above when `bottom+menuH > vh` (last rows pop up), `z-40`, backdrop `fixed inset-0 z-30` closes on click/scroll/Esc, so `Delete`/`Insert After`/`Remove & Shift`/`Fill Gap` never clip inside `overflow-auto` (`AllTripsMasterTable.tsx:84,1609`).
-- **Private:** `Type` column removed; Private is signaled solely by orange row `bg-orange-200` (RED gap cell wins on Start KM, dark-blue `text-blue-900` layers when fuel pumped). Filter `All Types / Official / Private` still available; set type via Insert After / Gap Fill / Import.
+- **⋯ actions column:** `sticky right-0 w-10 min-w-[40px] bg-paper-gutter shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]` stays visible without horizontal-scroll hiding; menu rendered via `createPortal` fixed to `document.body` at `getBoundingClientRect()` + `6px` gap, auto-flips above when `bottom+menuH > vh` (last rows pop up), `z-40`, backdrop `fixed inset-0 z-30` closes on click/scroll/Esc, so `Delete`/`Insert After`/`Remove & Shift`/`Fill Gap`/`Reverse Gap Fill` never clip inside `overflow-auto` (`AllTripsMasterTable.tsx:84,1609`).
+- **Private:** `Type` column removed; Private is signaled solely by orange row `bg-orange-200` (RED gap cell wins on Start KM, dark-blue `text-blue-900` layers when fuel pumped). Filter `All Types / Official / Private` still available; set type via Insert After / Gap Fill / Reverse Gap Fill / Import.
 - **Route width:** Reduced 22% → 6% narrow (`w-[6%]` −20% from 8%, Route text `text-xs`, `⋯` fixed `w-10 min-w-[40px]` fully visible, table `min-w-[1020px]` on mobile) so desktop `w-full lg:min-w-0 lg:overflow-x-hidden` shows all columns (Pumped/Order No/Pos./In-Tank/Econ/Balance/Page/⋯) with only vertical scroll.
+- **Reverse Gap Fill (continuity banner):** Small `↩ Reverse Gap Fill` button appears inside the **Continuity Gap Detected** banner when positive KM gaps exist (disabled when overlaps `extent<0`). Example Jan `0→800`, Feb `900→1000` gap 100 with physical final `920` → Δ `1000−920=80`, gap shrinks `100→20` (Feb squeezed to `820→920`). Dialog shows two synced integer fields **Physical ODO** and **Δ (`Δ=recorded−physical`)** with live preview `G before→after` earliest-first, max-compressible hint `recorded−totalGaps`, and `⚠️ Fuel Position & Closing Balances will be recalculated` warning; confirm recomputes Pages via `recalculatePageBalancesFromOpening` and optionally updates `Vehicle.current_odometer` (checkbox, Digital Cluster visor).
 
 ---
 
@@ -325,7 +326,7 @@ Any one-file transfer works:
 
 **When NOT to press it:**
 
-- To fix a KM Gap (RED) — use Fill Gap / Insert After / Remove & Shift instead
+- To fix a KM Gap (RED) — use Fill Gap / Insert After / Remove & Shift / Reverse Gap Fill instead
 - Repeatedly during normal entry — it is a forward-recalc, not a normalization
 
 ### "Rebuild Ledger" (Hard Recalculation from Book Opening)
@@ -340,7 +341,7 @@ Any one-file transfer works:
 
 **When NOT to press it:**
 
-- To fix a KM Gap (RED) — use Fill Gap / Insert After / Remove & Shift
+- To fix a KM Gap (RED) — use Fill Gap / Insert After / Remove & Shift / Reverse Gap Fill
 - Repeatedly during normal entry — economy overrides intentionally survive it
 
 ---

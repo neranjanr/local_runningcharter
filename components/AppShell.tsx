@@ -126,7 +126,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 aria-label="Help"
                 data-testid="header-help-link"
                 className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-surface text-on-primary font-bold text-sm border border-slate-600 hover:bg-primary"
-                title="Help — 21 sections"
+                title="Help — 22 sections"
               >
                 ?
               </Link>
