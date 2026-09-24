@@ -1574,8 +1574,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               </a>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 sm:px-3.5 bg-blue-950 border border-blue-900 rounded-xl shadow-sm text-xs">
-            <div className="flex items-center flex-wrap gap-2.5">
+          <div className="flex flex-nowrap items-center gap-3 p-2.5 sm:px-3.5 bg-blue-950 border border-blue-900 rounded-xl shadow-sm text-xs overflow-x-auto no-scrollbar whitespace-nowrap" style={{scrollbarWidth:'none', msOverflowStyle:'none'}}>
+            <div className="flex items-center gap-2.5 shrink-0 whitespace-nowrap">
               <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-blue-200 mr-1"><svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"></path></svg><span>Sync &amp; Integrations:</span></div>
               <div className="inline-flex items-center rounded-lg border border-blue-800/80 bg-blue-900/60 p-0.5 shadow-sm">
                 <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing || sheetPulling || sheetPushing} className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-400 hover:text-emerald-300 hover:bg-blue-800/80 rounded-md transition cursor-pointer disabled:opacity-50"><svg className="w-3.5 h-3.5 text-emerald-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"></path></svg><span>Import Excel</span></button>
