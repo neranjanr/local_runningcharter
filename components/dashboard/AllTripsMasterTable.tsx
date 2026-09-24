@@ -152,6 +152,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [startAuditRows, setStartAuditRows] = useState<AuditRow[]>([]);
   const [selectedStartIds, setSelectedStartIds] = useState<Set<string>>(new Set());
   const [auditFixing, setAuditFixing] = useState(false);
+  const [auditFilter, setAuditFilter] = useState<'All' | AuditReason>('All');
 
   // Sheet Push state
   const [sheetPushing, setSheetPushing] = useState(false);
@@ -390,6 +391,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const rows = computeAuditRows();
     setStartAuditRows(rows);
     setSelectedStartIds(new Set(rows.filter(r=>r.estimated).map(r=>r.trip.id)));
+    setAuditFilter('All');
     setShowStartAudit(true);
   }, [computeAuditRows]);
   const handleFixSelectedStarts = useCallback(async () => {
@@ -1587,7 +1589,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               </div>
               <button type="button" onClick={() => setShowSheetSettings(true)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-200 bg-blue-900/60 hover:bg-blue-800 hover:text-white border border-blue-800 rounded-lg transition shadow-sm cursor-pointer" data-testid="sheet-settings-btn"><svg className="w-3.5 h-3.5 text-blue-300 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg><span>Sheet Settings</span></button>
             </div>
-            <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-900/80 border border-blue-700 text-[11px] text-blue-200 font-medium shadow-sm"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span><span className="text-white font-medium">Cloud Sync Active</span><span className="text-blue-300 font-normal hidden sm:inline">· Last synced {lastPushAt ? new Date(lastPushAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : lastPullAt ? new Date(lastPullAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'just now'}</span></div>
+            <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-900/80 border border-blue-700 text-[11px] text-blue-200 font-medium shadow-sm shrink-0 whitespace-nowrap"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span><span className="text-white font-medium whitespace-nowrap">Cloud Sync Active</span><span className="text-blue-300 font-normal hidden sm:inline whitespace-nowrap">· Last synced {lastPushAt ? new Date(lastPushAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : lastPullAt ? new Date(lastPullAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'just now'}</span></div>
           </div>
         </div>
       </div>
@@ -2544,23 +2546,65 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-4xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
             <h3 className="text-sm font-bold text-on-surface mb-1">Verify Start Times — Audit (Traffic)</h3>
             <p className="text-xs text-on-surface-variant mb-2">Scanned {trips.length} trips • Found {startAuditRows.length} anomalies via Traffic slabs (End − Distance/speed ceil 5 min). Check to fix Start → Estimated.</p>
-            <div className="flex flex-wrap gap-1 mb-3 text-[11px]">
-              <span className="px-2 py-1 rounded-full bg-sky-100 border border-sky-300">Empty {startAuditRows.filter(r=>r.reason==='Empty').length}</span>
-              <span className="px-2 py-1 rounded-full bg-red-100 border border-red-300">Equal {startAuditRows.filter(r=>r.reason==='Equal').length}</span>
-              <span className="px-2 py-1 rounded-full bg-red-100 border border-red-300">Inverted {startAuditRows.filter(r=>r.reason==='Inverted').length}</span>
-              <span className="px-2 py-1 rounded-full bg-amber-100 border border-amber-300">Short {startAuditRows.filter(r=>r.reason==='Short').length}</span>
-              <span className="ml-auto text-on-surface-variant">Est via Traffic slabs</span>
+            <div className="flex flex-wrap gap-1.5 mb-3 text-[11px] items-center">
+              {(() => {
+                const Pill = ({ reason, label, cls }: { reason: AuditReason, label: string, cls: string }) => {
+                  const count = startAuditRows.filter(r=>r.reason===reason).length;
+                  const active = auditFilter === reason;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setAuditFilter(active ? 'All' : reason)}
+                      className={`px-2.5 py-1 rounded-full border font-semibold transition cursor-pointer flex items-center gap-1 ${cls} ${active ? 'ring-2 ring-slate-800 ring-offset-1' : 'hover:brightness-95'} ${count===0 ? 'opacity-50' : ''}`}
+                      title={active ? 'Click to show All' : `Filter to ${label} only`}
+                      data-testid={`audit-pill-${reason}`}
+                    >
+                      <span>{label}</span>
+                      <span className="bg-white/70 px-1 py-0 rounded text-[10px] font-bold">{count}</span>
+                      {active && <span className="ml-1 text-[10px]">✕</span>}
+                    </button>
+                  );
+                };
+                return (
+                  <>
+                    <Pill reason="Empty" label="Empty" cls="bg-sky-100 border-sky-300 text-sky-800" />
+                    <Pill reason="Equal" label="Same" cls="bg-red-100 border-red-300 text-red-800" />
+                    <Pill reason="Inverted" label="Inverted" cls="bg-red-100 border-red-300 text-red-800" />
+                    <Pill reason="Short" label="Short" cls="bg-amber-100 border-amber-300 text-amber-800" />
+                    {auditFilter !== 'All' && (
+                      <button type="button" onClick={() => setAuditFilter('All')} className="ml-1 px-2 py-1 rounded-full bg-slate-800 text-white text-[11px] font-semibold hover:bg-slate-900">Show All ({startAuditRows.length}) ✕</button>
+                    )}
+                    <span className="ml-auto text-on-surface-variant text-[11px] hidden sm:inline">
+                      {auditFilter==='All' ? `Est via Traffic slabs • ${startAuditRows.length} total` : `Filtered: ${startAuditRows.filter(r=>r.reason===auditFilter).length} ${auditFilter==='Equal' ? 'Same' : auditFilter} • click pill again to clear`}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
-            {startAuditRows.length===0 ? (
-              <div className="text-center py-8 text-sm text-on-surface-variant border border-dashed rounded-lg">No anomalies — all Start times consistent with Traffic estimate and End.</div>
-            ) : (
+            {(() => {
+              const displayAuditRows = auditFilter==='All' ? startAuditRows : startAuditRows.filter(r=>r.reason===auditFilter);
+              const hasFiltered = displayAuditRows.length===0 && startAuditRows.length>0;
+              if (startAuditRows.length===0) {
+                return <div className="text-center py-8 text-sm text-on-surface-variant border border-dashed rounded-lg">No anomalies — all Start times consistent with Traffic estimate and End.</div>;
+              }
+              if (hasFiltered) {
+                return <div className="text-center py-8 text-sm text-on-surface-variant border border-dashed rounded-lg">No {auditFilter==='Equal' ? 'Same' : auditFilter} anomalies — click pill again or Show All to clear filter. ({startAuditRows.length} total anomalies hidden)</div>;
+              }
+              return (
               <div className="border border-rule-line rounded-lg overflow-auto max-h-[52vh]">
                 <table className="w-full text-xs">
                   <thead className="bg-paper-gutter sticky top-0">
                     <tr>
-                      <th className="px-1 py-1"><input type="checkbox" checked={startAuditRows.filter(r=>r.estimated).length>0 && selectedStartIds.size===startAuditRows.filter(r=>r.estimated).length} onChange={e=>{
-                        if(e.target.checked) setSelectedStartIds(new Set(startAuditRows.filter(r=>r.estimated).map(r=>r.trip.id)));
-                        else setSelectedStartIds(new Set());
+                      <th className="px-1 py-1"><input type="checkbox" checked={displayAuditRows.filter(r=>r.estimated).length>0 && displayAuditRows.every(r=>!r.estimated || selectedStartIds.has(r.trip.id))} onChange={e=>{
+                        if(e.target.checked) {
+                          const ns=new Set(selectedStartIds);
+                          displayAuditRows.filter(r=>r.estimated).forEach(r=>ns.add(r.trip.id));
+                          setSelectedStartIds(ns);
+                        } else {
+                          const ns=new Set(selectedStartIds);
+                          displayAuditRows.forEach(r=>ns.delete(r.trip.id));
+                          setSelectedStartIds(ns);
+                        }
                       }} data-testid="audit-select-all" /></th>
                       <th className="px-1 py-1 text-left">#</th>
                       <th className="px-1 py-1 text-left">Date</th>
@@ -2573,11 +2617,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     </tr>
                   </thead>
                   <tbody>
-                    {startAuditRows.map((row, i)=>{
+                    {displayAuditRows.map((row, i)=>{
                       const t=row.trip;
                       const checked=selectedStartIds.has(t.id);
                       const disabled=!row.estimated;
                       const reasonCls = row.reason==='Empty' ? 'bg-sky-100 border-sky-300 text-sky-800' : row.reason==='Equal' || row.reason==='Inverted' ? 'bg-red-100 border-red-300 text-red-800' : 'bg-amber-100 border-amber-300 text-amber-800';
+                      const displayReason = row.reason==='Equal' ? 'Same' : row.reason;
                       return (
                         <tr key={t.id} className="border-t border-rule-line" data-testid={`audit-row-${i}`}>
                           <td className="px-1 py-1 text-center"><input type="checkbox" disabled={disabled} checked={checked} onChange={e=>{
@@ -2586,7 +2631,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                           <td className="px-1 py-1 font-mono">{String((globalSeqMap.get(t.id) ?? i+1)).padStart(2,'0')}</td>
                           <td className="px-1 py-1 whitespace-nowrap">{t.date}</td>
                           <td className="px-1 py-1 font-mono text-right">{Math.round(t.start_km)}→{Math.round(t.end_km)} ({Math.round(t.trip_distance)})</td>
-                          <td className="px-1 py-1"><span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-bold ${reasonCls}`}>{row.reason}</span></td>
+                          <td className="px-1 py-1"><span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-bold ${reasonCls}`}>{displayReason}</span></td>
                           <td className="px-1 py-1 font-mono">{t.start_time || '—'}</td>
                           <td className="px-1 py-1 font-mono">{t.end_time || '—'}</td>
                           <td className="px-1 py-1 font-mono font-bold">{row.estimated ?? '—'}</td>
@@ -2597,7 +2642,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   </tbody>
                 </table>
               </div>
-            )}
+              );
+            })()}
             <div className="flex flex-wrap gap-2 mt-3">
               <button onClick={()=>{
                 const by=(r:AuditReason)=> startAuditRows.filter(x=>x.reason===r && x.estimated).map(x=>x.trip.id);
