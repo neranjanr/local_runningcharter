@@ -556,7 +556,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   }, [startAuditRows, selectedStartIds, preserveTableScroll, notifyDataChanged, focusTrip]);
 
   const SortIcon = ({ col }: { col: SortColumn }) => {
-    if (sortColumn !== col) return <span className="text-rule-line-strong ml-1">↕</span>;
+    if (sortColumn !== col) return <span className="text-slate-400 ml-1">↕</span>;
     return <span className="ml-1 text-telemetry-cyan">{sortDirection === 'asc' ? '↑' : '↓'}</span>;
   };
 
@@ -2040,7 +2040,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         <div ref={tableContainerRef} className={`overflow-x-auto overflow-y-auto ${compact ? 'max-h-[420px]' : 'max-h-[640px] min-h-[280px]'} relative`} style={{ scrollbarWidth: 'thin' }}>
           <table className="w-full text-left border-collapse text-xs table-sticky-header">
             <thead>
-              <tr className="bg-slate-100 text-slate-700 border-b border-slate-200 uppercase font-semibold text-[11px] tracking-wider select-none sticky top-0 z-20 shadow-sm">
+              <tr className="bg-slate-900 text-white border-b border-slate-800 uppercase font-semibold text-[11px] tracking-wider select-none sticky top-0 z-20 shadow-sm">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
               <th className="py-2.5 px-2 border-r border-rule-line w-40">
                 <button onClick={() => handleSort('date')} className="flex items-center hover:text-on-surface">
@@ -2077,7 +2077,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Econ</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Balance</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Page</th>
-              <th className="py-2.5 px-1 w-10 min-w-[40px] text-center bg-paper-gutter sticky right-0 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">⋯</th>
+              <th className="py-2.5 px-1 w-10 min-w-[40px] text-center bg-slate-900 sticky right-0 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">⋯</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-rule-line font-body-sm text-sm text-on-surface">
