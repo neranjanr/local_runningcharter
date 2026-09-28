@@ -196,6 +196,9 @@ export function estimateFuelEconomies(params: { trips: Trip[]; pages: BookPage[]
     const srcTrip = sortedTrips[seg.sourceIdx];
     const isFullTank = seg.isFullTank;
     const pumpTiming = seg.pumpTiming;
+    if (isFullTank) {
+      runningPos = tankCapacity;
+    }
     const lockedSet = params.lockedDatesSet;
     const lockedMap = params.lockedEconomyMap;
     if (lockedSet && lockedMap) {
