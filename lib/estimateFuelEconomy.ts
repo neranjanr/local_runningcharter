@@ -37,6 +37,8 @@ export interface SegmentEstimate {
   feasibleMaxStrict: number | null;
   warning?: string;
   warningStrict?: string;
+  /** Longest single Trip in the segment (Integer KM) — long runs usually give better economy. */
+  maxTripDistance: number;
 }
 
 interface PassSegment {
@@ -58,6 +60,7 @@ interface PassSegment {
   nextIsFull: boolean;
   startPos: number;
   trips: Trip[];
+  maxTripDistance: number;
 }
 
 export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<string, number> }): FuelInSegmentInput[] {
@@ -266,12 +269,13 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const nextPumpAmount = seg.nextSrcIdx !== undefined ? roundToOneDecimal(sortedTrips[seg.nextSrcIdx].fuel_pumped_amount ?? 0) : 0;
     const nextPumpIncluded = seg.nextSrcIdx !== undefined && !isStartMigrated(sortedTrips[seg.nextSrcIdx]);
     const isFullToFull = isFullTank && nextIsFull;
+    const maxTripDistance = segmentTrips.reduce((m, t) => Math.max(m, roundToIntegerKm(t.trip_distance)), 0);
 
     const push = (suggested: number, feasible: boolean, feasibleMin: number | null, feasibleMax: number | null, warning?: string) => {
       results.push({
         fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date,
         isFullTank, pumpTiming, prevEconomy: prev, suggested, feasible, feasibleMin, feasibleMax, warning,
-        isFullToFull, nextIsFull, startPos, trips: segmentTrips,
+        isFullToFull, nextIsFull, startPos, trips: segmentTrips, maxTripDistance,
       });
     };
 
@@ -488,6 +492,7 @@ export function estimateFuelEconomies(params: {
       feasibleMaxStrict: s.feasibleMax,
       warning: n.warning,
       warningStrict: s.warning,
+      maxTripDistance: n.maxTripDistance,
     };
   });
 }

@@ -203,6 +203,9 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                 <p className="text-xs text-on-surface-variant">
                   Two suggestions per segment: <span className="font-semibold text-sky-700">Normal</span> keeps balances in [1, {effTank.toFixed(1)}]L (closest to previous economy, small steps); <span className="font-semibold text-emerald-700">Strict Full-Tank</span> also balances the tank near full ([{strictMin.toFixed(1)}, {effTank.toFixed(1)}]L) after a ★ Full Tank pump. Pick either column and Apply.
                 </p>
+                <p className="text-[11px] text-on-surface-variant mt-0.5">
+                  Distance badges: <span className="inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[9px] font-bold">&gt;40</span> segment has a trip over 40 km, <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[9px] font-bold">≥100</span> has a trip 100 km or longer — long runs usually give better economy.
+                </p>
               </div>
               <button onClick={() => setOpen(false)} className="text-on-surface-variant hover:text-on-surface text-lg leading-none shrink-0">✕</button>
             </div>
@@ -250,7 +253,16 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                         <td className="py-2 px-2 text-center">
                           <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold ${e.pumpTiming==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={e.pumpTiming==='START' ? 'Fueled at Start (distance charged to next economy, fuel before consume)' : 'Fueled at End (distance charged to previous economy)'}>{e.pumpTiming}</span>
                         </td>
-                        <td className="py-2 px-2 text-right font-mono text-xs">{e.distance} KM</td>
+                        <td className="py-2 px-2 text-right font-mono text-xs">
+                          <span className="inline-flex items-center justify-end gap-1 w-full">
+                            <span>{e.distance} KM</span>
+                            {e.maxTripDistance >= 100
+                              ? <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title={`Contains a trip ≥100 km (longest ${e.maxTripDistance} km) — long runs usually show better economy`}>≥100</span>
+                              : e.maxTripDistance > 40
+                                ? <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[8px] font-bold tracking-widest leading-none" title={`Contains a trip >40 km (longest ${e.maxTripDistance} km)`}>&gt;40</span>
+                                : null}
+                          </span>
+                        </td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.fuelFed.toFixed(1)} L</td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.prevEconomy !== null ? e.prevEconomy.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700">{e.suggested.toFixed(1)}</td>

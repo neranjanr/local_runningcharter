@@ -165,4 +165,18 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     expect(seg0.feasible).toBe(false);
     expect(seg0.warning ?? '').toContain('capped');
   });
+
+  it('reports the longest trip per segment for large-distance badges', () => {
+    const trips: Trip[] = [
+      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 30, trip_distance: 30, fuel_pumped_amount: 40, trip_index: 1 }),
+      trip({ id: 't2', date: '2024-02-25', start_km: 30, end_km: 80, trip_distance: 50, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-03-11', start_km: 80, end_km: 230, trip_distance: 150, fuel_pumped_amount: 35, trip_index: 3 }),
+      trip({ id: 't4', date: '2024-03-20', start_km: 230, end_km: 260, trip_distance: 30, trip_index: 4 }),
+    ];
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    // Segment 0 (20-02 -> 11-03) includes the 50 km and 150 km trips.
+    expect(est[0].maxTripDistance).toBe(150);
+    // Segment 1 (11-03 -> end) includes only the 30 km trip.
+    expect(est[1].maxTripDistance).toBe(30);
+  });
 });
