@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { BookPage, Trip, Vehicle } from '@/types';
 import { estimateFuelEconomies, type SegmentEstimate } from '@/lib/estimateFuelEconomy';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
@@ -12,6 +12,8 @@ function formatDdMmYyyy(iso: string): string {
   return `${d}-${m}-${y}`;
 }
 
+type ApplyMode = 'normal' | 'strict';
+
 interface Props {
   trips: Trip[];
   pages: BookPage[];
@@ -22,17 +24,11 @@ interface Props {
 export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props) {
   const [open, setOpen] = useState(false);
   const [estimates, setEstimates] = useState<SegmentEstimate[] | null>(null);
-  const [strict, setStrict] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [lockedDates, setLockedDatesState] = useState<Set<string>>(new Set());
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
   const effTank = vehicle?.tank_capacity ?? 75;
   const strictMin = Math.max(1, effTank - 3);
-
-  useEffect(() => {
-    if (open) {
-      try { setLockedDatesState(getLockedDates()); } catch {}
-    }
-  }, [open, trips, pages]);
 
   const buildLockedMap = () => {
     const map = new Map<string, number>();
@@ -48,22 +44,18 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     return map;
   };
 
-  const runEstimate = (useStrict: boolean) => {
+  const runEstimate = () => {
     const lockedSet = (() => { try { return getLockedDates(); } catch { return new Set<string>(); } })();
     const lockedMap = buildLockedMap();
-    const est = estimateFuelEconomies({ trips, pages, vehicle, tankCapacityOverride: effTank, strictFullTank: useStrict, lockedDatesSet: lockedSet, lockedEconomyMap: lockedMap });
+    const est = estimateFuelEconomies({ trips, pages, vehicle, tankCapacityOverride: effTank, lockedDatesSet: lockedSet, lockedEconomyMap: lockedMap });
     setEstimates(est);
   };
 
   const handleEstimate = () => {
-    runEstimate(strict);
+    try { setLockedDatesState(getLockedDates()); } catch {}
+    runEstimate();
+    setApplyMsg(null);
     setOpen(true);
-  };
-
-  const toggleStrict = () => {
-    const next = !strict;
-    setStrict(next);
-    runEstimate(next);
   };
 
   const isSegmentLocked = (seg: SegmentEstimate) => {
@@ -72,20 +64,58 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     return segDates.length > 0 && segDates.every(d => lockedDates.has(d));
   };
 
-  const handleApply = (idx: number) => {
+  const applySegment = (seg: SegmentEstimate, mode: ApplyMode) => {
+    const val = mode === 'strict' ? seg.suggestedStrict : seg.suggested;
+    const allSortedDates = Array.from(new Set(trips.map(t => t.date))).sort();
+    const targetDates = allSortedDates.filter(d => d >= seg.fromDate && d <= seg.toDate);
+    const pageForDate = new Map<string, string>();
+    for (const d of targetDates) {
+      const t = trips.find(x => x.date === d);
+      if (t) pageForDate.set(d, t.page_id);
+    }
+    const byPage = new Map<string, string[]>();
+    for (const d of targetDates) {
+      const pid = pageForDate.get(d);
+      if (!pid) continue;
+      if (!byPage.has(pid)) byPage.set(pid, []);
+      byPage.get(pid)!.push(d);
+    }
+    let wrote = 0;
+    for (const [pageId, dates] of byPage) {
+      const pageTrips = trips.filter(t => t.page_id === pageId);
+      const distinct = getDistinctDates(pageTrips);
+      const arr = getFuelEconomiesForPage(pageId);
+      while (arr.length < distinct.length) arr.push(null);
+      for (const d of dates) {
+        const dayIdx = distinct.indexOf(d);
+        if (dayIdx >= 0) { arr[dayIdx] = val; wrote++; }
+      }
+      saveFuelEconomiesForPage(pageId, arr);
+    }
+    return { val, wrote };
+  };
+
+  const handleApply = (idx: number, mode: ApplyMode) => {
     if (!estimates) return;
     const seg = estimates[idx];
     if (isSegmentLocked(seg)) return;
-    applySegment(seg);
+    const { val, wrote } = applySegment(seg, mode);
+    setApplyMsg(`Applied ${val.toFixed(1)} km/L (${mode === 'strict' ? 'Strict Full-Tank' : 'Normal'}) to ${formatDdMmYyyy(seg.fromDate)} → ${formatDdMmYyyy(seg.toDate)} (${wrote} day${wrote === 1 ? '' : 's'})`);
     onApplied?.();
-    runEstimate(strict);
+    runEstimate();
   };
 
-  const handleApplyAll = () => {
+  const handleApplyAll = (mode: ApplyMode) => {
     if (!estimates) return;
-    for (const seg of estimates) if (!isSegmentLocked(seg)) applySegment(seg);
+    let count = 0;
+    for (const seg of estimates) {
+      if (isSegmentLocked(seg)) continue;
+      applySegment(seg, mode);
+      count++;
+    }
+    setApplyMsg(`Applied ${mode === 'strict' ? 'Strict Full-Tank' : 'Normal'} economies to ${count} segment${count === 1 ? '' : 's'}`);
     onApplied?.();
-    runEstimate(strict);
+    runEstimate();
   };
 
   const handleLockSelected = () => {
@@ -100,7 +130,7 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     if (toLock.length === 0) return;
     setLocksForDateRange(trips, Array.from(new Set(toLock)), true);
     setLockedDatesState(getLockedDates());
-    runEstimate(strict);
+    runEstimate();
     onApplied?.();
   };
 
@@ -116,7 +146,7 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     if (toUnlock.length === 0) return;
     setLocksForDateRange(trips, Array.from(new Set(toUnlock)), false);
     setLockedDatesState(getLockedDates());
-    runEstimate(strict);
+    runEstimate();
     onApplied?.();
   };
 
@@ -130,37 +160,6 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     if (!estimates) return;
     if (selected.size === estimates.length) setSelected(new Set());
     else setSelected(new Set(estimates.map((_, i) => i)));
-  };
-
-  const applySegment = (seg: SegmentEstimate) => {
-    // Find all dates in segment
-    const allSortedDates = Array.from(new Set(trips.map(t => t.date))).sort();
-    const targetDates = allSortedDates.filter(d => d >= seg.fromDate && d <= seg.toDate);
-    // Group by pageId
-    const pageForDate = new Map<string, string>();
-    for (const d of targetDates) {
-      const t = trips.find(x => x.date === d);
-      if (t) pageForDate.set(d, t.page_id);
-    }
-    // For each page, map dates to dayIndex then write economy
-    const byPage = new Map<string, string[]>(); // pageId -> dates
-    for (const d of targetDates) {
-      const pid = pageForDate.get(d);
-      if (!pid) continue;
-      if (!byPage.has(pid)) byPage.set(pid, []);
-      byPage.get(pid)!.push(d);
-    }
-    for (const [pageId, dates] of byPage) {
-      const pageTrips = trips.filter(t => t.page_id === pageId);
-      const distinct = getDistinctDates(pageTrips);
-      const arr = getFuelEconomiesForPage(pageId);
-      while (arr.length < distinct.length) arr.push(null);
-      for (const d of dates) {
-        const dayIdx = distinct.indexOf(d); // 0-based
-        if (dayIdx >= 0) arr[dayIdx] = seg.suggested;
-      }
-      saveFuelEconomiesForPage(pageId, arr);
-    }
   };
 
   const hasData = trips.some(t => (t.fuel_pumped_amount ?? 0) > 0);
@@ -183,23 +182,16 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
               <div className="flex-1">
                 <h3 className="text-sm font-bold text-on-surface">Estimated Fuel Economies — per Fuel-In Segment</h3>
                 <p className="text-xs text-on-surface-variant">
-                  {strict ? (
-                    <>Strict Full-Tank ON — Full Tank segments constrained to [{strictMin.toFixed(1)}, {effTank.toFixed(1)}]L after pump (tankCap−3→cap), others [1, {effTank.toFixed(1)}]L. <span className="font-semibold text-emerald-700">★ Full</span> = source pump flagged Full Tank.</>
-                  ) : (
-                    <>One economy per fuel-in section (1-dec km/L). Keeps balance in [1, {effTank.toFixed(1)}]L, closest to previous economy (7.5–8 typical). Apply writes Adjusted economies.</>
-                  )}
+                  Two suggestions per segment: <span className="font-semibold text-sky-700">Normal</span> keeps balances in [1, {effTank.toFixed(1)}]L (closest to previous economy, small steps); <span className="font-semibold text-emerald-700">Strict Full-Tank</span> also balances the tank near full ([{strictMin.toFixed(1)}, {effTank.toFixed(1)}]L) after a ★ Full Tank pump. Pick either column and Apply.
                 </p>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <label className="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer select-none">
-                  <input type="checkbox" checked={strict} onChange={toggleStrict} className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" data-testid="strict-full-tank-toggle" />
-                  <span className={strict ? 'text-emerald-700' : 'text-slate-600'}>Strict Full-Tank</span>
-                </label>
-                <button onClick={() => setOpen(false)} className="text-on-surface-variant hover:text-on-surface">✕</button>
-              </div>
+              <button onClick={() => setOpen(false)} className="text-on-surface-variant hover:text-on-surface text-lg leading-none shrink-0">✕</button>
             </div>
-            {strict && estimates && !estimates.some(e=>e.isFullTank) && (
-              <div className="mx-4 mt-3 p-2 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded">No Full Tank marks in ledger — strict has no effect (using lenient [1, {effTank.toFixed(1)}]L). Mark pumped trips as ★ Full Tank via All Trips right-click.</div>
+            {estimates && !estimates.some(e => e.isFullTank) && (
+              <div className="mx-4 mt-3 p-2 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded">No ★ Full Tank marks in ledger — Strict equals Normal (both use [1, {effTank.toFixed(1)}]L). Mark pumped trips as ★ Full Tank via All Trips right-click to enable strict balancing.</div>
+            )}
+            {applyMsg && (
+              <div className="mx-4 mt-3 p-2 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded font-medium" data-testid="estimate-apply-msg">{applyMsg}</div>
             )}
             <div className="overflow-auto flex-1 p-3">
               {estimates.length === 0 ? (
@@ -216,15 +208,18 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                       <th className="py-2 px-2 text-right border-r border-rule-line">Distance</th>
                       <th className="py-2 px-2 text-right border-r border-rule-line">Fuel Fed</th>
                       <th className="py-2 px-2 text-right border-r border-rule-line">Prev</th>
-                      <th className="py-2 px-2 text-right border-r border-rule-line">Suggested</th>
+                      <th className="py-2 px-2 text-right border-r border-rule-line" title="Normal: balances in [1, cap], closest to previous economy">Normal</th>
+                      <th className="py-2 px-2 text-center border-r border-rule-line">Apply Normal</th>
+                      <th className="py-2 px-2 text-right border-r border-rule-line" title="Strict Full-Tank: post-pump balance near tankCapacity">Strict ★</th>
+                      <th className="py-2 px-2 text-center border-r border-rule-line">Apply Strict</th>
                       <th className="py-2 px-2 border-r border-rule-line">Lock</th>
                       <th className="py-2 px-2 border-r border-rule-line">Note</th>
-                      <th className="py-2 px-2">Apply</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-rule-line text-sm">
                     {estimates.map((e, idx) => {
                       const locked = isSegmentLocked(e);
+                      const sameSuggestion = Math.abs(e.suggested - e.suggestedStrict) < 0.05;
                       return (
                       <tr key={e.fromDate} className={locked ? 'bg-slate-100 opacity-80' : e.feasible ? 'bg-white' : 'bg-amber-50'}>
                         <td className="py-2 px-2 text-center"><input type="checkbox" checked={selected.has(idx)} onChange={()=>toggleSelect(idx)} /></td>
@@ -239,13 +234,17 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.distance} KM</td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.fuelFed.toFixed(1)} L</td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.prevEconomy !== null ? e.prevEconomy.toFixed(1) : '—'}</td>
-                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-primary">{e.suggested.toFixed(1)} km/L</td>
-                        <td className="py-2 px-2 text-center">{locked ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-800 text-white text-[10px] font-bold">🔒 Locked</span> : <span className="text-on-surface-variant text-xs">—</span>}</td>
-                        <td className="py-2 px-2 text-xs max-w-[220px] truncate" title={e.warning ?? ''}>
-                          {e.warning ? <span className="text-amber-700 font-semibold">{e.warning}</span> : e.feasible ? <span className="text-on-surface-variant">feasible [{e.feasibleMin?.toFixed(1)}–{e.feasibleMax?.toFixed(1)}]</span> : '—'}
+                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700">{e.suggested.toFixed(1)}</td>
+                        <td className="py-2 px-2 text-center">
+                          <button onClick={() => handleApply(idx, 'normal')} disabled={locked} className={`px-2 py-1 rounded text-xs font-semibold ${locked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`} data-testid={`apply-normal-${idx}`}>Apply</button>
                         </td>
-                        <td className="py-2 px-2">
-                          <button onClick={() => handleApply(idx)} disabled={locked} className={`px-2 py-1 rounded text-xs font-semibold ${locked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-telemetry-cyan text-white hover:bg-telemetry-cyan/90'}`}>Apply</button>
+                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`}>{e.suggestedStrict.toFixed(1)}</td>
+                        <td className="py-2 px-2 text-center">
+                          <button onClick={() => handleApply(idx, 'strict')} disabled={locked} className={`px-2 py-1 rounded text-xs font-semibold ${locked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`} data-testid={`apply-strict-${idx}`}>Apply</button>
+                        </td>
+                        <td className="py-2 px-2 text-center">{locked ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-800 text-white text-[10px] font-bold">🔒</span> : <span className="text-on-surface-variant text-xs">—</span>}</td>
+                        <td className="py-2 px-2 text-xs max-w-[260px] truncate" title={[e.warning, e.warningStrict].filter(Boolean).join(' | ')}>
+                          {e.warning ? <span className="text-amber-700 font-semibold">{e.warning}</span> : e.warningStrict ? <span className="text-emerald-700 font-semibold">{e.warningStrict}</span> : e.feasible ? <span className="text-on-surface-variant">feasible [{e.feasibleMin?.toFixed(1)}–{e.feasibleMax?.toFixed(1)}]</span> : '—'}
                         </td>
                       </tr>
                     );})}
@@ -265,7 +264,8 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                 <span className="text-xs text-on-surface-variant">Select segments to lock/unlock after writing to book. Next estimation will anchor to last locked balance.</span>
                 <div className="flex gap-2">
                   <button onClick={() => setOpen(false)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg">Close</button>
-                  <button onClick={handleApplyAll} disabled={estimates.length === 0} className="px-4 py-2 text-sm font-semibold text-on-primary bg-slate-surface rounded-lg hover:bg-primary disabled:opacity-50">Apply All Unlocked</button>
+                  <button onClick={() => handleApplyAll('normal')} disabled={estimates.length === 0} className="px-4 py-2 text-sm font-semibold text-white bg-sky-600 rounded-lg hover:bg-sky-700 disabled:opacity-50" data-testid="apply-all-normal">Apply All Normal</button>
+                  <button onClick={() => handleApplyAll('strict')} disabled={estimates.length === 0} className="px-4 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50" data-testid="apply-all-strict">Apply All Strict</button>
                 </div>
               </div>
             </div>
