@@ -13,6 +13,7 @@ import {
 import { computeGlobalSeq, computeLedgerDays, computeLedgerSummary, computeTripFuelMap } from '@/lib/ledgerCalculations';
 import { detectTripGaps, detectPageGaps, detectDayGroupFuelGaps } from '@/lib/continuityAlerts';
 import { updateTrip, deleteTrip, type TripUpdateFields } from '@/lib/tripStore';
+import { getLockedDates } from '@/lib/fuelEconomyLockStore';
 import {
   generateAllTripsBuffer,
   getAllTripsFileName,
@@ -95,7 +96,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [gapFillForm, setGapFillForm] = useState<{ date: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [gapFillError, setGapFillError] = useState<string | null>(null);
   const [insertTarget, setInsertTarget] = useState<{ anchor: Trip; sortedIdx: number } | null>(null);
-  const [insertForm, setInsertForm] = useState<{ date: string; start_km: string; end_km: string; distance: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', start_km: '', end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+  const [insertForm, setInsertForm] = useState<{ date: string; start_km: string; end_km: string; distance: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string; is_full_tank: boolean; pump_timing: 'START' | 'END' }>({ date: '', start_km: '', end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '', is_full_tank: false, pump_timing: 'END' });
   const [insertError, setInsertError] = useState<string | null>(null);
   const [insertConfirm, setInsertConfirm] = useState<{ delta: number; downstreamCount: number; preview: Array<{ before: Trip; after: Trip }>; newTrip: Trip; gapInfo: GapInfo | null; boundedPreview?: Array<{ before: Trip; after: Trip }>; unboundedPreview?: Array<{ before: Trip; after: Trip }>; boundedSpill?: number; boundedResidual?: number; selectedMode?: 'bounded' | 'unbounded' } | null>(null);
   const [insertMode, setInsertMode] = useState<'bounded' | 'unbounded'>('bounded');
@@ -581,6 +582,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         return;
       }
       const dayTrips = trips.filter(t => t.page_id === trip.page_id && t.date === trip.date);
+      // Guard locked economies: block edit when date locked
+      try { if ((field === 'fuel_economy' || field === 'in_tank') && getLockedDates().has(trip.date)) { setImportMsg(`Cannot edit ${field} on ${trip.date} — locked (unlock in Fuel Economy estimation popup)`); cancelEdit(); return; } } catch {}
       const dayIndex = dayTrips.length > 0 ? Math.min(...dayTrips.map(d => d.day_index)) : trip.day_index;
       const pageId = trip.page_id;
       if (field === 'fuel_economy') {
@@ -900,7 +903,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const openInsert = (trip: Trip) => {
     const idx = sortedIdToIndex.get(trip.id) ?? -1;
     setInsertTarget({ anchor: trip, sortedIdx: idx });
-    setInsertForm({ date: trip.date, start_km: String(roundToIntegerKm(trip.end_km)), end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
+    setInsertForm({ date: trip.date, start_km: String(roundToIntegerKm(trip.end_km)), end_km: '', distance: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '', is_full_tank: false, pump_timing: 'END' });
     setInsertError(null);
     setOpenMenuId(null);
   };
@@ -929,6 +932,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const downstream = sortedAll.slice(insertTarget.sortedIdx + 1);
     const gapInfo = findNextGapAfter(sortedAll, insertTarget.sortedIdx);
     // Build newTrip for confirm (page assignment deferred to confirm)
+    const pumpedPreview = parseFloat(insertForm.fuel_pumped_amount) || 0;
     const newTripTemp: Trip = {
       id: `trip-preview`,
       vehicle_id: 'veh-1',
@@ -943,8 +947,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       trip_distance: roundToIntegerKm(e - s),
       trip_type: insertForm.trip_type,
       places_visited: insertForm.places_visited.trim(),
-      fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
+      fuel_pumped_amount: pumpedPreview,
       fuel_order_no: insertForm.fuel_order_no.trim(),
+      is_full_tank: pumpedPreview > 0 ? insertForm.is_full_tank : false,
+      pump_timing: pumpedPreview > 0 ? insertForm.pump_timing : 'END',
     };
     if (!gapInfo) {
       const preview = downstream.slice(0, 3).map(t => ({
@@ -1001,6 +1007,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       const isBlocked = 'allowed' in assignment && (assignment as any).allowed === false;
       const targetPageId = isBlocked ? `page-${nextNumber}` : (assignment as any).pageId;
       const targetPageNumber = isBlocked ? nextNumber : (assignment as any).pageNumber;
+      const pumpedForInsert = parseFloat(insertForm.fuel_pumped_amount) || 0;
       const newTrip: Trip = {
         id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         vehicle_id: vehicleId,
@@ -1015,8 +1022,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         trip_distance: roundToIntegerKm(e - s),
         trip_type: insertForm.trip_type,
         places_visited: insertForm.places_visited.trim(),
-        fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
+        fuel_pumped_amount: pumpedForInsert,
         fuel_order_no: insertForm.fuel_order_no.trim(),
+        is_full_tank: pumpedForInsert > 0 ? insertForm.is_full_tank : false,
+        pump_timing: pumpedForInsert > 0 ? insertForm.pump_timing : 'END',
         created_at: new Date().toISOString(),
       };
       const useBounded = !!(insertConfirm.gapInfo && (insertConfirm.selectedMode === 'bounded' || insertMode === 'bounded'));
@@ -1042,6 +1051,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       return;
     }
     const assign = assignment as { pageId: string; dayIndex: number; tripIndex: number };
+    const pumpedForInsert2 = parseFloat(insertForm.fuel_pumped_amount) || 0;
     const newTrip: Trip = {
       id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       vehicle_id: vehicleId,
@@ -1056,8 +1066,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       trip_distance: roundToIntegerKm(e - s),
       trip_type: insertForm.trip_type,
       places_visited: insertForm.places_visited.trim(),
-      fuel_pumped_amount: parseFloat(insertForm.fuel_pumped_amount) || 0,
+      fuel_pumped_amount: pumpedForInsert2,
       fuel_order_no: insertForm.fuel_order_no.trim(),
+      is_full_tank: pumpedForInsert2 > 0 ? insertForm.is_full_tank : false,
+      pump_timing: pumpedForInsert2 > 0 ? insertForm.pump_timing : 'END',
       created_at: new Date().toISOString(),
     };
     const useBounded2 = !!(insertConfirm.gapInfo && (insertConfirm.selectedMode === 'bounded' || insertMode === 'bounded'));
@@ -1164,6 +1176,30 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setRowContextMenu(null);
     setConfirmToggle(trip);
   }, []);
+
+  const handleToggleFullTank = useCallback(async (trip: Trip) => {
+    setRowContextMenu(null);
+    const newVal = !trip.is_full_tank;
+    if (newVal && !(trip.fuel_pumped_amount ?? 0)) return;
+    preserveTableScroll();
+    await updateTrip(trip.id, { is_full_tank: newVal });
+    setFocusedTripId(trip.id);
+    setTimeout(() => setFocusedTripId(null), 2200);
+    notifyDataChanged();
+    setImportMsg(`Trip on ${trip.date} ${newVal ? 'marked as Full Tank' : 'unmarked Full Tank'}`);
+  }, [preserveTableScroll, notifyDataChanged]);
+
+  const handleTogglePumpTiming = useCallback(async (trip: Trip) => {
+    setRowContextMenu(null);
+    if (!(trip.fuel_pumped_amount ?? 0)) return;
+    const newVal = (trip.pump_timing ?? 'END') === 'END' ? 'START' : 'END';
+    preserveTableScroll();
+    await updateTrip(trip.id, { pump_timing: newVal });
+    setFocusedTripId(trip.id);
+    setTimeout(() => setFocusedTripId(null), 2200);
+    notifyDataChanged();
+    setImportMsg(`Trip on ${trip.date} pump timing → ${newVal}`);
+  }, [preserveTableScroll, notifyDataChanged]);
 
   const doToggleTripType = useCallback(async () => {
     if (!confirmToggle) return;
@@ -2116,7 +2152,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-center font-mono text-xs text-outline border-r border-rule-line">
                     <span className="inline-flex items-center justify-center gap-0.5">
                       <span>{String(globalSeqMap.get(t.id) ?? '-').padStart(2, '0')}</span>
-                      {(t.fuel_pumped_amount ?? 0) > 0 && <span title={`Fuel pumped ${t.fuel_pumped_amount?.toFixed(1)} L`} className="text-[11px] leading-none">⛽</span>}
+                      {(t.fuel_pumped_amount ?? 0) > 0 && <span title={`Fuel pumped ${t.fuel_pumped_amount?.toFixed(1)} L${t.is_full_tank ? ' — Full Tank' : ''}`} className="text-[11px] leading-none">{t.is_full_tank ? '⛽★' : '⛽'}</span>}
                     </span>
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap border-r border-rule-line">
@@ -2203,7 +2239,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     </span>
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '-', 'right')}
+                    <span className="inline-flex items-center justify-end gap-1 w-full">
+                      {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '-', 'right')}
+                      {t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
+                      {(t.fuel_pumped_amount ?? 0) > 0 && <span className={`shrink-0 inline-flex items-center px-1 py-0.5 rounded border text-[8px] font-bold tracking-widest leading-none ${ (t.pump_timing ?? 'END')==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={`Fueled at ${t.pump_timing ?? 'END'} — ${ (t.pump_timing ?? 'END')==='START' && t.trip_distance>20 ? 'distance charged to next economy' : 'distance charged to previous economy'}`}>{(t.pump_timing ?? 'END')==='START' ? 'START' : 'END'}</span>}
+                    </span>
                   </td>
                   <td className="py-2 px-1 text-xs font-mono text-on-surface-variant border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_order_no', t.fuel_order_no || '-')}
@@ -2271,8 +2311,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           {(() => {
             const tripForMenu = filtered.find(x => x.id === openMenuId) ?? sortedAll.find(x => x.id === openMenuId);
             const gapForMenu = predecessorGapMap.get(openMenuId) ?? null;
+            const hasPumpedForMenu = (tripForMenu?.fuel_pumped_amount ?? 0) > 0;
             const menuW = 192;
-            const menuH = gapForMenu ? 160 : 132;
+            const menuH = gapForMenu ? (hasPumpedForMenu ? 224 : 160) : (hasPumpedForMenu ? 196 : 132);
             const gap = 6;
             const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
             const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -2313,6 +2354,24 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 >
                   Remove &amp; Shift
                 </button>
+                {hasPumpedForMenu && (
+                  <button
+                    data-testid={`toggle-full-tank-menu-${openMenuId}`}
+                    onClick={async () => { if (!tripForMenu) { closeMenu(); return; } const newVal = !tripForMenu.is_full_tank; closeMenu(); preserveTableScroll(); await updateTrip(tripForMenu.id, { is_full_tank: newVal }); setFocusedTripId(tripForMenu.id); setTimeout(()=>setFocusedTripId(null),2200); notifyDataChanged(); setImportMsg(`Trip on ${tripForMenu.date} ${newVal ? 'marked as Full Tank' : 'unmarked Full Tank'}`); }}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter flex items-center gap-1.5 ${tripForMenu?.is_full_tank ? 'text-amber-700' : 'text-emerald-700'}`}
+                  >
+                    <span>{tripForMenu?.is_full_tank ? '★' : '☆'}</span> {tripForMenu?.is_full_tank ? 'Unmark Full Tank' : 'Mark as Full Tank'}
+                  </button>
+                )}
+                {hasPumpedForMenu && (
+                  <button
+                    data-testid={`toggle-pump-timing-menu-${openMenuId}`}
+                    onClick={async () => { if (!tripForMenu) { closeMenu(); return; } const newVal = (tripForMenu.pump_timing ?? 'END') === 'END' ? 'START' : 'END'; closeMenu(); preserveTableScroll(); await updateTrip(tripForMenu.id, { pump_timing: newVal }); setFocusedTripId(tripForMenu.id); setTimeout(()=>setFocusedTripId(null),2200); notifyDataChanged(); setImportMsg(`Trip on ${tripForMenu.date} pump timing → ${newVal}`); }}
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter flex items-center gap-1.5 text-sky-700"
+                  >
+                    <span>{(tripForMenu?.pump_timing ?? 'END') === 'START' ? '◀' : '▶'}</span> Fueled at {(tripForMenu?.pump_timing ?? 'END') === 'START' ? 'Start' : 'End'} → {(tripForMenu?.pump_timing ?? 'END') === 'START' ? 'End' : 'Start'}
+                  </button>
+                )}
                 <button
                   data-testid={`delete-menu-${openMenuId}`}
                   onClick={() => { const id = openMenuId; closeMenu(); setConfirmDelete(id); }}
@@ -2327,7 +2386,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         document.body
       )}
 
-      {/* Row right-click: Private/Official toggle */}
+      {/* Row right-click: Private/Official toggle + Full Tank toggle */}
       {rowContextMenu && typeof document !== 'undefined' && createPortal(
         <>
           <div className="fixed inset-0 z-30" onClick={closeRowMenu} aria-hidden />
@@ -2336,8 +2395,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             if (!trip) return null;
             const isPrivate = trip.trip_type === 'Private';
             const label = isPrivate ? 'Mark as Official Trip' : 'Mark as Private Trip';
-            const menuW = 200;
-            const menuH = 36;
+            const hasPumped = (trip.fuel_pumped_amount ?? 0) > 0;
+            const isFull = !!trip.is_full_tank;
+            const isStart = (trip.pump_timing ?? 'END') === 'START';
+            const menuW = 220;
+            const menuH = hasPumped ? 116 : 36;
             const gap = 4;
             const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
             const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -2350,7 +2412,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             return (
               <div
                 data-testid={`row-context-menu-${rowContextMenu.tripId}`}
-                className="fixed z-40 bg-paper-sheet border border-rule-line rounded-lg shadow-xl py-1 w-52 text-left"
+                className="fixed z-40 bg-paper-sheet border border-rule-line rounded-lg shadow-xl py-1 w-56 text-left"
                 style={{ top, left }}
                 onClick={e => e.stopPropagation()}
               >
@@ -2362,6 +2424,26 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <span className={`w-2 h-2 rounded-full ${isPrivate ? 'bg-slate-700' : 'bg-orange-500'}`} />
                   {label}
                 </button>
+                {hasPumped && (
+                  <button
+                    data-testid={`toggle-full-tank-${rowContextMenu.tripId}`}
+                    onClick={() => handleToggleFullTank(trip)}
+                    className={`w-full text-left px-3 py-2 text-xs font-semibold hover:bg-paper-gutter flex items-center gap-2 ${isFull ? 'text-amber-700' : 'text-emerald-700'}`}
+                  >
+                    <span className="text-[11px]">{isFull ? '★' : '☆'}</span>
+                    {isFull ? 'Unmark Full Tank' : 'Mark as Full Tank'}
+                  </button>
+                )}
+                {hasPumped && (
+                  <button
+                    data-testid={`toggle-pump-timing-${rowContextMenu.tripId}`}
+                    onClick={() => handleTogglePumpTiming(trip)}
+                    className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-paper-gutter flex items-center gap-2 text-sky-700"
+                  >
+                    <span className="text-[11px]">{isStart ? '◀' : '▶'}</span>
+                    Fueled at {isStart ? 'Start' : 'End'} → {isStart ? 'End' : 'Start'}
+                  </button>
+                )}
               </div>
             );
           })()}
@@ -2592,10 +2674,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <label className="flex flex-col gap-1">Fuel Pumped
-                <input type="number" step="0.1" value={insertForm.fuel_pumped_amount} onChange={e=>setInsertForm({...insertForm, fuel_pumped_amount:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+                <input type="number" step="0.1" value={insertForm.fuel_pumped_amount} onChange={e=>{ const v=e.target.value; setInsertForm(prev=>({ ...prev, fuel_pumped_amount:v, ...(parseFloat(v)<=0||!v?{is_full_tank:false, pump_timing:'END'}:{}) })); }} className="border border-rule-line rounded px-2 py-1" data-testid="insert-fuel-pumped" />
+                <label className={`mt-1 inline-flex items-center gap-1.5 text-xs font-semibold select-none ${(!insertForm.fuel_pumped_amount||parseFloat(insertForm.fuel_pumped_amount)<=0)?'opacity-50 cursor-not-allowed':'cursor-pointer text-slate-700'}`}>
+                  <input type="checkbox" checked={insertForm.is_full_tank} disabled={!insertForm.fuel_pumped_amount||parseFloat(insertForm.fuel_pumped_amount)<=0} onChange={e=>setInsertForm(prev=>({ ...prev, is_full_tank:e.target.checked }))} className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" data-testid="insert-full-tank" />
+                  <span>★ Full tank</span>
+                </label>
+                <div className={`mt-1 flex items-center gap-2 ${(!insertForm.fuel_pumped_amount||parseFloat(insertForm.fuel_pumped_amount)<=0)?'opacity-50 pointer-events-none':''}`}>
+                  <span className="text-xs font-semibold text-slate-700">Fueled at:</span>
+                  <label className="inline-flex items-center gap-1 text-xs cursor-pointer"><input type="radio" name="insert-pump-timing" value="END" checked={insertForm.pump_timing==='END'} disabled={!insertForm.fuel_pumped_amount||parseFloat(insertForm.fuel_pumped_amount)<=0} onChange={()=>setInsertForm(prev=>({ ...prev, pump_timing:'END' }))} className="w-3.5 h-3.5 text-brand-600" data-testid="insert-pump-timing-end" /><span>End</span></label>
+                  <label className="inline-flex items-center gap-1 text-xs cursor-pointer"><input type="radio" name="insert-pump-timing" value="START" checked={insertForm.pump_timing==='START'} disabled={!insertForm.fuel_pumped_amount||parseFloat(insertForm.fuel_pumped_amount)<=0} onChange={()=>setInsertForm(prev=>({ ...prev, pump_timing:'START' }))} className="w-3.5 h-3.5 text-brand-600" data-testid="insert-pump-timing-start" /><span>Start</span></label>
+                </div>
               </label>
               <label className="flex flex-col gap-1">Fuel Order No
-                <input value={insertForm.fuel_order_no} onChange={e=>setInsertForm({...insertForm, fuel_order_no:e.target.value})} className="border border-rule-line rounded px-2 py-1" />
+                <input value={insertForm.fuel_order_no} onChange={e=>setInsertForm({...insertForm, fuel_order_no:e.target.value})} className="border border-rule-line rounded px-2 py-1" data-testid="insert-fuel-order" />
               </label>
               <div className="col-span-2 flex flex-col gap-1">
                 <div className="flex items-center justify-between gap-2">

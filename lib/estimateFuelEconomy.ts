@@ -1,21 +1,17 @@
 /**
  * Estimated Fuel Economy per Fuel-In Segment
  * Feasibility-first estimator: keeps balance in [1, tankCapacity] at every intermediate Day Group.
- * See docs/adr/0011-estimated-fuel-economy-per-fuel-in-segment.md
+ * Pump Timing migration, physics-first Full->Full, small-variation lenient, safe margins.
  */
 import { roundToOneDecimal, roundToIntegerKm } from './tripCalculations';
-import { computeLedgerDays } from './ledgerCalculations';
 import type { BookPage, Trip, Vehicle } from '@/types';
-import { getDistinctDates } from './pagination';
-
 export interface FuelInSegmentInput {
-  fromDate: string; // YYYY-MM-DD
-  toDate: string; // inclusive end of segment (day before next fuel-in, or last date)
-  distance: number; // Integer KM summed
-  fuelFed: number; // 1-dec L pumped on fromDate
+  fromDate: string;
+  toDate: string;
+  distance: number;
+  fuelFed: number;
   orderNo: string;
 }
-
 export interface SegmentEstimate {
   fromDate: string;
   toDate: string;
@@ -23,19 +19,16 @@ export interface SegmentEstimate {
   fuelFed: number;
   orderNo: string;
   orderDate: string;
+  isFullTank: boolean;
+  pumpTiming: 'START' | 'END';
   prevEconomy: number | null;
-  suggested: number; // 1-dec
+  suggested: number;
   feasible: boolean;
   feasibleMin: number | null;
   feasibleMax: number | null;
   warning?: string;
 }
-
-/**
- * Derive per-date aggregated distance and fuel fed, ordered chronologically.
- */
 function buildDateAggregates(params: { trips: Trip[]; pages: BookPage[] }): Map<string, { distance: number; drawn: number; orderNo: string; inTank: number; positionSeed?: number }> {
-  // We use chronological order of dates from trips
   const allDates = Array.from(new Set(params.trips.map(t => t.date))).sort();
   const map = new Map<string, { distance: number; drawn: number; orderNo: string; inTank: number }>();
   for (const d of allDates) {
@@ -47,100 +40,26 @@ function buildDateAggregates(params: { trips: Trip[]; pages: BookPage[] }): Map<
   }
   return map;
 }
-
-/**
- * Compute feasibility interval for a segment given start position and per-day distances/inTanks.
- * Balance after k days: B_k = pos + sumInTank_{≤k} + drawn0 - sumDist_{≤k}/E
- * Require 1 ≤ B_k ≤ tankCap for all k
- * Solve for E: sumDist / (pos+sumInTank+drawn - bound) bounds
- */
-function feasibleIntervalForSegment(params: {
-  pos: number;
-  drawn: number;
-  perDay: { dist: number; inTank: number }[];
-  tankCapacity: number;
-  minFuel: number;
-}): { min: number | null; max: number | null; feasible: boolean; warning?: string } {
+function feasibleIntervalForSegment(params: { pos: number; drawn: number; perDay: { dist: number; inTank: number }[]; tankCapacity: number; minFuel: number; }): { min: number | null; max: number | null; feasible: boolean; warning?: string } {
   const { pos, drawn, perDay, tankCapacity, minFuel } = params;
-  // Dist ==0 -> interval is whole range
   const totalDist = perDay.reduce((s, d) => s + d.dist, 0);
   if (totalDist === 0) return { min: 0.1, max: 50, feasible: true };
-
-  // For each prefix, derive allowed E range
-  // B_k = A_k - sumDist_k / E where A_k = pos + inTankPrefix + drawn
-  // 1 ≤ A_k - sum/E ≤ cap  =>  A_k - cap ≤ sum/E ≤ A_k -1
-  // => sum/(A_k -1) ≤ E ≤ sum/(A_k - cap)  careful with denominators signs
-  // Denominators may be ≤0 making one side infeasible (no upper bound or no lower bound)
-  let globalMin = 0.1;
-  let globalMax = 50;
-  let hasConstraint = false;
-
-  let sumDist = 0;
-  let sumInTank = 0;
+  let globalMin = 0.1; let globalMax = 50; let hasConstraint = false; let sumDist = 0; let sumInTank = 0;
   for (const day of perDay) {
-    sumDist += day.dist;
-    sumInTank += day.inTank;
+    sumDist += day.dist; sumInTank += day.inTank;
     const A = pos + sumInTank + drawn;
-    // Upper bound from lower fuel limit: sum/E ≤ A -1 => E ≥ sum / (A-1) if A>1
-    // Lower bound from upper tank limit: sum/E ≥ A - cap => E ≤ sum / (A - cap) if A>cap
-    const denomLow = A - minFuel; // for E lower bound
-    const denomHigh = A - tankCapacity; // for E upper bound
-
-    // If A - minFuel <=0, then sum/E ≤ non-positive impossible since sum>0, E>0 => no solution for this prefix -> infeasible
-    if (denomLow <= 0) {
-      // Even infinite E gives B_k = A < = minFuel, always below min -> infeasible interval
-      return { min: null, max: null, feasible: false, warning: `Infeasible: start fuel ${A.toFixed(1)}L ≤ min ${minFuel}L` };
-    }
+    const denomLow = A - minFuel; const denomHigh = A - tankCapacity;
+    if (denomLow <= 0) return { min: null, max: null, feasible: false, warning: `Infeasible: start fuel ${A.toFixed(1)}L ≤ min ${minFuel}L` };
     const eMinForPrefix = sumDist / denomLow;
     if (eMinForPrefix > globalMin) globalMin = eMinForPrefix;
-
-    if (denomHigh > 0) {
-      const eMaxForPrefix = sumDist / denomHigh;
-      if (eMaxForPrefix < globalMax) globalMax = eMaxForPrefix;
-    } else {
-      // A ≤ cap => A - cap ≤0 => sum/E ≥ negative always true => no upper bound from this prefix
-    }
+    if (denomHigh > 0) { const eMaxForPrefix = sumDist / denomHigh; if (eMaxForPrefix < globalMax) globalMax = eMaxForPrefix; }
     hasConstraint = true;
   }
-
   if (!hasConstraint) return { min: 0.1, max: 50, feasible: true };
-  // Clamp to 0.1-50
-  globalMin = Math.max(0.1, globalMin);
-  globalMax = Math.min(50, globalMax);
-  if (globalMin > globalMax + 1e-9) {
-    return { min: null, max: null, feasible: false };
-  }
+  globalMin = Math.max(0.1, globalMin); globalMax = Math.min(50, globalMax);
+  if (globalMin > globalMax + 1e-9) return { min: null, max: null, feasible: false };
   return { min: globalMin, max: globalMax, feasible: true };
 }
-
-function snapToOneDecimalFeasible(prev: number, intervalMin: number, intervalMax: number): number {
-  // Candidate = clamp(prev, min, max) then snap to nearest 0.1 inside interval
-  const clamped = Math.min(intervalMax, Math.max(intervalMin, prev));
-  let candidate = roundToOneDecimal(clamped);
-  // If rounding pushes outside, nudge
-  if (candidate < intervalMin - 1e-9) candidate = Math.ceil(intervalMin * 10) / 10;
-  if (candidate > intervalMax + 1e-9) candidate = Math.floor(intervalMax * 10) / 10;
-  // Final clamp 0.1-50
-  candidate = Math.min(50, Math.max(0.1, roundToOneDecimal(candidate)));
-  // If still outside because of ceil/floor edge, ensure at least min
-  if (candidate < intervalMin) candidate = Math.ceil(intervalMin * 10) / 10;
-  if (candidate > intervalMax) candidate = Math.floor(intervalMax * 10) / 10;
-  return roundToOneDecimal(candidate);
-}
-
-function nearestFeasibleBoundary(prev: number, min: number | null, max: number | null): number {
-  // When interval empty, pick nearest boundary to prev (among min/max boundaries extrapolated)
-  // Actually we have no interval; we treat both infeasible, pick value that minimizes violation via brute 0.1 search on violation metric
-  // Simplified: search 0.1..50 for minimal max violation
-  // For now, pick closest to prev within 0.1..50 but flagged
-  // Caller will brute search for minimal violation instead; placeholder
-  return roundToOneDecimal(Math.min(50, Math.max(0.1, prev)));
-}
-
-/**
- * Build Fuel-In segments ordered by date.
- * Aggregates per-date; a fuel-in date is where aggregated drawn>0.
- */
 export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<string, number> }): FuelInSegmentInput[] {
   const { trips } = params;
   const dateMap = new Map<string, { distance: number; drawn: number; orderNo: string }>();
@@ -148,23 +67,16 @@ export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<str
     const rec = dateMap.get(t.date) ?? { distance: 0, drawn: 0, orderNo: '' };
     rec.distance += roundToIntegerKm(t.trip_distance);
     rec.drawn += roundToOneDecimal(t.fuel_pumped_amount ?? 0);
-    if (t.fuel_order_no?.trim()) {
-      rec.orderNo = rec.orderNo ? `${rec.orderNo}, ${t.fuel_order_no.trim()}` : t.fuel_order_no.trim();
-    }
+    if (t.fuel_order_no?.trim()) rec.orderNo = rec.orderNo ? `${rec.orderNo}, ${t.fuel_order_no.trim()}` : t.fuel_order_no.trim();
     dateMap.set(t.date, rec);
   }
   const sortedDates = Array.from(dateMap.keys()).sort();
-  // Normalize distances/drawn rounding post-sum
-  for (const [k, v] of dateMap) {
-    v.distance = roundToIntegerKm(v.distance);
-    v.drawn = roundToOneDecimal(v.drawn);
-  }
+  for (const [k, v] of dateMap) { v.distance = roundToIntegerKm(v.distance); v.drawn = roundToOneDecimal(v.drawn); }
   const fuelInDates = sortedDates.filter(d => (dateMap.get(d)?.drawn ?? 0) > 0);
   if (fuelInDates.length === 0) return [];
   const segments: FuelInSegmentInput[] = [];
   for (let i = 0; i < fuelInDates.length; i++) {
-    const from = fuelInDates[i];
-    const nextFuel = fuelInDates[i + 1];
+    const from = fuelInDates[i]; const nextFuel = fuelInDates[i + 1];
     const toIdx = nextFuel ? sortedDates.indexOf(nextFuel) - 1 : sortedDates.length - 1;
     const fromIdx = sortedDates.indexOf(from);
     const sliceDates = sortedDates.slice(fromIdx, toIdx + 1);
@@ -176,239 +88,235 @@ export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<str
   }
   return segments;
 }
-
-function estimatePrevEconomyFallback(): number {
-  return 7.8; // practical prior per Q1/Q10
+function estimatePrevEconomyFallback(): number { return 7.8; }
+function isStartMigrated(trip: Trip): boolean { return (trip.pump_timing === 'START') && roundToIntegerKm(trip.trip_distance) > 20 && (trip.fuel_pumped_amount ?? 0) > 0; }
+function getSafeWindow(vehicle: Vehicle | null): { low: number; high: number; margin: number } {
+  let low = 4, high = 30;
+  if (vehicle && vehicle.typical_economy_low != null && vehicle.typical_economy_high != null && vehicle.typical_economy_low > 0 && vehicle.typical_economy_high > vehicle.typical_economy_low) { low = vehicle.typical_economy_low; high = vehicle.typical_economy_high; }
+  const mid = (low + high) / 2; const margin = mid * 0.20;
+  return { low, high, margin };
 }
-
-/**
- * Estimate economies for all segments using trip-level logic:
- * Economy changes only AFTER the pumped trip (not the pumped date).
- * Fuel pumped on trip k is available only for trips k+1 onward.
- * Each fuel-in segment after a pump covers trips [pumpIdx+1 .. nextPumpIdx] inclusive of the next pump's distance.
- * Brute-force 0.1 step search keeps balance in [1, tankCapacity] after each trip.
- */
-export function estimateFuelEconomies(params: {
-  trips: Trip[];
-  pages: BookPage[];
-  vehicle: Vehicle | null;
-  prevEconomies?: (number | null | undefined)[];
-  tankCapacityOverride?: number;
-}): SegmentEstimate[] {
+export function estimateFuelEconomies(params: { trips: Trip[]; pages: BookPage[]; vehicle: Vehicle | null; prevEconomies?: (number | null | undefined)[]; tankCapacityOverride?: number; strictFullTank?: boolean; lockedDatesSet?: Set<string>; lockedEconomyMap?: Map<string, number>; }): SegmentEstimate[] {
   const { trips, pages, vehicle, prevEconomies } = params;
   const tankCapacity = params.tankCapacityOverride ?? (vehicle?.tank_capacity ?? 75);
   const minFuel = 1;
-
+  const strict = !!params.strictFullTank;
+  const strictMin = Math.max(1, tankCapacity - 3);
   if (trips.length === 0) return [];
-
   const sortedTrips = [...trips].sort((a, b) => {
     if (a.date !== b.date) return a.date < b.date ? -1 : 1;
     if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
     return a.start_km - b.start_km;
   });
-
   const pumpIndices: number[] = [];
-  sortedTrips.forEach((t, idx) => {
-    if ((t.fuel_pumped_amount ?? 0) > 0) pumpIndices.push(idx);
-  });
-
+  sortedTrips.forEach((t, idx) => { if ((t.fuel_pumped_amount ?? 0) > 0) pumpIndices.push(idx); });
   if (pumpIndices.length === 0) return [];
-
   const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
   let runningPos = sortedPages.length > 0 ? roundToOneDecimal(sortedPages[0].start_fuel_balance) : 10;
   if (sortedPages.length === 0 && vehicle) runningPos = roundToOneDecimal((vehicle as unknown as Record<string, unknown>).current_fuel_level as number ?? 10);
-
   let prevEconomy: number | null = null;
   if (prevEconomies && prevEconomies.length > 0) {
     const lastExplicit = [...prevEconomies].reverse().find(v => v !== null && v !== undefined && Number(v) > 0) as number | undefined;
     if (lastExplicit) prevEconomy = roundToOneDecimal(lastExplicit);
   }
   if (prevEconomy === null) prevEconomy = estimatePrevEconomyFallback();
-
-  // Build date -> inTank map (default 0). For now 0; could be extended to read from stores.
   const dateInTank = new Map<string, number>();
-
-  // Helper to simulate segment with candidate economy and return max violation
   const simulateMaxViolation = (segmentTrips: Trip[], startPos: number, economy: number): number => {
     let bal = roundToOneDecimal(startPos);
     const seenDates = new Set<string>();
     let maxViolation = 0;
     for (const t of segmentTrips) {
-      if (!seenDates.has(t.date)) {
-        seenDates.add(t.date);
-        const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0);
-        if (it) bal = roundToOneDecimal(bal + it);
-      }
-      const consumed = roundToOneDecimal(roundToIntegerKm(t.trip_distance) / economy);
+      if (!seenDates.has(t.date)) { seenDates.add(t.date); const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0); if (it) bal = roundToOneDecimal(bal + it); }
+      const distance = roundToIntegerKm(t.trip_distance);
       const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
-      bal = roundToOneDecimal(bal - consumed + pumped);
+      const migrated = isStartMigrated(t);
+      if (pumped > 0 && migrated) { bal = roundToOneDecimal(bal + pumped); const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); }
+      else { const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); if (pumped > 0) bal = roundToOneDecimal(bal + pumped); }
       if (bal < minFuel) maxViolation = Math.max(maxViolation, minFuel - bal);
       else if (bal > tankCapacity) maxViolation = Math.max(maxViolation, bal - tankCapacity);
     }
     return maxViolation;
   };
-
   const simulateFinalBalance = (segmentTrips: Trip[], startPos: number, economy: number): number => {
     let bal = roundToOneDecimal(startPos);
     const seenDates = new Set<string>();
     for (const t of segmentTrips) {
-      if (!seenDates.has(t.date)) {
-        seenDates.add(t.date);
-        const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0);
-        if (it) bal = roundToOneDecimal(bal + it);
-      }
-      const consumed = roundToOneDecimal(roundToIntegerKm(t.trip_distance) / economy);
+      if (!seenDates.has(t.date)) { seenDates.add(t.date); const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0); if (it) bal = roundToOneDecimal(bal + it); }
+      const distance = roundToIntegerKm(t.trip_distance);
       const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
-      bal = roundToOneDecimal(bal - consumed + pumped);
+      const migrated = isStartMigrated(t);
+      if (pumped > 0 && migrated) { bal = roundToOneDecimal(bal + pumped); const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); }
+      else { const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); if (pumped > 0) bal = roundToOneDecimal(bal + pumped); }
     }
     return bal;
   };
-
-  // Initial segment before first pump: trips [0 .. pumpIndices[0]] inclusive, uses prevEconomy, no estimation needed but we need to advance runningPos through it
-  const firstPumpIdx = pumpIndices[0];
-  const initialTrips = sortedTrips.slice(0, firstPumpIdx + 1);
-  // Simulate initial segment with prevEconomy to get startPos for first post-pump segment
-  // If initial distance 0, keep runningPos as is
-  if (initialTrips.length > 0) {
-    // Use prevEconomy for initial segment; no suggestion generated for it, but we advance runningPos
-    runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy);
-  }
-
-  const results: SegmentEstimate[] = [];
-
-  // Post-pump segments: for each pump i, segment = trips [pump_i +1 .. pump_{i+1}] inclusive of next pump, last segment goes to end
-  for (let segIdx = 0; segIdx < pumpIndices.length; segIdx++) {
-    const pumpIdx = pumpIndices[segIdx];
-    const nextPumpIdx = pumpIndices[segIdx + 1];
-    const segStart = pumpIdx + 1;
-    const segEnd = nextPumpIdx !== undefined ? nextPumpIdx : sortedTrips.length - 1;
-    if (segStart > segEnd) {
-      // No trips after this pump (pump was last trip) -> no segment to estimate, but still need to account? Create zero-distance segment for completeness
-      const fuelFed = roundToOneDecimal(sortedTrips[pumpIdx].fuel_pumped_amount ?? 0);
-      const fromDate = sortedTrips[pumpIdx].date;
-      results.push({
-        fromDate,
-        toDate: fromDate,
-        distance: 0,
-        fuelFed,
-        orderNo: sortedTrips[pumpIdx].fuel_order_no ?? '',
-        orderDate: fromDate,
-        prevEconomy,
-        suggested: roundToOneDecimal(prevEconomy),
-        feasible: true,
-        feasibleMin: 0.1,
-        feasibleMax: 50,
-        warning: '0 km — no trips after this pump',
-      });
-      // runningPos already includes this pump's fuel from initial simulation? For subsequent, we already advanced through initial; for consecutive pumps where segStart>segEnd (pumps adjacent), the next segment has zero trips, we still need to keep runningPos (already includes pump fuel)
+  interface BuiltSeg { start: number; end: number; sourceIdx: number; trips: Trip[]; fromDate: string; toDate: string; distance: number; fuelFed: number; isFullTank: boolean; pumpTiming: 'START'|'END'; }
+  const builtSegs: BuiltSeg[] = [];
+  for (let i = 0; i < pumpIndices.length; i++) {
+    const srcIdx = pumpIndices[i];
+    const srcTrip = sortedTrips[srcIdx];
+    const nextIdx = pumpIndices[i + 1];
+    const start = isStartMigrated(srcTrip) ? srcIdx : srcIdx + 1;
+    let end: number;
+    if (nextIdx !== undefined) {
+      const nextTrip = sortedTrips[nextIdx];
+      if (isStartMigrated(nextTrip)) end = nextIdx - 1;
+      else end = nextIdx;
+    } else {
+      end = sortedTrips.length - 1;
+    }
+    if (start > end) {
+      const fuelFed = roundToOneDecimal(srcTrip.fuel_pumped_amount ?? 0);
+      const fromDate = srcTrip.date;
+      builtSegs.push({ start, end: start-1, sourceIdx: srcIdx, trips: [], fromDate, toDate: fromDate, distance: 0, fuelFed, isFullTank: !!srcTrip.is_full_tank, pumpTiming: (srcTrip.pump_timing ?? 'END') as 'START'|'END' });
       continue;
     }
-    const segmentTrips = sortedTrips.slice(segStart, segEnd + 1);
-    const totalDist = roundToIntegerKm(segmentTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
-    const fuelFed = roundToOneDecimal(sortedTrips[pumpIdx].fuel_pumped_amount ?? 0);
-    const orderNo = sortedTrips[pumpIdx].fuel_order_no ?? '';
-    const fromDate = segmentTrips[0].date;
-    const toDate = segmentTrips[segmentTrips.length - 1].date;
+    const segTrips = sortedTrips.slice(start, end + 1);
+    const distance = roundToIntegerKm(segTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
+    const fuelFed = roundToOneDecimal(srcTrip.fuel_pumped_amount ?? 0);
+    const fromDate = segTrips[0]?.date ?? srcTrip.date;
+    const toDate = segTrips[segTrips.length - 1]?.date ?? srcTrip.date;
+    builtSegs.push({ start, end, sourceIdx: srcIdx, trips: segTrips, fromDate, toDate, distance, fuelFed, isFullTank: !!srcTrip.is_full_tank, pumpTiming: (srcTrip.pump_timing ?? 'END') as 'START'|'END' });
+  }
+  const firstStart = builtSegs.length > 0 ? builtSegs[0].start : (pumpIndices[0] + 1);
+  const initialTrips = sortedTrips.slice(0, firstStart);
+  if (initialTrips.length > 0) {
+    runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy!);
+  }
+  const results: SegmentEstimate[] = [];
+  const safeWin = getSafeWindow(vehicle);
+  for (let segIdx = 0; segIdx < builtSegs.length; segIdx++) {
+    const seg = builtSegs[segIdx];
+    const segmentTrips = seg.trips;
+    const totalDist = seg.distance;
+    const fuelFed = seg.fuelFed;
+    const fromDate = seg.fromDate;
+    const toDate = seg.toDate;
     const prev = prevEconomy;
-
+    const srcTrip = sortedTrips[seg.sourceIdx];
+    const isFullTank = seg.isFullTank;
+    const pumpTiming = seg.pumpTiming;
+    const lockedSet = params.lockedDatesSet;
+    const lockedMap = params.lockedEconomyMap;
+    if (lockedSet && lockedMap) {
+      const segDates = segmentTrips.length > 0 ? Array.from(new Set(segmentTrips.map(t => t.date))) : [fromDate];
+      const allLocked = segDates.length > 0 && segDates.every(d => lockedSet.has(d));
+      if (allLocked) {
+        const lockedEcon = lockedMap.get(fromDate) ?? prev ?? estimatePrevEconomyFallback();
+        const lockedVal = roundToOneDecimal(lockedEcon);
+        results.push({ fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date, isFullTank, pumpTiming, prevEconomy: prev, suggested: lockedVal, feasible: true, feasibleMin: lockedVal, feasibleMax: lockedVal, warning: '🔒 Locked — not re-estimated' });
+        if (segmentTrips.length > 0) runningPos = simulateFinalBalance(segmentTrips, runningPos, lockedVal);
+        prevEconomy = lockedVal;
+        continue;
+      }
+    }
     if (totalDist === 0) {
       results.push({
         fromDate,
         toDate,
         distance: 0,
         fuelFed,
-        orderNo,
-        orderDate: sortedTrips[pumpIdx].date,
+        orderNo: srcTrip.fuel_order_no ?? '',
+        orderDate: srcTrip.date,
+        isFullTank,
+        pumpTiming,
         prevEconomy: prev,
-        suggested: roundToOneDecimal(prev),
+        suggested: roundToOneDecimal(prev!),
         feasible: true,
         feasibleMin: 0.1,
         feasibleMax: 50,
-        warning: '0 km — no distance in segment',
+        warning: segmentTrips.length===0 ? '0 km — no trips after this pump (adjacent)' : '0 km — no distance in segment',
       });
-      prevEconomy = roundToOneDecimal(prev);
-      // advance runningPos (no consumption)
-      // runningPos already at start of segment, but we need to simulate with prev economy (no consumption)
+      prevEconomy = roundToOneDecimal(prev!);
       continue;
     }
-
-    // Brute force search for best economy
-    const candidatePrev = prev ?? estimatePrevEconomyFallback();
+    const nextSrcIdx = segIdx + 1 < builtSegs.length ? builtSegs[segIdx+1].sourceIdx : undefined;
+    const nextIsFull = nextSrcIdx !== undefined ? !!sortedTrips[nextSrcIdx].is_full_tank : false;
+    const isFullToFull = isFullTank && nextIsFull;
+    let candidatePrev = prev ?? estimatePrevEconomyFallback();
     let bestE = candidatePrev;
-    let bestViolation = Infinity;
-    let bestScore = Infinity;
     let foundFeasible = false;
     let feasibleMin: number | null = null;
     let feasibleMax: number | null = null;
-
-    // First pass to find feasible range bounds
+    const isFullTankSource = isFullTank;
+    const strictViolationPos = strict && isFullTankSource ? (runningPos < strictMin ? strictMin - runningPos : runningPos > tankCapacity ? runningPos - tankCapacity : 0) : 0;
+    if (isFullToFull) {
+      const totalFuelInSeg = roundToOneDecimal(segmentTrips.reduce((s, t) => s + roundToOneDecimal(t.fuel_pumped_amount ?? 0), 0));
+      let rawEcon: number | null = null;
+      if (totalFuelInSeg > 0) rawEcon = totalDist / totalFuelInSeg;
+      else if (fuelFed > 0) rawEcon = totalDist / fuelFed;
+      if (rawEcon !== null && isFinite(rawEcon)) {
+        let suggestedRaw = roundToOneDecimal(rawEcon);
+        suggestedRaw = Math.min(50, Math.max(0.1, suggestedRaw));
+        const feasibleEs: number[] = [];
+        for (let e10=1; e10<=500; e10++){ const e=e10/10; const v=simulateMaxViolation(segmentTrips, runningPos, e)+strictViolationPos; if(v<1e-9){ feasibleEs.push(e); if(feasibleMin===null||e<feasibleMin) feasibleMin=e; if(feasibleMax===null||e>feasibleMax) feasibleMax=e; } }
+        if (feasibleEs.length>0){
+          foundFeasible = true;
+          let bestDist = Infinity;
+          for(const e of feasibleEs){ const d=Math.abs(e - suggestedRaw); if(d < bestDist -1e-9){ bestDist=d; bestE=e; } }
+        } else {
+          let bestScore = Infinity;
+          for(let e10=1;e10<=500;e10++){ const e=e10/10; const v=simulateMaxViolation(segmentTrips, runningPos, e)+strictViolationPos; const score=v + Math.abs(e - suggestedRaw)*0.01; if(score < bestScore -1e-9){ bestScore=score; bestE=e; } }
+        }
+        const suggested = roundToOneDecimal(bestE);
+        let warning: string | undefined;
+        if (!foundFeasible) {
+          if (strictViolationPos>1e-9) warning = `Strict requires balance after ${srcTrip.date} ${runningPos.toFixed(1)}L in [${strictMin.toFixed(1)}, ${tankCapacity.toFixed(1)}] — computed ${suggestedRaw.toFixed(1)} km/L keeps balance outside — check fuel gaps`;
+          else warning = `Computed ${suggestedRaw.toFixed(1)} km/L (${totalDist} km / ${totalFuelInSeg>0?totalFuelInSeg.toFixed(1):fuelFed.toFixed(1)} L) keeps fuel outside [1, ${tankCapacity.toFixed(1)}]L — nearest feasible ${suggested.toFixed(1)} suggested`;
+        } else {
+          const lowSafe = safeWin.low - safeWin.margin;
+          const highSafe = safeWin.high + safeWin.margin;
+          if (suggested < lowSafe || suggested > highSafe) warning = `Outside typical range [${safeWin.low.toFixed(1)}–${safeWin.high.toFixed(1)} ±20%] — ${suggested.toFixed(1)} km/L`;
+        }
+        results.push({ fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date, isFullTank, pumpTiming, prevEconomy: prev, suggested, feasible: foundFeasible, feasibleMin, feasibleMax, warning });
+        runningPos = simulateFinalBalance(segmentTrips, runningPos, suggested);
+        prevEconomy = suggested;
+        continue;
+      }
+    }
     const feasibleEs: number[] = [];
-    for (let e10 = 1; e10 <= 500; e10++) {
-      const e = e10 / 10;
-      const v = simulateMaxViolation(segmentTrips, runningPos, e);
-      if (v < 1e-9) {
-        feasibleEs.push(e);
-        if (feasibleMin === null || e < feasibleMin) feasibleMin = e;
-        if (feasibleMax === null || e > feasibleMax) feasibleMax = e;
-      }
-    }
-
-    if (feasibleEs.length > 0) {
+    for (let e10=1; e10<=500; e10++){ const e=e10/10; const v=simulateMaxViolation(segmentTrips, runningPos, e)+strictViolationPos; if(v<1e-9){ feasibleEs.push(e); if(feasibleMin===null||e<feasibleMin) feasibleMin=e; if(feasibleMax===null||e>feasibleMax) feasibleMax=e; } }
+    if (feasibleEs.length>0){
       foundFeasible = true;
-      // pick closest to prev among feasible
       let bestDist = Infinity;
-      for (const e of feasibleEs) {
-        const d = Math.abs(e - candidatePrev);
-        if (d < bestDist - 1e-9) {
-          bestDist = d;
-          bestE = e;
-        }
-      }
-      // If multiple at same distance, prefer one closest to prev rounded? Already
+      for(const e of feasibleEs){ const d=Math.abs(e - candidatePrev); if(d < bestDist -1e-9){ bestDist=d; bestE=e; } }
     } else {
-      // No feasible: brute for minimal violation
-      for (let e10 = 1; e10 <= 500; e10++) {
-        const e = e10 / 10;
-        const v = simulateMaxViolation(segmentTrips, runningPos, e);
-        const stepPenalty = Math.abs(e - candidatePrev) * 0.01;
-        const score = v + stepPenalty;
-        if (score < bestScore - 1e-9) {
-          bestScore = score;
-          bestE = e;
-          bestViolation = v;
-        }
-      }
+      let bestScore = Infinity;
+      for(let e10=1;e10<=500;e10++){ const e=e10/10; const v=simulateMaxViolation(segmentTrips, runningPos, e)+strictViolationPos; const score=v + Math.abs(e - candidatePrev)*0.01; if(score < bestScore -1e-9){ bestScore=score; bestE=e; } }
     }
-
     const suggested = roundToOneDecimal(bestE);
     let warning: string | undefined;
-    let feasible = foundFeasible;
-    if (!foundFeasible) {
-      warning = `No 1-dec economy keeps fuel in [${minFuel}, ${tankCapacity}]L — nearest ${suggested.toFixed(1)} km/L suggested (check KM/fuel gaps)`;
-    } else if (feasibleMin !== null && feasibleMax !== null) {
+    if (!foundFeasible){
+      if (strictViolationPos>1e-9 && isFullTankSource) warning = `Strict Full Tank requires balance after pump ${runningPos.toFixed(1)}L in [${strictMin.toFixed(1)}, ${tankCapacity.toFixed(1)}] — nearest ${suggested.toFixed(1)} km/L outside strict (lenient feasible)`;
+      else warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — nearest ${suggested.toFixed(1)} km/L suggested (check KM/fuel gaps)`;
+    } else {
       const distFromPrev = Math.abs(suggested - candidatePrev);
       if (distFromPrev > 3) warning = `Large step from ${candidatePrev.toFixed(1)} to ${suggested.toFixed(1)} to stay feasible`;
+      const lowSafe = safeWin.low - safeWin.margin;
+      const highSafe = safeWin.high + safeWin.margin;
+      if (suggested < lowSafe || suggested > highSafe) {
+        const safeWarn = `Outside typical range [${safeWin.low.toFixed(1)}–${safeWin.high.toFixed(1)} ±20%] — ${suggested.toFixed(1)} km/L`;
+        warning = warning ? `${warning} | ${safeWarn}` : safeWarn;
+      }
     }
-
     results.push({
       fromDate,
       toDate,
       distance: totalDist,
       fuelFed,
-      orderNo,
-      orderDate: sortedTrips[pumpIdx].date,
+      orderNo: srcTrip.fuel_order_no ?? '',
+      orderDate: srcTrip.date,
+      isFullTank,
+      pumpTiming,
       prevEconomy: prev,
       suggested,
-      feasible,
+      feasible: foundFeasible,
       feasibleMin,
       feasibleMax,
       warning,
     });
-
-    // Advance runningPos for next segment using suggested economy
     runningPos = simulateFinalBalance(segmentTrips, runningPos, suggested);
     prevEconomy = suggested;
   }
-
   return results;
 }

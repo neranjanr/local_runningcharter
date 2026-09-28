@@ -27,6 +27,8 @@ function toPartial(b: BufferTrip): Partial<Trip> {
     const est = estimateStartTime(b.end_time, dist);
     if (est) start = est;
   }
+  const ptRaw = String((b as any).pump_timing ?? 'END').trim().toUpperCase();
+  const pumpTiming: 'START' | 'END' = ptRaw === 'START' ? 'START' : 'END';
   return {
     date: b.date,
     start_km: roundToIntegerKm(b.start_km),
@@ -38,6 +40,8 @@ function toPartial(b: BufferTrip): Partial<Trip> {
     places_visited: b.places_visited,
     fuel_pumped_amount: b.fuel_pumped_amount != null ? roundToOneDecimal(b.fuel_pumped_amount) : 0,
     fuel_order_no: b.fuel_order_no || undefined,
+    is_full_tank: !!b.is_full_tank,
+    pump_timing: pumpTiming,
   };
 }
 
@@ -49,6 +53,8 @@ function buildDiff(existing: Trip, incoming: Partial<Trip>): string {
   if ((incoming.trip_type ?? 'Official') !== (existing.trip_type ?? 'Official')) parts.push(`type: ${existing.trip_type}→${incoming.trip_type}`);
   if (roundToOneDecimal(incoming.fuel_pumped_amount ?? 0) !== roundToOneDecimal(existing.fuel_pumped_amount ?? 0)) parts.push(`fuel: ${existing.fuel_pumped_amount ?? 0}→${incoming.fuel_pumped_amount ?? 0}`);
   if ((incoming.fuel_order_no ?? '') !== (existing.fuel_order_no ?? '')) parts.push(`order: ${existing.fuel_order_no || '-'}→${incoming.fuel_order_no || '-'}`);
+  if (!!incoming.is_full_tank !== !!existing.is_full_tank) parts.push(`full: ${existing.is_full_tank ? 'YES' : 'NO'}→${incoming.is_full_tank ? 'YES' : 'NO'}`);
+  if ((incoming.pump_timing ?? 'END') !== (existing.pump_timing ?? 'END')) parts.push(`timing: ${existing.pump_timing ?? 'END'}→${incoming.pump_timing ?? 'END'}`);
   return parts.join('; ') || 'changed';
 }
 
@@ -86,11 +92,13 @@ export function compareBufferToDb(params: { bufferRows: BufferTrip[]; existingTr
     } else {
       const sameFuel = roundToOneDecimal(p.fuel_pumped_amount ?? 0) === roundToOneDecimal(existing.fuel_pumped_amount ?? 0);
       const sameOrder = (p.fuel_order_no ?? '') === (existing.fuel_order_no ?? '');
+      const sameFull = !!p.is_full_tank === !!existing.is_full_tank;
+      const sameTiming = (p.pump_timing ?? 'END') === (existing.pump_timing ?? 'END');
       const sameStart = (p.start_time ?? '') === (existing.start_time ?? '');
       const sameEnd = (p.end_time ?? '') === (existing.end_time ?? '');
       const sameType = (p.trip_type ?? 'Official') === (existing.trip_type ?? 'Official');
       const samePlaces = (p.places_visited ?? '') === (existing.places_visited ?? '');
-      if (sameFuel && sameOrder && sameStart && sameEnd && sameType && samePlaces) {
+      if (sameFuel && sameOrder && sameFull && sameTiming && sameStart && sameEnd && sameType && samePlaces) {
         skippedRows.push({ bufferTrip: b, partial: p });
       } else {
         changedRows.push({ bufferTrip: b, partial: p, existing, diff: buildDiff(existing, p) });

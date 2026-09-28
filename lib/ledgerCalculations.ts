@@ -27,6 +27,7 @@ export interface LedgerDay {
   fuelOrderDate: string; // date of first drawn entry if any
   consumed: number;
   balance: number; // Closing Balance = Position + InTank + Drawn - Consumed
+  isFullTank: boolean;
 }
 
 export interface LedgerSummary {
@@ -148,6 +149,7 @@ export function computeLedgerDays(params: {
     const inTank = roundToOneDecimal(rawInTanks[i] ?? 0);
     const consumed = calculateConsumed(distance, econ);
     const balance = calculateBalance(fuelPosition, drawn, consumed, inTank);
+    const isFullTank = dayTrips.some(t => !!t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0);
 
     days.push({
       dayIndex: i + 1,
@@ -165,6 +167,7 @@ export function computeLedgerDays(params: {
       fuelOrderDate,
       consumed,
       balance,
+      isFullTank,
     });
 
     prevBalance = balance;
@@ -291,26 +294,52 @@ export function computeTripFuelMap(params: {
   const result = new Map<string, TripFuelInfo>();
   if (sorted.length === 0) return result;
   let balance = roundToOneDecimal(openingFuel);
-  // current economy starts as economy of first trip's date
   let currentEconomy = dateEconomy.get(sorted[0].date) ?? DEFAULT_FUEL_ECONOMY;
   const dateFirstSeen = new Set<string>();
+  const isStartMigrated = (t: Trip) => (t.pump_timing === 'START') && roundToIntegerKm(t.trip_distance) > 20 && (t.fuel_pumped_amount ?? 0) > 0;
+  const getNextEconomy = (fromDate: string): number | null => {
+    const idx = distinctDates.indexOf(fromDate);
+    for (let j = idx + 1; j < distinctDates.length; j++) {
+      const nd = distinctDates[j];
+      if (dateEconomy.has(nd)) return dateEconomy.get(nd)!;
+    }
+    return null;
+  };
   for (let i = 0; i < sorted.length; i++) {
     const t = sorted[i];
-    // add In-Tank at first trip of each date (once per date, not per trip)
     let inTankForTrip = 0;
     if (!dateFirstSeen.has(t.date)) {
       dateFirstSeen.add(t.date);
       inTankForTrip = roundToOneDecimal(dateInTank?.get(t.date) ?? 0);
       if (inTankForTrip) balance = roundToOneDecimal(balance + inTankForTrip);
     }
+    const migrated = isStartMigrated(t);
+    if (migrated && (t.fuel_pumped_amount ?? 0) > 0) {
+      const nxt = getNextEconomy(t.date);
+      if (nxt !== null) currentEconomy = nxt;
+      else if (i + 1 < sorted.length) {
+        // same-date split: try to peek at next date's economy via sorted next trip's date
+        const nextDate = sorted[i + 1].date;
+        if (nextDate !== t.date) {
+          const ndEcon = dateEconomy.get(nextDate);
+          if (ndEcon !== undefined) currentEconomy = ndEcon;
+        }
+      }
+    }
     const position = roundToOneDecimal(balance);
     const economy = roundToOneDecimal(currentEconomy);
     const distance = roundToIntegerKm(t.trip_distance);
     const consumed = calculateConsumed(distance, economy);
     const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
-    const afterConsumed = roundToOneDecimal(balance - consumed);
-    const newBalance = roundToOneDecimal(afterConsumed + pumped);
-    // For display, drawn is pumped of this trip; balance is after
+    let newBalance: number;
+    if (pumped > 0 && migrated) {
+      // START: fuel available for this Trip, charged to next economy => add before consume
+      const afterFuel = roundToOneDecimal(balance + pumped);
+      newBalance = roundToOneDecimal(afterFuel - consumed);
+    } else {
+      const afterConsumed = roundToOneDecimal(balance - consumed);
+      newBalance = roundToOneDecimal(afterConsumed + pumped);
+    }
     result.set(t.id, {
       position,
       economy,
@@ -320,24 +349,17 @@ export function computeTripFuelMap(params: {
       drawn: pumped,
     });
     balance = newBalance;
-    // After this trip, if it was a pumped trip, switch economy for next trip to next distinct date's economy
-    if (pumped > 0 && i + 1 < sorted.length) {
+    if (!migrated && pumped > 0 && i + 1 < sorted.length) {
       const currIdx = distinctDates.indexOf(t.date);
       let nextEconomy: number | null = null;
       for (let j = currIdx + 1; j < distinctDates.length; j++) {
         const nd = distinctDates[j];
         if (dateEconomy.has(nd)) { nextEconomy = dateEconomy.get(nd)!; break; }
       }
-      // If pumped trip is not on last date, jump to next date's economy (covers intra-day split)
-      // If pumped trip is on same date as next trip, this still jumps to next date's economy.
-      // If no next distinct date (single date book), keep current economy (no new value available)
       if (nextEconomy !== null) {
         currentEconomy = nextEconomy;
-      } else {
-        // No next date: keep current, but if next trip is same date, economy stays same (unable to represent split without extra slot)
       }
     } else if (pumped === 0 && i + 1 < sorted.length) {
-      // Even without pump, if next trip date differs, economy should follow dateEconomy
       const nextDate = sorted[i + 1].date;
       if (nextDate !== t.date) {
         const nextDateEcon = dateEconomy.get(nextDate);

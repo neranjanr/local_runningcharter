@@ -48,8 +48,8 @@ export async function POST(request: NextRequest) {
 
     const insertTrips = db.transaction((tripsToInsert: any[]) => {
       const stmt = db.prepare(`
-        INSERT INTO trips (id, page_id, vehicle_id, date, day_index, trip_index, start_time, end_time, start_km, end_km, trip_distance, trip_type, places_visited, fuel_pumped_amount, fuel_order_no)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trips (id, page_id, vehicle_id, date, day_index, trip_index, start_time, end_time, start_km, end_km, trip_distance, trip_type, places_visited, fuel_pumped_amount, fuel_order_no, is_full_tank, pump_timing)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           page_id=excluded.page_id,
           vehicle_id=excluded.vehicle_id,
@@ -64,13 +64,19 @@ export async function POST(request: NextRequest) {
           trip_type=excluded.trip_type,
           places_visited=excluded.places_visited,
           fuel_pumped_amount=excluded.fuel_pumped_amount,
-          fuel_order_no=excluded.fuel_order_no
+          fuel_order_no=excluded.fuel_order_no,
+          is_full_tank=excluded.is_full_tank,
+          pump_timing=excluded.pump_timing
       `);
       for (const t of tripsToInsert) {
+        const pt = (() => {
+          const v = String(t.pump_timing ?? 'END').trim().toUpperCase();
+          return v === 'START' && (t.fuel_pumped_amount ?? 0) > 0 ? 'START' : 'END';
+        })();
         stmt.run(
           t.id, t.page_id, t.vehicle_id, t.date, t.day_index ?? 1, t.trip_index ?? 1,
           t.start_time ?? '', t.end_time ?? '', t.start_km ?? 0, t.end_km ?? 0, t.trip_distance ?? 0,
-          t.trip_type ?? 'Official', t.places_visited ?? '', t.fuel_pumped_amount ?? 0, t.fuel_order_no ?? ''
+          t.trip_type ?? 'Official', t.places_visited ?? '', t.fuel_pumped_amount ?? 0, t.fuel_order_no ?? '', t.is_full_tank ? 1 : 0, pt
         );
       }
     });

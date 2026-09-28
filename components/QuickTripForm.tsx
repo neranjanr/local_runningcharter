@@ -35,6 +35,8 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
   const [placesVisited, setPlacesVisited] = useState<string>('');
   const [fuelPumped, setFuelPumped] = useState<string>('');
   const [fuelOrderNo, setFuelOrderNo] = useState<string>('');
+  const [isFullTank, setIsFullTank] = useState<boolean>(false);
+  const [pumpTiming, setPumpTiming] = useState<'START' | 'END'>('END');
   const [isAutoStartKm, setIsAutoStartKm] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
@@ -227,6 +229,8 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     setPlacesVisited('');
     setFuelPumped('');
     setFuelOrderNo('');
+    setIsFullTank(false);
+    setPumpTiming('END');
     setStartTime('');
     setDuration('');
     setEndTime(getCurrentTimeString());
@@ -242,6 +246,8 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     setPlacesVisited('');
     setFuelPumped('');
     setFuelOrderNo('');
+    setIsFullTank(false);
+    setPumpTiming('END');
     setStartTime('');
     setDuration('');
     setEndTime(getCurrentTimeString());
@@ -271,6 +277,7 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
     setSaveMode(mode);
     try {
       const fuelAmt = fuelPumped ? parseFloat(fuelPumped) : 0;
+      const pumpedVal = isNaN(fuelAmt) ? 0 : roundToOneDecimal(fuelAmt);
       await saveTrip({
         date,
         start_time: startTime ?? '',
@@ -280,8 +287,10 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
         trip_distance: roundToIntegerKm(dist),
         trip_type: tripType,
         places_visited: placesVisited,
-        fuel_pumped_amount: isNaN(fuelAmt) ? 0 : roundToOneDecimal(fuelAmt),
+        fuel_pumped_amount: pumpedVal,
         fuel_order_no: fuelOrderNo,
+        is_full_tank: pumpedVal > 0 ? isFullTank : false,
+        pump_timing: pumpedVal > 0 ? pumpTiming : 'END',
       });
       setSuccessMessage(mode === 'another' ? 'Trip saved — ready for next entry.' : 'Trip saved successfully!');
       showToast('Trip Added', 2000);
@@ -526,13 +535,29 @@ export default function QuickTripForm({ onSuccess }: { onSuccess?: () => void })
           <div className="grid grid-cols-2 gap-2">
             <div>
               <div className="relative">
-                <input className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:bg-white focus:ring-1 focus:ring-brand-500 h-8" id="fuel-pumped" aria-label="Fuel Pumped" inputMode="decimal" name="fuel_pumped_l" placeholder="Pumped (L) e.g. 35.0" step="0.01" type="number" value={fuelPumped} onChange={(e)=>setFuelPumped(e.target.value)} />
+                <input className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:bg-white focus:ring-1 focus:ring-brand-500 h-8" id="fuel-pumped" aria-label="Fuel Pumped" inputMode="decimal" name="fuel_pumped_l" placeholder="Pumped (L) e.g. 35.0" step="0.01" type="number" value={fuelPumped} onChange={(e)=>{ setFuelPumped(e.target.value); const v = parseFloat(e.target.value); if (!v || v<=0) { setIsFullTank(false); setPumpTiming('END'); } }} />
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span>
               </div>
             </div>
             <div>
               <input className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:bg-white focus:ring-1 focus:ring-brand-500 h-8" id="fuel-order-no" aria-label="Fuel Order No" name="fuel_order_no" placeholder="Order # e.g. #FO-88912" type="text" value={fuelOrderNo} onChange={(e)=>setFuelOrderNo(e.target.value)} />
             </div>
+          </div>
+          <label className={`mt-2 inline-flex items-center gap-1.5 text-xs font-semibold select-none ${(!fuelPumped || parseFloat(fuelPumped)<=0) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer text-slate-700'}`}>
+            <input type="checkbox" checked={isFullTank} disabled={!fuelPumped || parseFloat(fuelPumped)<=0} onChange={e=>setIsFullTank(e.target.checked)} className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" data-testid="full-tank-checkbox" />
+            <span className="flex items-center gap-1">★ Full tank <span className="text-[10px] font-normal text-slate-500">(filled to full)</span></span>
+          </label>
+          <div className={`mt-2 flex items-center gap-2 ${(!fuelPumped || parseFloat(fuelPumped)<=0) ? 'opacity-50 pointer-events-none' : ''}`}>
+            <span className="text-xs font-semibold text-slate-700">Fueled at:</span>
+            <label className="inline-flex items-center gap-1 text-xs cursor-pointer">
+              <input type="radio" name="pump-timing" value="END" checked={pumpTiming==='END'} disabled={!fuelPumped || parseFloat(fuelPumped)<=0} onChange={()=>setPumpTiming('END')} className="w-3.5 h-3.5 text-brand-600 focus:ring-brand-500" data-testid="pump-timing-end" />
+              <span>End</span>
+            </label>
+            <label className="inline-flex items-center gap-1 text-xs cursor-pointer">
+              <input type="radio" name="pump-timing" value="START" checked={pumpTiming==='START'} disabled={!fuelPumped || parseFloat(fuelPumped)<=0} onChange={()=>setPumpTiming('START')} className="w-3.5 h-3.5 text-brand-600 focus:ring-brand-500" data-testid="pump-timing-start" />
+              <span>Start</span>
+            </label>
+            <span className="text-[10px] text-slate-500">({parseInt(distance||'0')>20 ? 'distance>20 applies' : '≤20 → treated as End'})</span>
           </div>
         </section>
       </form>

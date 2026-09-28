@@ -138,6 +138,13 @@
         <div><div class="relative"><input id="fuelPumped" type="number" step="0.1" inputmode="decimal" placeholder="Pumped (L) e.g. 35.0" class="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8"/><span class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span></div></div>
         <div><input id="fuelOrderNo" type="text" placeholder="Order # e.g. #FO-88912" class="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8"/></div>
       </div>
+      <label id="fullTankLabel" style="margin-top:8px;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;opacity:.5;cursor:not-allowed"><input id="isFullTank" type="checkbox" disabled style="width:14px;height:14px"/> <span>★ Full tank <span style="font-weight:400;color:#64748b">(filled to full)</span></span></label>
+      <div id="pumpTimingGroup" style="margin-top:8px;display:flex;align-items:center;gap:8px;opacity:.5;pointer-events:none">
+        <span style="font-size:12px;font-weight:700;color:#334155">Fueled at:</span>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="radio" name="pumpTiming" value="END" id="pumpTimingEnd" checked style="width:14px;height:14px"/> End</label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="radio" name="pumpTiming" value="START" id="pumpTimingStart" style="width:14px;height:14px"/> Start</label>
+        <span style="font-size:10px;color:#64748b">≤20km → End</span>
+      </div>
     </section>
 
     <div class="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 z-40 shadow-lg">
@@ -185,6 +192,7 @@ function estMinutes(dist, mode){if(!dist||dist<=0||!isFinite(dist)) return null;
 function estStart(end,dist,mode){const mins=estMinutes(dist, mode);if(mins==null||!end||!end.includes(":")) return null;return calcStartFromEndDur(end,mins)}
 function getScriptUrl(){ const ls=localStorage.getItem("mobile.scriptUrl")||""; if(ls) return ls; if(SCRIPT_URL_DEFAULT) return SCRIPT_URL_DEFAULT; return ""; }
 function isOnline(){return navigator.onLine}
+function updateFullTankState(){ const v=$("fuelPumped").value; const cb=$("isFullTank"), lb=$("fullTankLabel"); const has=!!v && parseFloat(v)>0; cb.disabled=!has; lb.style.opacity=has? '1':'.5'; lb.style.cursor=has?'pointer':'not-allowed'; if(!has) cb.checked=false; const ptg=$("pumpTimingGroup"); ptg.style.opacity=has?'1':'.5'; ptg.style.pointerEvents=has?'auto':'none'; const radios=document.querySelectorAll('input[name="pumpTiming"]'); radios.forEach(r=>r.disabled=!has); if(!has) { const end=$("pumpTimingEnd"); if(end) end.checked=true; } }
 function updateOnlineInfo(){ $("onlineInfo").textContent=isOnline()?"Online":"Offline"; $("queueInfo").textContent=`${getQueue().length} queued`; }
 function getQueue(){try{return JSON.parse(localStorage.getItem(QUEUE_KEY)||"[]")}catch{return []}}
 function setQueue(q){localStorage.setItem(QUEUE_KEY,JSON.stringify(q));updateOnlineInfo()}
@@ -270,6 +278,7 @@ $("startKm").addEventListener("input",e=>{
   if(!isNaN(eKm)){$("distance").value=String(calcDist(s,eKm));maybeAuto(String(calcDist(s,eKm)),$("endTime").value,$("startTime").value)}
   else if(!isNaN(dist)){$("endKm").value=String(calcEnd(s,dist))}
 });
+$("fuelPumped").addEventListener("input", updateFullTankState);
 $("endKm").addEventListener("input",e=>{
   const en=parseIntKm(e.target.value), st=parseIntKm($("startKm").value);
   if(!isNaN(en)&&!isNaN(st)){const d=calcDist(st,en);$("distance").value=String(d);maybeAuto(String(d),$("endTime").value,$("startTime").value)}
@@ -324,7 +333,7 @@ $("places").addEventListener("input",()=>{
   });
 });
 $("clearBtn").onclick=()=>{
-  $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("startTime").value="";$("duration").value="";$("endTime").value=nowHM();msg("ok","Cleared");
+  $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("isFullTank").checked=false; const ptE=$("pumpTimingEnd"); if(ptE) ptE.checked=true; updateFullTankState();$("startTime").value="";$("duration").value="";$("endTime").value=nowHM();msg("ok","Cleared");
 };
 $("tripForm").addEventListener("submit",async e=>{
   e.preventDefault();
@@ -336,12 +345,16 @@ $("tripForm").addEventListener("submit",async e=>{
   if(eKm < sKm){msg("err","End KM cannot be < Start KM");return}
   const url=getScriptUrl();if(!url){msg("err","Set Script URL in Settings first");$("settingsPanel").classList.remove("hidden");$("settingsPanel").classList.add("block");return}
   const tripType=document.querySelector('input[name="tripType"]:checked').value;
+  const pumpedVal=$("fuelPumped").value?round1(parseFloat($("fuelPumped").value)):0;
+  const pumpTimingVal = (()=>{ const c=document.querySelector('input[name="pumpTiming"]:checked'); return c && c.value==='START' ? 'START' : 'END'; })();
   const trip={
     date, start_km:roundInt(sKm), end_km:roundInt(eKm), trip_distance:roundInt(dist),
     start_time:$("startTime").value||"", end_time:endTime, trip_type:tripType,
     places_visited:places,
-    fuel_pumped_amount:$("fuelPumped").value?round1(parseFloat($("fuelPumped").value)):0,
-    fuel_order_no:$("fuelOrderNo").value||""
+    fuel_pumped_amount:pumpedVal,
+    fuel_order_no:$("fuelOrderNo").value||"",
+    is_full_tank: pumpedVal>0 ? $("isFullTank").checked : false,
+    pump_timing: pumpedVal>0 ? pumpTimingVal : 'END'
   };
   $("saveBtn").disabled=true;$("saveBtn").innerHTML="Saving…";
   try{
@@ -357,7 +370,7 @@ $("tripForm").addEventListener("submit",async e=>{
     msg("ok", String(err).includes("offline")?"Offline — queued locally, will sync when online":"Queued locally (sheet unreachable) — will sync. "+String(err).slice(0,120));
   }finally{
     const prevEnd=eKm;
-    $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("startTime").value="";$("duration").value="";
+    $("endKm").value="";$("distance").value="";$("places").value="";$("fuelPumped").value="";$("fuelOrderNo").value="";$("isFullTank").checked=false; const ptE2=$("pumpTimingEnd"); if(ptE2) ptE2.checked=true; updateFullTankState();$("startTime").value="";$("duration").value="";
     $("endTime").value=nowHM();
     setStartFromLastEnd(prevEnd);
     $("saveBtn").disabled=false;$("saveBtn").innerHTML='<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5"></path></svg><span>Save to Buffer Sheet</span>';

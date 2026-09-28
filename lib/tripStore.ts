@@ -25,6 +25,8 @@ export interface TripInput {
   fuel_pumped_amount?: number;
   fuel_order_no?: string;
   fuel_order_date?: string;
+  is_full_tank?: boolean;
+  pump_timing?: 'START' | 'END';
 }
 
 function readLocalTrips(): Trip[] {
@@ -143,6 +145,8 @@ export async function saveTrip(input: TripInput): Promise<Trip> {
     places_visited: input.places_visited,
     fuel_pumped_amount: input.fuel_pumped_amount ?? 0,
     fuel_order_no: input.fuel_order_no ?? '',
+    is_full_tank: input.is_full_tank ?? false,
+    pump_timing: (input.fuel_pumped_amount ?? 0) > 0 ? (input.pump_timing ?? 'END') : 'END',
   };
 
   // Try API first
@@ -191,6 +195,8 @@ export interface TripUpdateFields {
   places_visited?: string;
   fuel_pumped_amount?: number;
   fuel_order_no?: string;
+  is_full_tank?: boolean;
+  pump_timing?: 'START' | 'END';
 }
 
 export async function updateTrip(tripId: string, fields: TripUpdateFields): Promise<Trip | null> {
@@ -198,6 +204,22 @@ export async function updateTrip(tripId: string, fields: TripUpdateFields): Prom
   const existing = trips.find(t => t.id === tripId);
   if (!existing) return null;
 
+  // Guard: is_full_tank only when pumped >0
+  if (fields.is_full_tank === true) {
+    const pumped = fields.fuel_pumped_amount !== undefined ? fields.fuel_pumped_amount : existing.fuel_pumped_amount ?? 0;
+    if (!pumped || pumped <= 0) delete (fields as Record<string, unknown>).is_full_tank;
+  }
+  if (fields.fuel_pumped_amount !== undefined && fields.fuel_pumped_amount === 0) {
+    // clearing pumped clears full tank flag
+    if (fields.is_full_tank === undefined) fields.is_full_tank = false;
+    if (fields.pump_timing === undefined) fields.pump_timing = 'END';
+  }
+  // Guard pump_timing only when pumped >0, else force END
+  const effectivePumpedForTiming = fields.fuel_pumped_amount !== undefined ? fields.fuel_pumped_amount : existing.fuel_pumped_amount ?? 0;
+  if (fields.pump_timing !== undefined) {
+    if (!(effectivePumpedForTiming > 0)) fields.pump_timing = 'END';
+    else if (fields.pump_timing !== 'START' && fields.pump_timing !== 'END') fields.pump_timing = 'END';
+  }
   const updated: Trip = {
     ...existing,
     ...fields,
@@ -209,6 +231,8 @@ export async function updateTrip(tripId: string, fields: TripUpdateFields): Prom
         ? roundToIntegerKm((fields.end_km ?? existing.end_km) - (fields.start_km ?? existing.start_km))
         : existing.trip_distance,
     fuel_pumped_amount: fields.fuel_pumped_amount !== undefined ? roundToOneDecimal(fields.fuel_pumped_amount) : existing.fuel_pumped_amount,
+    is_full_tank: fields.is_full_tank !== undefined ? !!fields.is_full_tank : existing.is_full_tank ?? false,
+    pump_timing: fields.pump_timing !== undefined ? fields.pump_timing : existing.pump_timing ?? 'END',
   };
 
   // Try API first

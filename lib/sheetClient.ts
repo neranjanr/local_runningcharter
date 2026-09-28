@@ -14,6 +14,8 @@ export const ALL_TRIPS_HEADERS = [
   'Places Visited',
   'Fuel Pumped',
   'Fuel Order No',
+  'Full Tank',
+  'Pump Timing',
 ] as const;
 
 export interface BufferTrip {
@@ -27,6 +29,8 @@ export interface BufferTrip {
   places_visited: string;
   fuel_pumped_amount?: number;
   fuel_order_no?: string;
+  is_full_tank?: boolean;
+  pump_timing?: 'START' | 'END';
 }
 
 export interface BufferLeave {

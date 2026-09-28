@@ -4,6 +4,7 @@ import React from 'react';
 import type { LedgerDay, LedgerSummary } from '@/lib/ledgerCalculations';
 import { roundToOneDecimal } from '@/lib/tripCalculations';
 import type { PageGap, FuelGap } from '@/lib/continuityAlerts';
+import { getFuelLocksForPage } from '@/lib/fuelEconomyLockStore';
 
 interface Props {
   pageNumber: number;
@@ -121,16 +122,20 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               </tr>
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Fuel Economy (km/L)</td>
-                {ledgerDays.map((d) => (
+                {ledgerDays.map((d, idx) => {
+                  let isLocked = false;
+                  try { const locks = getFuelLocksForPage(`page-${pageNumber}`); isLocked = !!locks[idx]; } catch {}
+                  // fallback generic check via props id not available; try by date via localStorage
+                  return (
                   <td key={d.date} className="py-2 px-3 text-center border border-rule-line">
                     <div className="flex flex-col items-center gap-1">
-                      <span className="text-[11px] font-mono text-on-surface font-bold">{d.fuelEconomy.toFixed(1)}</span>
+                      <span className="text-[11px] font-mono text-on-surface font-bold flex items-center gap-1">{d.fuelEconomy.toFixed(1)} {isLocked && <span className="text-[9px] bg-slate-800 text-white px-1 rounded">🔒</span>}</span>
                       <span className={`text-[9px] font-bold tracking-widest uppercase px-1 rounded ${d.economySource === 'explicit' ? 'bg-surface-container-highest text-telemetry-cyan' : 'text-on-surface-variant'}`}>
-                        {d.economySource === 'explicit' ? 'Adjusted' : d.economySource === 'inherited' ? '(Inh.)' : '(Def.)'}
+                        {isLocked ? 'Locked' : d.economySource === 'explicit' ? 'Adjusted' : d.economySource === 'inherited' ? '(Inh.)' : '(Def.)'}
                       </span>
                     </div>
                   </td>
-                ))}
+                );})}
                 <td className="py-2.5 px-3 text-center font-mono text-sm text-trip-official font-bold border border-rule-line-strong bg-surface-container-low">{summary.weightedEconomy.toFixed(1)} km/L</td>
               </tr>
             </tbody>
@@ -183,7 +188,10 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Pumped (L)</td>
                 {ledgerDays.map((d) => (
                   <td key={d.date} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${d.drawn > 0 ? 'text-trip-official font-bold' : 'text-on-surface-variant'}`}>
-                    {d.drawn > 0 ? `+${d.drawn.toFixed(1)}` : '0.0'}
+                    <span className="inline-flex items-center justify-end gap-1 w-full">
+                      <span>{d.drawn > 0 ? `+${d.drawn.toFixed(1)}` : '0.0'}</span>
+                      {d.isFullTank && d.drawn > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
+                    </span>
                   </td>
                 ))}
                 <td className="py-2.5 px-3 text-right font-mono text-sm font-bold text-trip-official border border-rule-line-strong bg-surface-container-low">{summary.totalDrawn.toFixed(1)}</td>

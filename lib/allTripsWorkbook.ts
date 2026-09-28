@@ -26,6 +26,8 @@ export const ALL_TRIPS_HEADERS = [
   'Places Visited',
   'Fuel Pumped',
   'Fuel Order No',
+  'Full Tank',
+  'Pump Timing',
 ];
 
 export const LEAVES_HEADERS = ['Date', 'Note'] as const;
@@ -62,6 +64,8 @@ export function generateAllTripsWorkbook(
     { key: 'placesVisited', width: 28 },
     { key: 'fuelPumped', width: 14 },
     { key: 'fuelOrderNo', width: 16 },
+    { key: 'fullTank', width: 10 },
+    { key: 'pumpTiming', width: 12 },
   ];
 
   // Header row
@@ -87,6 +91,8 @@ export function generateAllTripsWorkbook(
       t.places_visited,
       t.fuel_pumped_amount ? roundToOneDecimal(t.fuel_pumped_amount) : 0,
       t.fuel_order_no ?? '',
+      t.is_full_tank ? 'YES' : '',
+      (t.fuel_pumped_amount ?? 0) > 0 ? (t.pump_timing ?? 'END') : '',
     ]);
 
     row.eachCell((cell, colNum) => {
@@ -256,6 +262,8 @@ export function parseExcelTime(v: any): string {
 
 const FUEL_PUMPED_ALIASES = new Set(['fuelpumped', 'fueldrawn', 'fueldraw', 'fuelpumpeddrawn', 'drawn', 'fuelpumpedl', 'fueldrawnl']);
 const TYPE_ALIASES = new Set(['type', 'triptype', 'privateofficial', 'privateofficialstatus', 'status', 'triptypestatus', 'officialprivate']);
+const FULL_TANK_ALIASES = new Set(['fulltank', 'full', 'isfull', 'isfulltank', 'fulltankflag', 'fulltanked']);
+const PUMP_TIMING_ALIASES = new Set(['pumptiming', 'fueltiming', 'pumpat', 'fueledat', 'fuelattiming', 'timing', 'startend', 'pumptimimg']);
 
 function normHeader(h: string): string { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
@@ -270,14 +278,21 @@ export function validateHeaders(rowValues: string[]): boolean {
   while (trimmed.length > 0 && String(trimmed[trimmed.length - 1]).trim() === '') {
     trimmed.pop();
   }
-  if (trimmed.length !== ALL_TRIPS_HEADERS.length) return false;
+  // Allow 10-col legacy (without Full Tank/Pump Timing), 11-col (without Pump Timing) or 12-col
+  if (trimmed.length !== ALL_TRIPS_HEADERS.length && trimmed.length !== ALL_TRIPS_HEADERS.length - 1 && trimmed.length !== ALL_TRIPS_HEADERS.length - 2) return false;
   const expectedNorm = ALL_TRIPS_HEADERS.map(h => normHeader(h));
   const actualNorm = trimmed.map(v => normHeader(v));
-  return expectedNorm.every((exp, idx) => {
-    if (idx === 6) return actualNorm[idx] === exp || TYPE_ALIASES.has(actualNorm[idx]);
-    if (idx === 8) return actualNorm[idx] === exp || FUEL_PUMPED_ALIASES.has(actualNorm[idx]);
-    return actualNorm[idx] === exp;
-  });
+  const len = trimmed.length;
+  for (let idx = 0; idx < len; idx++) {
+    const exp = expectedNorm[idx];
+    const act = actualNorm[idx];
+    if (idx === 6) { if (!(act === exp || TYPE_ALIASES.has(act))) return false; }
+    else if (idx === 8) { if (!(act === exp || FUEL_PUMPED_ALIASES.has(act))) return false; }
+    else if (idx === 10) { if (!(act === exp || FULL_TANK_ALIASES.has(act))) return false; }
+    else if (idx === 11) { if (!(act === exp || PUMP_TIMING_ALIASES.has(act))) return false; }
+    else if (act !== exp) return false;
+  }
+  return true;
 }
 
 export function validateLeavesHeaders(rowValues: string[]): boolean {
@@ -455,6 +470,8 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
     const placesVisited = getVal(8);
     const fuelPumpedStr = getVal(9);
     const fuelOrderNo = getVal(10);
+    const fullTankStr = getVal(11);
+    const pumpTimingStr = getVal(12);
 
     // Skip trailing/empty rows
     if (!dateStr && !startKmStr && !endKmStr && !endTimeStr && !placesVisited && !fuelPumpedStr) {
@@ -490,6 +507,25 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
 
     const tripType = typeStr.toLowerCase().includes('priv') ? 'Private' : 'Official';
     const fuelPumped = parseFloatNum(fuelPumpedStr);
+    const fullTankVal = (() => {
+      const s = String(fullTankStr ?? '').trim().toLowerCase();
+      if (!s) return false;
+      if (['yes','y','true','1','full','fulltank','★','*','full tank','full_tank'].includes(s)) return true;
+      if (['no','n','false','0',''].includes(s)) return false;
+      return false;
+    })();
+    if (fullTankVal && !(fuelPumped > 0)) {
+      errors.push({ row: rowIdx, field: 'Full Tank', message: 'Full Tank requires Fuel Pumped > 0' });
+    }
+    const pumpTimingVal: 'START' | 'END' = (() => {
+      const s = String(pumpTimingStr ?? '').trim().toLowerCase();
+      if (!s) return 'END';
+      if (['start','s','fuel at start','pump at start','fueled at start','start tank'].includes(s)) return 'START';
+      if (['end','e','fuel at end','pump at end','fueled at end','end tank'].includes(s)) return 'END';
+      // unknown -> END with no hard reject (warn via note but not error)
+      return 'END';
+    })();
+    // Guard: pump timing only meaningful when pumped, but we store anyway; distance≤20 will be ignored in estimation
 
     // Canonical Estimated Start Time: fill when source Start Time empty but End Time + distance estimatable (Q1/Q2)
     let effectiveStart = startTimeStr;
@@ -509,6 +545,8 @@ export async function parseAllTripsWorkbook(buffer: ArrayBuffer): Promise<Import
       places_visited: placesVisited,
       fuel_pumped_amount: isNaN(fuelPumped) ? 0 : roundToOneDecimal(fuelPumped),
       fuel_order_no: fuelOrderNo || undefined,
+      is_full_tank: fullTankVal,
+      pump_timing: pumpTimingVal,
     });
   });
 
@@ -597,6 +635,8 @@ function createTripFromPartial(partial: Partial<Trip>, vehicleId: string, pageId
     places_visited: partial.places_visited ?? '',
     fuel_pumped_amount: partial.fuel_pumped_amount,
     fuel_order_no: partial.fuel_order_no,
+    is_full_tank: partial.is_full_tank ?? false,
+    pump_timing: (partial.fuel_pumped_amount ?? 0) > 0 ? (partial.pump_timing ?? 'END') : 'END',
   };
 }
 
@@ -743,14 +783,18 @@ export function importTripsFromWorkbook(params: {
       const existing = currentTripsForUpdate[existingIdx];
       const incomingFuel = trip.fuel_pumped_amount;
       const incomingOrderNo = trip.fuel_order_no;
+      const incomingFull = trip.is_full_tank;
+      const incomingTiming = trip.pump_timing;
       // Only fields present in import can trigger an update; empty cells keep existing value
       const sameFuel = incomingFuel === undefined || (existing.fuel_pumped_amount ?? 0) === incomingFuel;
       const sameOrder = incomingOrderNo === undefined || (existing.fuel_order_no ?? '') === incomingOrderNo;
+      const sameFull = incomingFull === undefined || !!existing.is_full_tank === !!incomingFull;
+      const sameTiming = incomingTiming === undefined || (existing.pump_timing ?? 'END') === incomingTiming;
       const sameStart = trip.start_time === undefined || (existing.start_time ?? '') === trip.start_time;
       const sameEnd = trip.end_time === undefined || (existing.end_time ?? '') === trip.end_time;
       const sameType = trip.trip_type === undefined || (existing.trip_type ?? 'Official') === trip.trip_type;
       const samePlaces = trip.places_visited === undefined || (existing.places_visited ?? '') === trip.places_visited;
-      if (sameFuel && sameOrder && sameStart && sameEnd && sameType && samePlaces) {
+      if (sameFuel && sameOrder && sameFull && sameTiming && sameStart && sameEnd && sameType && samePlaces) {
         skippedDuplicates++;
         continue;
       }
@@ -763,6 +807,8 @@ export function importTripsFromWorkbook(params: {
         places_visited: trip.places_visited ?? existing.places_visited,
         fuel_pumped_amount: incomingFuel !== undefined ? incomingFuel : existing.fuel_pumped_amount,
         fuel_order_no: incomingOrderNo !== undefined ? incomingOrderNo : existing.fuel_order_no,
+        is_full_tank: incomingFull !== undefined ? !!incomingFull : !!existing.is_full_tank,
+        pump_timing: incomingTiming !== undefined ? incomingTiming : existing.pump_timing ?? 'END',
       };
       updatedCount++;
       // Also keep duplicate set in sync so a second imported row with same odo doesn't create a new trip

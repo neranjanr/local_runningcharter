@@ -72,6 +72,8 @@ export function buildDbBufferRows(dbTrips: Trip[]): BufferTrip[] {
     places_visited: t.places_visited,
     fuel_pumped_amount: t.fuel_pumped_amount != null ? roundToOneDecimal(t.fuel_pumped_amount) : 0,
     fuel_order_no: t.fuel_order_no || '',
+    is_full_tank: !!t.is_full_tank,
+    pump_timing: (t.pump_timing as 'START' | 'END') ?? 'END',
   }));
 }
 

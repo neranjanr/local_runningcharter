@@ -5,7 +5,7 @@
  * Headers validated order-enforced case-insensitive; Type col accepts alias; Fuel col accepts Fuel Drawn alias.
  * Second sheet "Leaves" with Date | Note (aliases Notes/Remark/Remarks/Leave Note) is managed for dual-sheet sync.
  */
-const HEADERS = ['Date','Start KM','End KM','Distance','Start Time','End Time','Private / Official','Places Visited','Fuel Pumped','Fuel Order No'];
+const HEADERS = ['Date','Start KM','End KM','Distance','Start Time','End Time','Private / Official','Places Visited','Fuel Pumped','Fuel Order No','Full Tank','Pump Timing'];
 const SHEET_NAME = 'All Trips';
 const LEAVES_HEADERS = ['Date','Note'];
 const LEAVES_SHEET_NAME = 'Leaves';
@@ -52,6 +52,8 @@ function doGet(e){
       places_visited: String(r[7]||''),
       fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
       fuel_order_no: String(r[9]||''),
+      is_full_tank: (function(v){ var s=String(v||'').trim().toLowerCase(); return ['yes','y','true','1','full','★'].indexOf(s)>=0; })(r[10]),
+      pump_timing: (function(v){ var s=String(v||'').trim().toLowerCase(); return s==='start'||s==='s' ? 'START' : 'END'; })(r[11]),
     })).filter(r => r.date && r.places_visited);
     return json_({ rows });
   }
@@ -74,6 +76,8 @@ function doGet(e){
         places_visited: String(r[7]||''),
         fuel_pumped_amount: Number(r[8]) ? round1_(r[8]) : 0,
         fuel_order_no: String(r[9]||''),
+        is_full_tank: (function(v){ var s=String(v||'').trim().toLowerCase(); return ['yes','y','true','1','full','★'].indexOf(s)>=0; })(r[10]),
+        pump_timing: (function(v){ var s=String(v||'').trim().toLowerCase(); return s==='start'||s==='s' ? 'START' : 'END'; })(r[11]),
       }));
     }
     // Leaves sheet
@@ -138,6 +142,9 @@ function doPost(e){
             var eKm = roundIntKm_(t.end_km);
             var dist = roundIntKm_(t.trip_distance != null ? t.trip_distance : (eKm - sKm));
             var fuel = t.fuel_pumped_amount != null && Number(t.fuel_pumped_amount) !== 0 ? round1_(t.fuel_pumped_amount) : 0;
+            var isFull = t.is_full_tank ? 'YES' : '';
+            var timing = (t.pump_timing === 'START' && fuel>0) ? 'START' : 'END';
+            if (fuel===0) timing = '';
             return [
               String(t.date||''),
               sKm,
@@ -149,6 +156,8 @@ function doPost(e){
               String(t.places_visited||''),
               fuel,
               String(t.fuel_order_no||''),
+              isFull,
+              timing,
             ];
           });
           sh.getRange(2, 1, values.length, HEADERS.length).setValues(values);
@@ -203,6 +212,8 @@ function doPost(e){
       places,
       t.fuel_pumped_amount != null && Number(t.fuel_pumped_amount) !== 0 ? round1_(t.fuel_pumped_amount) : 0,
       String(t.fuel_order_no||''),
+      t.is_full_tank ? 'YES' : '',
+      (t.fuel_pumped_amount != null && Number(t.fuel_pumped_amount) !== 0 && String(t.pump_timing||'').toUpperCase()==='START') ? 'START' : ((t.fuel_pumped_amount != null && Number(t.fuel_pumped_amount) !== 0) ? 'END' : ''),
     ]);
     // Format int cols as 0, fuel as 0.0
     const lr = sh.getLastRow();
@@ -222,7 +233,12 @@ function ensureHeaders_(sh){
   }
   const h = sh.getRange(1,1,1,HEADERS.length).getValues()[0].map(v=>String(v).trim());
   const norm = s=>String(s).toLowerCase().replace(/[^a-z0-9]/g,'');
-  const ok = HEADERS.every((exp,i)=> norm(h[i])===norm(exp) || (i===6 && ['type','triptype','privateofficial'].includes(norm(h[i]))) || (i===8 && ['fuelpumped','fueldrawn'].includes(norm(h[i]))));
+  // allow 10-col legacy (no Full Tank) for back-compat
+  var expLen = HEADERS.length;
+  if (h.length === expLen - 1 && norm(h[expLen-1]) !== norm(HEADERS[expLen-1])) {
+    // legacy 10-col already covered
+  }
+  const ok = (h.length >= expLen - 2 && h.length <= expLen) && HEADERS.slice(0, h.length).every(function(exp,i){ return norm(h[i])===norm(exp) || (i===6 && ['type','triptype','privateofficial'].indexOf(norm(h[i]))>=0) || (i===8 && ['fuelpumped','fueldrawn'].indexOf(norm(h[i]))>=0) || (i===10 && ['fulltank','full','isfull'].indexOf(norm(h[i]))>=0) || (i===11 && ['pumptiming','fueltiming','pumpat','fueledat'].indexOf(norm(h[i]))>=0); });
   if (!ok) throw new Error('Header row mismatch. Expected: ' + HEADERS.join(' | '));
 }
 function ensureLeavesHeaders_(sh){

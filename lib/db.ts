@@ -132,6 +132,20 @@ try {
   if (!names.has('typical_economy_high')) db.exec("ALTER TABLE vehicles ADD COLUMN typical_economy_high REAL DEFAULT 9.0");
 } catch {}
 
+// Add is_full_tank to trips (ADR-0028)
+try {
+  const cols = db.prepare("PRAGMA table_info(trips)").all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('is_full_tank')) db.exec("ALTER TABLE trips ADD COLUMN is_full_tank INTEGER DEFAULT 0");
+} catch {}
+
+// Add pump_timing to trips (ADR-0030)
+try {
+  const cols = db.prepare("PRAGMA table_info(trips)").all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('pump_timing')) db.exec("ALTER TABLE trips ADD COLUMN pump_timing TEXT DEFAULT 'END'");
+} catch {}
+
 // Seed or upsert default super admin
 db.prepare(`
   INSERT INTO super_admin (id, username, password_hash, must_change_password, totp_enabled)

@@ -44,6 +44,8 @@ export interface Trip {
   places_visited: string;
   fuel_pumped_amount?: number;
   fuel_order_no?: string;
+  is_full_tank?: boolean;
+  pump_timing?: 'START' | 'END';
   created_at?: string;
 }
 

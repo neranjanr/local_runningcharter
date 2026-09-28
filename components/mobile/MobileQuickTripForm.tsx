@@ -21,7 +21,7 @@ import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 type BufferTrip = {
   date: string; start_km: number; end_km: number; trip_distance: number;
   start_time: string; end_time: string; trip_type: 'Official'|'Private';
-  places_visited: string; fuel_pumped_amount?: number; fuel_order_no?: string;
+  places_visited: string; fuel_pumped_amount?: number; fuel_order_no?: string; is_full_tank?: boolean; pump_timing?: 'START' | 'END';
 };
 
 const QUEUE_KEY='mobile.queue';
@@ -40,6 +40,8 @@ export default function MobileQuickTripForm(){
   const [placesVisited,setPlacesVisited]=useState('');
   const [fuelPumped,setFuelPumped]=useState('');
   const [fuelOrderNo,setFuelOrderNo]=useState('');
+  const [isFullTank,setIsFullTank]=useState(false);
+  const [pumpTiming,setPumpTiming]=useState<'START'|'END'>('END');
   const [isAutoStart,setIsAutoStart]=useState(true);
   const [last10,setLast10]=useState<BufferTrip[]>([]);
   const [queueLen,setQueueLen]=useState(0);
@@ -117,7 +119,7 @@ export default function MobileQuickTripForm(){
   };
 
   const handleClear = () => {
-    setEndKm(''); setDistance(''); setPlacesVisited(''); setFuelPumped(''); setFuelOrderNo(''); setStartTime(''); setDuration(''); setEndTime(getCurrentTimeString()); setMsg(null);
+    setEndKm(''); setDistance(''); setPlacesVisited(''); setFuelPumped(''); setFuelOrderNo(''); setIsFullTank(false); setPumpTiming('END'); setStartTime(''); setDuration(''); setEndTime(getCurrentTimeString()); setMsg(null);
   };
 
   const onSubmit=async(e:React.FormEvent)=>{
@@ -128,7 +130,8 @@ export default function MobileQuickTripForm(){
     if(!date||!endTime){ setMsg({t:'err',m:'Date and End Time required'}); return; }
     if(eKm < sKm){ setMsg({t:'err',m:'End KM cannot be < Start KM'}); return; }
     setSaving(true);
-    const trip: BufferTrip={ date, start_km: roundToIntegerKm(sKm), end_km: roundToIntegerKm(eKm), trip_distance: roundToIntegerKm(dist), start_time: startTime||'', end_time: endTime, trip_type: tripType, places_visited: placesVisited, fuel_pumped_amount: fuelPumped?roundToOneDecimal(parseFloat(fuelPumped)):0, fuel_order_no: fuelOrderNo };
+    const pumpedVal = fuelPumped?roundToOneDecimal(parseFloat(fuelPumped)):0;
+    const trip: BufferTrip={ date, start_km: roundToIntegerKm(sKm), end_km: roundToIntegerKm(eKm), trip_distance: roundToIntegerKm(dist), start_time: startTime||'', end_time: endTime, trip_type: tripType, places_visited: placesVisited, fuel_pumped_amount: pumpedVal, fuel_order_no: fuelOrderNo, is_full_tank: pumpedVal>0?isFullTank:false, pump_timing: pumpedVal>0?pumpTiming:'END' };
     try{
       const online=navigator.onLine;
       const {scriptUrl:u}=getSettings();
@@ -145,7 +148,7 @@ export default function MobileQuickTripForm(){
       setMsg({t:'ok',m:(err as Error).message==='offline'?'Offline — queued locally, will sync when online':'Queued locally (sheet unreachable) — will sync'});
     }finally{ setSaving(false);
       setStartKm(String(roundToIntegerKm(parseIntKm(endKm)||trip.end_km)));
-      setIsAutoStart(true); setEndKm(''); setDistance(''); setPlacesVisited(''); setFuelPumped(''); setFuelOrderNo(''); setStartTime(''); setDuration(''); setEndTime(getCurrentTimeString());
+      setIsAutoStart(true); setEndKm(''); setDistance(''); setPlacesVisited(''); setFuelPumped(''); setFuelOrderNo(''); setIsFullTank(false); setPumpTiming('END'); setStartTime(''); setDuration(''); setEndTime(getCurrentTimeString());
       setTimeout(()=>setMsg(null),4000);
     }
   };
@@ -312,9 +315,18 @@ export default function MobileQuickTripForm(){
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <div className="relative"><input type="number" step="0.1" value={fuelPumped} onChange={e=>setFuelPumped(e.target.value)} placeholder="Pumped (L) e.g. 35.0" className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" /><span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span></div>
+              <div className="relative"><input type="number" step="0.1" value={fuelPumped} onChange={e=>{setFuelPumped(e.target.value); const v=parseFloat(e.target.value); if(!v||v<=0) { setIsFullTank(false); setPumpTiming('END'); }}} placeholder="Pumped (L) e.g. 35.0" className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" /><span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">LTR</span></div>
             </div>
             <div><input value={fuelOrderNo} onChange={e=>setFuelOrderNo(e.target.value)} placeholder="Order # e.g. #FO-88912" className="w-full bg-white border border-slate-300 rounded-md py-1 px-2 font-mono text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500 h-8" /></div>
+          </div>
+          <label className={`mt-2 inline-flex items-center gap-1.5 text-xs font-semibold select-none ${(!fuelPumped||parseFloat(fuelPumped)<=0)?'opacity-50 cursor-not-allowed':'cursor-pointer text-slate-700'}`}>
+            <input type="checkbox" checked={isFullTank} disabled={!fuelPumped||parseFloat(fuelPumped)<=0} onChange={e=>setIsFullTank(e.target.checked)} className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+            <span className="flex items-center gap-1">★ Full tank <span className="text-[10px] font-normal text-slate-500">(filled to full)</span></span>
+          </label>
+          <div className={`mt-2 flex items-center gap-2 ${(!fuelPumped||parseFloat(fuelPumped)<=0)?'opacity-50 pointer-events-none':''}`}>
+            <span className="text-xs font-semibold text-slate-700">Fueled at:</span>
+            <label className="inline-flex items-center gap-1 text-xs cursor-pointer"><input type="radio" name="m-pump-timing" value="END" checked={pumpTiming==='END'} disabled={!fuelPumped||parseFloat(fuelPumped)<=0} onChange={()=>setPumpTiming('END')} className="w-3.5 h-3.5 text-brand-600" /><span>End</span></label>
+            <label className="inline-flex items-center gap-1 text-xs cursor-pointer"><input type="radio" name="m-pump-timing" value="START" checked={pumpTiming==='START'} disabled={!fuelPumped||parseFloat(fuelPumped)<=0} onChange={()=>setPumpTiming('START')} className="w-3.5 h-3.5 text-brand-600" /><span>Start</span></label>
           </div>
         </section>
       </form>
