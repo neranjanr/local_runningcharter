@@ -110,4 +110,41 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       expect(seg.suggestedStrict).toBeCloseTo(seg.suggested, 5);
     }
   });
+
+  it('shows exactly one range per consecutive fuel-in, from pump date to next pump date', () => {
+    // Pump on 03-03 with no trips until 12-03, next pump on 15-03 marked START.
+    // The first segment must read 03-03 -> 15-03 (not 12-03 -> 14-03).
+    const trips: Trip[] = [
+      trip({ id: 't1', date: '2024-03-03', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 56 }),
+      trip({ id: 't2', date: '2024-03-12', start_km: 50, end_km: 100, trip_distance: 50, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-03-15', start_km: 100, end_km: 140, trip_distance: 40, fuel_pumped_amount: 61, pump_timing: 'START', trip_index: 3 }),
+      trip({ id: 't4', date: '2024-03-20', start_km: 140, end_km: 200, trip_distance: 60, trip_index: 4 }),
+    ];
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    // Exactly one segment per fuel-in date (two pumps -> two segments).
+    expect(est.length).toBe(2);
+    expect(est[0].fromDate).toBe('2024-03-03');
+    expect(est[0].toDate).toBe('2024-03-15');
+    expect(est[1].fromDate).toBe('2024-03-15');
+    // Ranges are contiguous and non-overlapping: no range nested inside another.
+    expect(est[0].toDate).toBe(est[1].fromDate);
+    // No stray 12-03 -> 14-03 range.
+    expect(est.some(s => s.fromDate === '2024-03-12')).toBe(false);
+  });
+
+  it('collapses same-day multiple pumps into one range', () => {
+    const trips: Trip[] = [
+      trip({ id: 't1', date: '2024-03-03', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 30, trip_index: 1 }),
+      trip({ id: 't2', date: '2024-03-03', start_km: 50, end_km: 120, trip_distance: 70, fuel_pumped_amount: 26, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-03-15', start_km: 120, end_km: 200, trip_distance: 80, fuel_pumped_amount: 61, trip_index: 3 }),
+      trip({ id: 't4', date: '2024-03-20', start_km: 200, end_km: 260, trip_distance: 60, trip_index: 4 }),
+    ];
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    // Two distinct fuel-in dates -> two ranges; the same-day pumps are merged.
+    expect(est.length).toBe(2);
+    expect(est[0].fromDate).toBe('2024-03-03');
+    expect(est[0].toDate).toBe('2024-03-15');
+    expect(est[0].fuelFed).toBeCloseTo(56, 1);
+    expect(est[1].fromDate).toBe('2024-03-15');
+  });
 });

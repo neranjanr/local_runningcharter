@@ -207,12 +207,35 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const segTrips = sortedTrips.slice(start, end + 1);
     const distance = roundToIntegerKm(segTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
     const fuelFed = roundToOneDecimal(srcTrip.fuel_pumped_amount ?? 0);
-    const fromDate = segTrips[0]?.date ?? srcTrip.date;
-    const toDate = segTrips[segTrips.length - 1]?.date ?? srcTrip.date;
+    // Segment spans consecutive fuel-in dates: from this pump's date to the next pump's date
+    // (inclusive), so exactly one range appears between two consecutive fuel-ins regardless
+    // of pump timing or how many days later the next trip is recorded.
+    const fromDate = srcTrip.date;
+    const toDate = nextIdx !== undefined
+      ? sortedTrips[nextIdx].date
+      : (segTrips.length > 0 ? segTrips[segTrips.length - 1].date : srcTrip.date);
     builtSegs.push({ start, end, sourceIdx: srcIdx, trips: segTrips, fromDate, toDate, distance, fuelFed, isFullTank: !!srcTrip.is_full_tank, pumpTiming: (srcTrip.pump_timing ?? 'END') as 'START'|'END', nextSrcIdx: nextIdx });
   }
 
-  const firstStart = builtSegs.length > 0 ? builtSegs[0].start : (pumpIndices[0] + 1);
+  // Collapse same-day multiple pumps into a single range: there is only ever one
+  // Fuel-In Segment between two consecutive fuel-in dates.
+  const mergedSegs: BuiltSeg[] = [];
+  for (const seg of builtSegs) {
+    const last = mergedSegs[mergedSegs.length - 1];
+    if (last && last.fromDate === seg.fromDate) {
+      last.end = seg.end;
+      last.trips = sortedTrips.slice(last.start, last.end + 1);
+      last.distance = roundToIntegerKm(last.trips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
+      last.fuelFed = roundToOneDecimal(last.fuelFed + seg.fuelFed);
+      last.isFullTank = last.isFullTank || seg.isFullTank;
+      last.nextSrcIdx = seg.nextSrcIdx;
+      last.toDate = seg.toDate;
+    } else {
+      mergedSegs.push({ ...seg });
+    }
+  }
+
+  const firstStart = mergedSegs.length > 0 ? mergedSegs[0].start : (pumpIndices[0] + 1);
   const initialTrips = sortedTrips.slice(0, firstStart);
   if (initialTrips.length > 0) {
     runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy!);
@@ -222,8 +245,8 @@ function runEstimationPass(params: PassParams): PassSegment[] {
   const results: PassSegment[] = [];
   const safeWin = getSafeWindow(vehicle);
 
-  for (let segIdx = 0; segIdx < builtSegs.length; segIdx++) {
-    const seg = builtSegs[segIdx];
+  for (let segIdx = 0; segIdx < mergedSegs.length; segIdx++) {
+    const seg = mergedSegs[segIdx];
     const segmentTrips = seg.trips;
     const totalDist = seg.distance;
     const fuelFed = seg.fuelFed;
