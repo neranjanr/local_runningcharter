@@ -177,8 +177,8 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
         <span>Estimate Fuel Economies</span>
       </button>
       {open && estimates && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
-          <div className="bg-paper-sheet rounded-xl shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto" onClick={() => setOpen(false)}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl w-full max-w-[96vw] max-h-[92vh] flex flex-col my-auto" onClick={(e) => e.stopPropagation()}>
             <div className="p-4 border-b border-rule-line flex items-center justify-between gap-3">
               <div className="flex-1">
                 <h3 className="text-sm font-bold text-on-surface">Estimated Fuel Economies — per Fuel-In Segment</h3>
