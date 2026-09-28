@@ -241,6 +241,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy!);
   }
   const posBeforeFirstSeg = runningPos;
+  const initialPrevEconomy = prevEconomy;
 
   const results: PassSegment[] = [];
   const safeWin = getSafeWindow(vehicle);
@@ -342,8 +343,12 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     }
 
     // Non Full->Full: choose by mode.
+    // Normal caps the step from the previous economy (MAX_STEP) so the sequence
+    // stays smooth even when feasibility would force a jump; the segment is then
+    // flagged infeasible with a warning. Strict stays feasibility-first.
+    const MAX_STEP = 1.5;
     let bestE = candidatePrev;
-    const foundFeasible = feasibleEs.length > 0;
+    let foundFeasible = feasibleEs.length > 0;
     let warning: string | undefined;
     if (feasibleEs.length > 0) {
       if (strict && nextIsFull) {
@@ -359,8 +364,18 @@ function runEstimationPass(params: PassParams): PassSegment[] {
         const postPump = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
         if (postPump < strictMin) warning = `Strict: post-pump balance ${postPump.toFixed(1)}L below full-tank window [${strictMin.toFixed(1)}, ${tankCapacity.toFixed(1)}]L — nearest feasible suggested`;
       } else {
+        // Normal: nearest feasible to the previous economy, but cap the step.
+        let nearest = candidatePrev;
         let bestDist = Infinity;
-        for (const e of feasibleEs) { const d = Math.abs(e - candidatePrev); if (d < bestDist - 1e-9) { bestDist = d; bestE = e; } }
+        for (const e of feasibleEs) { const d = Math.abs(e - candidatePrev); if (d < bestDist - 1e-9) { bestDist = d; nearest = e; } }
+        const step = nearest - candidatePrev;
+        if (!strict && Math.abs(step) > MAX_STEP + 1e-9) {
+          bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * MAX_STEP);
+          foundFeasible = false;
+          warning = `Step capped at ${MAX_STEP.toFixed(1)} km/L from ${candidatePrev.toFixed(1)} (nearest feasible ${nearest.toFixed(1)}) — balance may leave [1, ${tankCapacity.toFixed(1)}]L`;
+        } else {
+          bestE = nearest;
+        }
       }
     } else {
       let bestScore = Infinity;
@@ -370,12 +385,18 @@ function runEstimationPass(params: PassParams): PassSegment[] {
         const score = v + Math.abs(e - candidatePrev) * 0.01;
         if (score < bestScore - 1e-9) { bestScore = score; bestE = e; }
       }
-      warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — nearest ${roundToOneDecimal(bestE).toFixed(1)} km/L suggested (check KM/fuel gaps)`;
+      const step = bestE - candidatePrev;
+      if (!strict && Math.abs(step) > MAX_STEP + 1e-9) {
+        bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * MAX_STEP);
+        warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — step capped to ${roundToOneDecimal(bestE).toFixed(1)} km/L (check KM/fuel gaps)`;
+      } else {
+        warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — nearest ${roundToOneDecimal(bestE).toFixed(1)} km/L suggested (check KM/fuel gaps)`;
+      }
     }
     const suggested = roundToOneDecimal(bestE);
     if (foundFeasible) {
       const distFromPrev = Math.abs(suggested - candidatePrev);
-      if (distFromPrev > 3 && !(strict && nextIsFull)) warning = `Large step from ${candidatePrev.toFixed(1)} to ${suggested.toFixed(1)} to stay feasible`;
+      if (distFromPrev > 3) warning = `Large step from ${candidatePrev.toFixed(1)} to ${suggested.toFixed(1)} (Strict full-tank target)`;
       const lowSafe = safeWin.low - safeWin.margin;
       const highSafe = safeWin.high + safeWin.margin;
       if (suggested < lowSafe || suggested > highSafe) {
@@ -395,7 +416,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const original = results.map(r => r.suggested);
     for (let i = 1; i < results.length - 1; i++) {
       const r = results[i];
-      if (r.isFullToFull || r.isFullTank || r.nextIsFull) continue;
+      if (!r.feasible || r.isFullToFull || r.isFullTank || r.nextIsFull) continue;
       const p = results[i - 1];
       const n = results[i + 1];
       if (p.isFullToFull || p.isFullTank || p.nextIsFull || n.isFullToFull || n.isFullTank || n.nextIsFull) continue;
@@ -415,6 +436,14 @@ function runEstimationPass(params: PassParams): PassSegment[] {
         pos = simulateFinalBalance(r.trips, pos, r.suggested);
       }
     }
+  }
+
+  // Keep the displayed "previous economy" chain consistent with the final
+  // suggestions (smoothing may have moved an earlier segment's value).
+  let chainPrev = initialPrevEconomy;
+  for (const r of results) {
+    r.prevEconomy = chainPrev;
+    chainPrev = r.suggested;
   }
 
   return results;

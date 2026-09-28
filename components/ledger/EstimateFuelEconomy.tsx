@@ -44,10 +44,29 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     return map;
   };
 
+  const buildAppliedSeed = (): number[] | undefined => {
+    const entries: { date: string; econ: number }[] = [];
+    for (const p of pages) {
+      const arr = getFuelEconomiesForPage(p.id);
+      const pageTrips = trips.filter(t => t.page_id === p.id);
+      const distinct = getDistinctDates(pageTrips);
+      const locks = getFuelLocksForPage(p.id);
+      distinct.forEach((d, idx) => {
+        if (arr[idx] != null && !locks[idx]) entries.push({ date: d, econ: arr[idx] as number });
+      });
+    }
+    if (entries.length === 0) return undefined;
+    entries.sort((a, b) => a.date.localeCompare(b.date));
+    // Seed the chain from the earliest written (unlocked) economy; the estimator
+    // still re-estimates every unlocked segment, but stays anchored to the book.
+    return [entries[0].econ];
+  };
+
   const runEstimate = () => {
     const lockedSet = (() => { try { return getLockedDates(); } catch { return new Set<string>(); } })();
     const lockedMap = buildLockedMap();
-    const est = estimateFuelEconomies({ trips, pages, vehicle, tankCapacityOverride: effTank, lockedDatesSet: lockedSet, lockedEconomyMap: lockedMap });
+    const prevEconomies = buildAppliedSeed();
+    const est = estimateFuelEconomies({ trips, pages, vehicle, tankCapacityOverride: effTank, prevEconomies, lockedDatesSet: lockedSet, lockedEconomyMap: lockedMap });
     setEstimates(est);
   };
 

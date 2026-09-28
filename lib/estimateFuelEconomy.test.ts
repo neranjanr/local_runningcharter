@@ -147,4 +147,22 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     expect(est[0].fuelFed).toBeCloseTo(56, 1);
     expect(est[1].fromDate).toBe('2024-03-15');
   });
+
+  it('Normal caps the step at 1.5 km/L while Strict stays feasibility-first', () => {
+    const trips: Trip[] = [
+      trip({ id: 't1', date: '2024-03-25', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 70, is_full_tank: true, trip_index: 1 }),
+      trip({ id: 't2', date: '2024-04-05', start_km: 50, end_km: 750, trip_distance: 700, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-04-10', start_km: 750, end_km: 800, trip_distance: 50, fuel_pumped_amount: 70, trip_index: 3 }),
+    ];
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    expect(est.length).toBe(2);
+    const seg0 = est[0];
+    // Feasibility floor is ~9.5 (75 L tank, 700 km before the 70 L fill), so Strict jumps to 9.5.
+    expect(seg0.suggestedStrict).toBeGreaterThanOrEqual(9.5 - 1e-6);
+    // Normal caps the step from the 7.8 seed at 1.5 -> 9.3 and flags it.
+    expect(seg0.suggested).toBeLessThanOrEqual(7.8 + 1.5 + 1e-6);
+    expect(seg0.suggestedStrict).toBeGreaterThan(seg0.suggested);
+    expect(seg0.feasible).toBe(false);
+    expect(seg0.warning ?? '').toContain('capped');
+  });
 });
