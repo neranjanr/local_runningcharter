@@ -176,7 +176,11 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
     // Segment 0 (20-02 -> 11-03) includes the 50 km and 150 km trips.
     expect(est[0].maxTripDistance).toBe(150);
+    expect(est[0].longTripCount).toBe(2);
+    expect(est[0].veryLongTripCount).toBe(1);
     // Segment 1 (11-03 -> end) includes only the 30 km trip.
     expect(est[1].maxTripDistance).toBe(30);
+    expect(est[1].longTripCount).toBe(0);
+    expect(est[1].veryLongTripCount).toBe(0);
   });
 });

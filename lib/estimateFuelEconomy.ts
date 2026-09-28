@@ -39,6 +39,10 @@ export interface SegmentEstimate {
   warningStrict?: string;
   /** Longest single Trip in the segment (Integer KM) — long runs usually give better economy. */
   maxTripDistance: number;
+  /** Number of Trips over 40 km in the segment. */
+  longTripCount: number;
+  /** Number of Trips 100 km or longer in the segment. */
+  veryLongTripCount: number;
 }
 
 interface PassSegment {
@@ -61,6 +65,8 @@ interface PassSegment {
   startPos: number;
   trips: Trip[];
   maxTripDistance: number;
+  longTripCount: number;
+  veryLongTripCount: number;
 }
 
 export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<string, number> }): FuelInSegmentInput[] {
@@ -270,12 +276,14 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const nextPumpIncluded = seg.nextSrcIdx !== undefined && !isStartMigrated(sortedTrips[seg.nextSrcIdx]);
     const isFullToFull = isFullTank && nextIsFull;
     const maxTripDistance = segmentTrips.reduce((m, t) => Math.max(m, roundToIntegerKm(t.trip_distance)), 0);
+    const longTripCount = segmentTrips.filter(t => roundToIntegerKm(t.trip_distance) > 40).length;
+    const veryLongTripCount = segmentTrips.filter(t => roundToIntegerKm(t.trip_distance) >= 100).length;
 
     const push = (suggested: number, feasible: boolean, feasibleMin: number | null, feasibleMax: number | null, warning?: string) => {
       results.push({
         fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date,
         isFullTank, pumpTiming, prevEconomy: prev, suggested, feasible, feasibleMin, feasibleMax, warning,
-        isFullToFull, nextIsFull, startPos, trips: segmentTrips, maxTripDistance,
+        isFullToFull, nextIsFull, startPos, trips: segmentTrips, maxTripDistance, longTripCount, veryLongTripCount,
       });
     };
 
@@ -493,6 +501,8 @@ export function estimateFuelEconomies(params: {
       warning: n.warning,
       warningStrict: s.warning,
       maxTripDistance: n.maxTripDistance,
+      longTripCount: n.longTripCount,
+      veryLongTripCount: n.veryLongTripCount,
     };
   });
 }

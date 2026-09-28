@@ -2074,11 +2074,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       {/* LedgerMasterTable — matches alltripsample */}
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden" data-purpose="ledger-table-container">
         <div ref={tableContainerRef} className={`overflow-x-auto overflow-y-auto ${compact ? 'max-h-[420px]' : 'max-h-[640px] min-h-[280px]'} relative`} style={{ scrollbarWidth: 'thin' }}>
-          <table className="w-full text-left border-collapse text-xs table-sticky-header">
+          <table className="w-full text-left border-collapse text-xs table-sticky-header [&_th]:px-1 [&_td]:px-1">
             <thead>
               <tr className="bg-slate-900 text-white border-b border-slate-800 uppercase font-semibold text-[11px] tracking-wider select-none sticky top-0 z-20 shadow-sm">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
-              <th className="py-2.5 px-2 border-r border-rule-line w-40">
+              <th className="py-2.5 px-1.5 border-r border-rule-line w-28">
                 <button onClick={() => handleSort('date')} className="flex items-center hover:text-on-surface">
                   Date <SortIcon col="date" />
                 </button>
@@ -2188,12 +2188,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                       const tip = !pred && !succ ? 'Click to edit date' : !pred ? `Click to edit — allowed up to ${succ?.date}` : !succ ? `Click to edit — allowed from ${pred?.date}` : `Click to edit — allowed ${pred.date} to ${succ.date} (ODO order cannot be changed)`;
                       return (
                         <span
-                          className="cursor-pointer hover:bg-surface-container-low rounded px-1 -mx-1 py-0.5 inline-flex items-center gap-1 text-[10px] uppercase tracking-tight text-on-surface-variant"
+                          className="cursor-pointer hover:bg-surface-container-low rounded px-1 -mx-1 py-0.5 inline-flex items-center gap-1 text-[10px] uppercase tracking-tight text-on-surface-variant whitespace-nowrap"
                           onClick={() => startEdit(t.id, 'date', t.date)}
                           title={tip}
                           data-testid={`date-cell-${t.id}`}
                         >
-                          {new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
+                          {new Date(t.date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}
                         </span>
                       );
                     })()}
