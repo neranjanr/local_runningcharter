@@ -7,6 +7,7 @@ import {
   getEarliestOverallDate,
   renumberPagesChronologically,
   getMonthKey,
+  validateFuelFeasibility,
 } from './pagination';
 import { getPages, savePage, createNextPage, updatePageEndValues } from './pageStore';
 import { roundToOneDecimal, roundToIntegerKm } from './tripCalculations';
@@ -149,6 +150,15 @@ export async function saveTrip(input: TripInput): Promise<Trip> {
     pump_timing: (input.fuel_pumped_amount ?? 0) > 0 ? (input.pump_timing ?? 'END') : 'END',
   };
 
+  const valRes = validateFuelFeasibility(
+    [...allTrips, newTrip],
+    vehicle.tank_capacity ?? 75,
+    pages.length > 0 ? pages[0].start_fuel_balance : (vehicle.current_fuel_level ?? 10)
+  );
+  if (!valRes.isValid) {
+    throw new Error(valRes.error);
+  }
+
   // Try API first
   try {
     const res = await apiFetch('/api/trips', { method: 'POST', body: JSON.stringify(newTrip) });
@@ -234,6 +244,18 @@ export async function updateTrip(tripId: string, fields: TripUpdateFields): Prom
     is_full_tank: fields.is_full_tank !== undefined ? !!fields.is_full_tank : existing.is_full_tank ?? false,
     pump_timing: fields.pump_timing !== undefined ? fields.pump_timing : existing.pump_timing ?? 'END',
   };
+
+  const updatedTrips = trips.map(t => t.id === tripId ? updated : t);
+  const vehicle = await getVehicleProfile();
+  const pages = await getPages();
+  const valRes = validateFuelFeasibility(
+    updatedTrips,
+    vehicle.tank_capacity ?? 75,
+    pages.length > 0 ? pages[0].start_fuel_balance : (vehicle.current_fuel_level ?? 10)
+  );
+  if (!valRes.isValid) {
+    throw new Error(valRes.error);
+  }
 
   // Try API first
   try {

@@ -56,6 +56,68 @@ export function calculateBalance(
   return roundToOneDecimal(Math.min(cap, raw));
 }
 
+export interface FuelValidationResult {
+  isValid: boolean;
+  error?: string;
+}
+
+export function validateFuelFeasibility(
+  trips: Trip[],
+  tankCapacity: number = 75,
+  openingFuel: number = 10,
+  defaultEconomy: number = 10.5
+): FuelValidationResult {
+  const cap = tankCapacity > 0 ? tankCapacity : 75;
+  const strictMin = Math.max(1, cap - 3);
+  let bal = roundToOneDecimal(openingFuel);
+  const sorted = [...trips].sort((a, b) => a.date.localeCompare(b.date) || a.start_km - b.start_km);
+
+  for (const t of sorted) {
+    const dist = roundToIntegerKm(t.trip_distance);
+    const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
+    const isFull = !!t.is_full_tank && pumped > 0;
+    const timing = t.pump_timing ?? 'END';
+    const consumed = calculateConsumed(dist, defaultEconomy);
+
+    if (pumped > 0 && timing === 'START' && dist > 20) {
+      const postPump = roundToOneDecimal(bal + pumped);
+      if (isFull) {
+        if (postPump < strictMin || postPump > cap) {
+          return {
+            isValid: false,
+            error: `Strict full-tank post-pump balance ${postPump.toFixed(1)}L at trip ${t.date} outside full-tank window [${strictMin.toFixed(1)}, ${cap.toFixed(1)}]L`,
+          };
+        }
+      }
+      bal = roundToOneDecimal(Math.min(cap, postPump));
+      bal = roundToOneDecimal(bal - consumed);
+    } else {
+      bal = roundToOneDecimal(bal - consumed);
+      if (pumped > 0) {
+        const postPump = roundToOneDecimal(bal + pumped);
+        if (isFull) {
+          if (postPump < strictMin || postPump > cap) {
+            return {
+              isValid: false,
+              error: `Strict full-tank post-pump balance ${postPump.toFixed(1)}L at trip ${t.date} outside full-tank window [${strictMin.toFixed(1)}, ${cap.toFixed(1)}]L`,
+            };
+          }
+        }
+        bal = roundToOneDecimal(Math.min(cap, postPump));
+      }
+    }
+
+    if (bal < 1 || bal > cap) {
+      return {
+        isValid: false,
+        error: `Intermediate fuel balance ${bal.toFixed(1)}L at trip ${t.date} outside [1, ${cap.toFixed(1)}]L range`,
+      };
+    }
+  }
+
+  return { isValid: true };
+}
+
 // ---------------------------------------------------------------------------
 // Page boundary validation
 // ---------------------------------------------------------------------------
