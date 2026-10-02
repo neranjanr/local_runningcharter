@@ -107,7 +107,7 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
     expect(est.length).toBeGreaterThan(0);
     for (const seg of est) {
-      expect(seg.suggestedStrict).toBeCloseTo(seg.suggested, 5);
+      expect(seg.suggestedStrict!).toBeCloseTo(seg.suggested!, 5);
     }
   });
 
@@ -216,7 +216,7 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     const seg0 = est[0];
     expect(seg0.suggested).toBeCloseTo(9.3, 5);
     expect(seg0.suggestedStrict).toBeCloseTo(9.4, 5);
-    expect(seg0.suggestedStrict).toBeGreaterThan(seg0.suggested);
+    expect(seg0.suggestedStrict!).toBeGreaterThan(seg0.suggested!);
   });
 
   it('reports the longest trip per segment for large-distance badges', () => {

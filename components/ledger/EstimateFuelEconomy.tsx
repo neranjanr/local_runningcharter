@@ -119,6 +119,7 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     const seg = estimates[idx];
     if (isSegmentLocked(seg)) return;
     const { val, wrote } = applySegment(seg, mode);
+    if (val === null) return;
     setApplyMsg(`Applied ${val.toFixed(1)} km/L (${mode === 'strict' ? 'Strict Full-Tank' : 'Normal'}) to ${formatDdMmYyyy(seg.fromDate)} → ${formatDdMmYyyy(seg.toDate)} (${wrote} day${wrote === 1 ? '' : 's'})`);
     onApplied?.();
     runEstimate();
@@ -241,7 +242,7 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                   <tbody className="divide-y divide-rule-line text-sm">
                     {estimates.map((e, idx) => {
                       const locked = isSegmentLocked(e);
-                      const sameSuggestion = Math.abs(e.suggested - e.suggestedStrict) < 0.05;
+                      const sameSuggestion = e.suggested !== null && e.suggestedStrict !== null && Math.abs(e.suggested - e.suggestedStrict) < 0.05;
                       return (
                       <tr key={e.fromDate} className={locked ? 'bg-slate-100 opacity-80' : e.feasible ? 'bg-white' : 'bg-amber-50'}>
                         <td className="py-2 px-2 text-center"><input type="checkbox" checked={selected.has(idx)} onChange={()=>toggleSelect(idx)} /></td>

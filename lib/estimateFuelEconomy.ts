@@ -337,7 +337,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const fuelFed = seg.fuelFed;
     const fromDate = seg.fromDate;
     const toDate = seg.toDate;
-    const prev = prevEconomy;
+    const prev: number | null = prevEconomy;
     const srcTrip = sortedTrips[seg.sourceIdx];
     const isFullTank = seg.isFullTank;
     const pumpTiming = seg.pumpTiming;
@@ -520,6 +520,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
       const n = results[i + 1];
       if (p.isFullToFull || p.isFullTank || p.nextIsFull || n.isFullToFull || n.isFullTank || n.nextIsFull) continue;
       if (r.feasibleMin === null || r.feasibleMax === null || r.trips.length === 0) continue;
+      if (p.suggested === null || n.suggested === null || r.suggested === null) continue;
       const avg = (p.suggested + n.suggested) / 2;
       if (Math.abs(avg - r.suggested) <= 0.3) continue;
       const cand = roundToOneDecimal(Math.min(r.feasibleMax, Math.max(r.feasibleMin, avg)));
@@ -529,10 +530,12 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.isFullTank) pos = tankCapacity;
-      if (r.trips.length > 0) {
+      if (r.trips.length > 0 && r.suggested !== null) {
         const v = simulateMaxViolation(r.trips, pos, r.suggested);
         if (v >= 1e-9) r.suggested = original[i];
-        pos = simulateFinalBalance(r.trips, pos, r.suggested);
+        if (r.suggested !== null) {
+          pos = simulateFinalBalance(r.trips, pos, r.suggested);
+        }
       }
     }
   }
@@ -542,7 +545,9 @@ function runEstimationPass(params: PassParams): PassSegment[] {
   let chainPrev = initialPrevEconomy;
   for (const r of results) {
     r.prevEconomy = chainPrev;
-    chainPrev = r.suggested;
+    if (r.suggested !== null) {
+      chainPrev = r.suggested;
+    }
   }
 
   return results;
