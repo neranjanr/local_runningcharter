@@ -263,11 +263,11 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                         </td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.fuelFed.toFixed(1)} L</td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.prevEconomy !== null ? e.prevEconomy.toFixed(1) : '—'}</td>
-                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700">{e.suggested !== null ? e.suggested.toFixed(1) : '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700" title={e.isGapSpan ? 'Economy not calculated — ODO gap' : undefined}>{e.suggested !== null ? e.suggested.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-center">
                           <button onClick={() => handleApply(idx, 'normal')} disabled={locked || e.suggested === null} className={`px-2 py-1 rounded text-xs font-semibold ${locked || e.suggested === null ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`} data-testid={`apply-normal-${idx}`}>Apply</button>
                         </td>
-                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`}>{e.suggestedStrict !== null ? e.suggestedStrict.toFixed(1) : '—'}</td>
+                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`} title={e.isGapSpan ? 'Economy not calculated — ODO gap' : undefined}>{e.suggestedStrict !== null ? e.suggestedStrict.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-center">
                           <button onClick={() => handleApply(idx, 'strict')} disabled={locked || e.suggestedStrict === null} className={`px-2 py-1 rounded text-xs font-semibold ${locked || e.suggestedStrict === null ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`} data-testid={`apply-strict-${idx}`}>Apply</button>
                         </td>
