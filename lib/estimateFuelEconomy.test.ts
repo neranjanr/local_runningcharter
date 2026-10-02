@@ -254,4 +254,41 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       expect(gs.suggestedStrict).toBeNull();
     }
   });
+
+  describe('Issue 3 — Raw Anchored Averages & Full-Tank Segmenting Engine', () => {
+    it('correctly bounds segments by Full Tank trips within islands and computes Raw economy (Di / Fi)', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, is_full_tank: true, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 300, trip_distance: 200, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-10', start_km: 300, end_km: 400, trip_distance: 100, fuel_pumped_amount: 25, is_full_tank: true, trip_index: 3 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(2);
+      expect(est[0].distance).toBe(300);
+      expect(est[0].isFullTank).toBe(true);
+      expect(est[0].suggested).toBeCloseTo(300 / 25, 1);
+    });
+
+    it('ensures locked economies take precedence over raw and estimated calculations', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, is_full_tank: true, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 300, trip_distance: 200, fuel_pumped_amount: 30, is_full_tank: true, trip_index: 2 }),
+      ];
+      const lockedDatesSet = new Set(['2024-03-01', '2024-03-05']);
+      const lockedEconomyMap = new Map<string, number>([['2024-03-01', 15.5]]);
+
+      const est = estimateFuelEconomies({
+        trips,
+        pages: [page],
+        vehicle,
+        tankCapacityOverride: 75,
+        lockedDatesSet,
+        lockedEconomyMap,
+      });
+
+      expect(est.length).toBeGreaterThan(0);
+      expect(est[0].suggested).toBe(15.5);
+      expect(est[0].warning).toContain('🔒 Locked');
+    });
+  });
 });
