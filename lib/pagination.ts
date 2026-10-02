@@ -46,9 +46,14 @@ export function calculateBalance(
   previousBalance: number,
   drawn: number,
   consumed: number,
-  inTank: number = 0
+  inTank: number = 0,
+  tankCapacity: number = 75,
+  isFullTank: boolean = false
 ): number {
-  return roundToOneDecimal(previousBalance + inTank + drawn - consumed);
+  const cap = tankCapacity > 0 ? tankCapacity : 75;
+  let base = isFullTank && drawn > 0 ? cap : previousBalance + inTank + drawn;
+  const raw = base - consumed;
+  return roundToOneDecimal(Math.min(cap, raw));
 }
 
 // ---------------------------------------------------------------------------
@@ -239,8 +244,10 @@ export function recalculatePageBalancesFromOpening(params: {
   opening: BookOpening;
   economy?: number;
   inTanksByPage?: Record<string, (number | null | undefined)[]>;
+  tankCapacity?: number;
 }): BookPage[] {
-  const { trips, opening, economy = 10.5, inTanksByPage } = params;
+  const { trips, opening, economy = 10.5, inTanksByPage, tankCapacity = 75 } = params;
+  const cap = tankCapacity > 0 ? tankCapacity : 75;
   const sorted = [...params.pages].sort((a, b) => a.page_number - b.page_number);
   if (sorted.length === 0) return [];
 
@@ -261,26 +268,22 @@ export function recalculatePageBalancesFromOpening(params: {
 
     const pageTrips = trips
       .filter((t) => {
-        // Trips may still reference old ids if not yet renumbered; handle both by matching against original page ids mapping?
-        // In the recalc-after-renumber case, trips already have new page ids.
-        // Fallback: if trips filtered empty, try to find trips that belong to this page via sorted index? But we require caller to pass renumbered trips.
         return t.page_id === page.id;
       })
       .sort((a, b) => a.date.localeCompare(b.date) || a.trip_index - b.trip_index);
-
-    // Alternative fallback: if no trips matched but page was renumbered, try to match by earliest date coincidence.
-    // For now, if no trips matched, we keep end = start.
 
     let totalDistance = 0;
     let totalDrawn = 0;
     let totalInTank = 0;
     let endKm = page.start_km;
+    let isFullTank = false;
 
     if (pageTrips.length > 0) {
       totalDistance = pageTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0);
       totalDrawn = roundToOneDecimal(
         pageTrips.reduce((s, t) => s + roundToOneDecimal(t.fuel_pumped_amount ?? 0), 0)
       );
+      isFullTank = pageTrips.some(t => !!t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0);
       // Sum In-Tank per distinct date for this page if provided
       if (inTanksByPage && inTanksByPage[page.id]) {
         const rawIn = inTanksByPage[page.id];
@@ -291,12 +294,9 @@ export function recalculatePageBalancesFromOpening(params: {
         }
         totalInTank = roundToOneDecimal(totalInTank);
       }
-      // End KM is last trip's end_km (Integer)
-      // Prefer max end_km; also sort by date/trip_index for last
       const sortedByOrder = [...pageTrips].sort((a, b) => a.date.localeCompare(b.date) || a.trip_index - b.trip_index);
       endKm = roundToIntegerKm(sortedByOrder[sortedByOrder.length - 1].end_km);
     } else {
-      // No trips on page: distance 0, no fuel change
       totalDistance = 0;
       totalDrawn = 0;
       totalInTank = 0;
@@ -304,7 +304,7 @@ export function recalculatePageBalancesFromOpening(params: {
     }
 
     const consumed = calculateConsumed(totalDistance, economy);
-    const endFuel = calculateBalance(page.start_fuel_balance, totalDrawn, consumed, totalInTank);
+    const endFuel = calculateBalance(page.start_fuel_balance, totalDrawn, consumed, totalInTank, cap, isFullTank);
 
     page.end_km = roundToIntegerKm(endKm);
     page.end_fuel_balance = roundToOneDecimal(endFuel);

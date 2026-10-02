@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectPageGaps, detectTripGaps, detectDayGroupFuelGaps, type FuelGap } from './continuityAlerts';
+import { detectPageGaps, detectTripGaps, detectDayGroupFuelGaps, splitTripsIntoIslands, type FuelGap } from './continuityAlerts';
 import type { BookPage, Trip } from '@/types';
 import type { LedgerDay } from '@/lib/ledgerCalculations';
 
@@ -77,5 +77,51 @@ describe('detectDayGroupFuelGaps', () => {
   it('returns empty array for empty days', () => {
     const gaps = detectDayGroupFuelGaps([]);
     expect(gaps).toHaveLength(0);
+  });
+});
+
+describe('splitTripsIntoIslands', () => {
+  it('returns empty array when trips array is empty', () => {
+    expect(splitTripsIntoIslands([])).toHaveLength(0);
+  });
+
+  it('returns a single island when all trips are continuous', () => {
+    const trips: Trip[] = [
+      { id: 't1', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 1, date: '2026-01-01', start_km: 50000, end_km: 50050, trip_distance: 50, start_time: '08:00', end_time: '09:00', trip_type: 'Official', places_visited: 'A' },
+      { id: 't2', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 2, date: '2026-01-01', start_km: 50050, end_km: 50100, trip_distance: 50, start_time: '09:00', end_time: '10:00', trip_type: 'Official', places_visited: 'B' },
+    ] as any;
+
+    const islands = splitTripsIntoIslands(trips);
+    expect(islands).toHaveLength(1);
+    expect(islands[0]).toHaveLength(2);
+    expect(islands[0].map(t => t.id)).toEqual(['t1', 't2']);
+  });
+
+  it('splits trips into independent islands when an odometer gap exists', () => {
+    const trips: Trip[] = [
+      { id: 't1', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 1, date: '2026-01-01', start_km: 50000, end_km: 50050, trip_distance: 50, start_time: '08:00', end_time: '09:00', trip_type: 'Official', places_visited: 'A' },
+      // Gap: expected 50050, actual 50060
+      { id: 't2', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 2, date: '2026-01-01', start_km: 50060, end_km: 50100, trip_distance: 40, start_time: '09:00', end_time: '10:00', trip_type: 'Official', places_visited: 'B' },
+      { id: 't3', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 3, date: '2026-01-01', start_km: 50100, end_km: 50150, trip_distance: 50, start_time: '10:00', end_time: '11:00', trip_type: 'Official', places_visited: 'C' },
+    ] as any;
+
+    const islands = splitTripsIntoIslands(trips);
+    expect(islands).toHaveLength(2);
+    expect(islands[0].map(t => t.id)).toEqual(['t1']);
+    expect(islands[1].map(t => t.id)).toEqual(['t2', 't3']);
+  });
+
+  it('handles multiple gaps resulting in multiple islands', () => {
+    const trips: Trip[] = [
+      { id: 't1', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 1, date: '2026-01-01', start_km: 50000, end_km: 50050, trip_distance: 50, start_time: '08:00', end_time: '09:00', trip_type: 'Official', places_visited: 'A' },
+      { id: 't2', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 2, date: '2026-01-01', start_km: 50060, end_km: 50100, trip_distance: 40, start_time: '09:00', end_time: '10:00', trip_type: 'Official', places_visited: 'B' },
+      { id: 't3', vehicle_id: 'v1', page_id: 'p1', day_index: 1, trip_index: 3, date: '2026-01-01', start_km: 50110, end_km: 50150, trip_distance: 40, start_time: '10:00', end_time: '11:00', trip_type: 'Official', places_visited: 'C' },
+    ] as any;
+
+    const islands = splitTripsIntoIslands(trips);
+    expect(islands).toHaveLength(3);
+    expect(islands[0].map(t => t.id)).toEqual(['t1']);
+    expect(islands[1].map(t => t.id)).toEqual(['t2']);
+    expect(islands[2].map(t => t.id)).toEqual(['t3']);
   });
 });

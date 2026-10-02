@@ -86,8 +86,10 @@ export function computeLedgerDays(params: {
   economies?: (number | null | undefined)[];
   fallbackEconomy?: number;
   inTanks?: (number | null | undefined)[];
+  tankCapacity?: number;
 }): LedgerDay[] {
-  const { page, trips, economies, fallbackEconomy, inTanks } = params;
+  const { page, trips, economies, fallbackEconomy, inTanks, tankCapacity = 75 } = params;
+  const cap = tankCapacity > 0 ? tankCapacity : 75;
   const tripsForPage = getTripsForPage(trips, page.id);
   if (tripsForPage.length === 0) return [];
 
@@ -148,8 +150,8 @@ export function computeLedgerDays(params: {
     const fuelPosition = roundToOneDecimal(prevBalance);
     const inTank = roundToOneDecimal(rawInTanks[i] ?? 0);
     const consumed = calculateConsumed(distance, econ);
-    const balance = calculateBalance(fuelPosition, drawn, consumed, inTank);
     const isFullTank = dayTrips.some(t => !!t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0);
+    const balance = calculateBalance(fuelPosition, drawn, consumed, inTank, cap, isFullTank);
 
     days.push({
       dayIndex: i + 1,
@@ -283,8 +285,10 @@ export function computeTripFuelMap(params: {
   dateEconomy: Map<string, number>;
   dateInTank?: Map<string, number>;
   openingFuel: number;
+  tankCapacity?: number;
 }): Map<string, TripFuelInfo> {
-  const { trips, dateEconomy, dateInTank, openingFuel } = params;
+  const { trips, dateEconomy, dateInTank, openingFuel, tankCapacity = 75 } = params;
+  const cap = tankCapacity > 0 ? tankCapacity : 75;
   const sorted = [...trips].sort((a, b) => {
     if (a.date !== b.date) return a.date < b.date ? -1 : 1;
     if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
@@ -311,7 +315,7 @@ export function computeTripFuelMap(params: {
     if (!dateFirstSeen.has(t.date)) {
       dateFirstSeen.add(t.date);
       inTankForTrip = roundToOneDecimal(dateInTank?.get(t.date) ?? 0);
-      if (inTankForTrip) balance = roundToOneDecimal(balance + inTankForTrip);
+      if (inTankForTrip) balance = roundToOneDecimal(Math.min(cap, balance + inTankForTrip));
     }
     const migrated = isStartMigrated(t);
     if (migrated && (t.fuel_pumped_amount ?? 0) > 0) {
@@ -331,14 +335,16 @@ export function computeTripFuelMap(params: {
     const distance = roundToIntegerKm(t.trip_distance);
     const consumed = calculateConsumed(distance, economy);
     const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
+    const isFull = !!t.is_full_tank && pumped > 0;
     let newBalance: number;
     if (pumped > 0 && migrated) {
       // START: fuel available for this Trip, charged to next economy => add before consume
-      const afterFuel = roundToOneDecimal(balance + pumped);
-      newBalance = roundToOneDecimal(afterFuel - consumed);
+      const afterFuel = isFull ? cap : roundToOneDecimal(balance + pumped);
+      newBalance = roundToOneDecimal(Math.min(cap, afterFuel - consumed));
     } else {
       const afterConsumed = roundToOneDecimal(balance - consumed);
-      newBalance = roundToOneDecimal(afterConsumed + pumped);
+      const afterPump = isFull ? cap : roundToOneDecimal(afterConsumed + pumped);
+      newBalance = roundToOneDecimal(Math.min(cap, afterPump));
     }
     result.set(t.id, {
       position,

@@ -134,4 +134,22 @@ describe('Fuel model with In-Tank (Issue 03)', () => {
     const manualWeighted = Math.round((summary.totalDistance / summary.totalConsumed) * 10) / 10;
     expect(summary.weightedEconomy).toBe(manualWeighted);
   });
+
+  it('Full tank trip sets balance to tankCapacity (e.g. 75L) and caps balances at tankCapacity', () => {
+    const page = makePage({ id: 'page-1', start_fuel_balance: 15, start_km: 100, end_km: 102 });
+    const trips = [
+      makeTrip({ date: '2024-10-21', page_id: 'page-1', trip_distance: 2, start_km: 100, end_km: 102, fuel_pumped_amount: 25, is_full_tank: true }),
+    ];
+    const days = computeLedgerDays({ page, trips, economies: [10.5], tankCapacity: 75 });
+    // After 2km trip (consumed ~0.2L) and full tanking 25L with is_full_tank=true, balance should be ~75.0 (74.8)
+    expect(days[0].balance).toBe(74.8);
+
+    // Capping at tankCapacity (never goes to 100+)
+    const page2 = makePage({ id: 'page-2', start_fuel_balance: 70, start_km: 200, end_km: 210 });
+    const trips2 = [
+      makeTrip({ date: '2024-10-22', page_id: 'page-2', trip_distance: 10, start_km: 200, end_km: 210, fuel_pumped_amount: 50 }),
+    ];
+    const days2 = computeLedgerDays({ page: page2, trips: trips2, economies: [10.5], tankCapacity: 75 });
+    expect(days2[0].balance).toBe(75.0);
+  });
 });

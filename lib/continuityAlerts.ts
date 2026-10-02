@@ -117,3 +117,32 @@ export function detectDayGroupFuelGaps(ledgerDays: LedgerDay[]): FuelGap[] {
 
   return gaps;
 }
+
+/**
+ * Split calculation chains into independent islands (Island Before Gap, Island After Gap)
+ * based on odometer discontinuities (end_km != next.start_km).
+ */
+export function splitTripsIntoIslands(trips: Trip[]): Trip[][] {
+  if (!trips || trips.length === 0) return [];
+  const sorted = [...trips].sort((a, b) => a.date.localeCompare(b.date) || a.start_km - b.start_km);
+  const islands: Trip[][] = [];
+  let currentIsland: Trip[] = [sorted[0]];
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const cur = sorted[i];
+    const next = sorted[i + 1];
+    const expectedEnd = roundToIntegerKm(cur.end_km);
+    const actualStart = roundToIntegerKm(next.start_km);
+
+    if (expectedEnd !== actualStart) {
+      islands.push(currentIsland);
+      currentIsland = [next];
+    } else {
+      currentIsland.push(next);
+    }
+  }
+  if (currentIsland.length > 0) {
+    islands.push(currentIsland);
+  }
+  return islands;
+}
