@@ -291,4 +291,29 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       expect(est[0].warning).toContain('🔒 Locked');
     });
   });
+
+  describe('Issue 4 — Exponential Smoothing & Global Delta Constraints', () => {
+    it('applies weighted moving average exponential smoothing with alpha = 0.7 across segments', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 10, is_full_tank: true, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 10, is_full_tank: true, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, fuel_pumped_amount: 7, is_full_tank: true, trip_index: 3 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(3);
+      expect(est[2].suggested).toBeLessThan(14.3);
+      expect(est[2].suggested).toBeGreaterThan(10.0);
+    });
+
+    it('enforces global delta constraints (MaxDelta = 1.5 km/L) across adjacent segments', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 12, is_full_tank: true, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 7, is_full_tank: true, trip_index: 2 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(2);
+      const delta = Math.abs((est[1].suggested ?? 0) - (est[0].suggested ?? 0));
+      expect(delta).toBeLessThanOrEqual(1.51);
+    });
+  });
 });

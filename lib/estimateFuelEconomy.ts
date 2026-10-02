@@ -506,33 +506,54 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     prevEconomy = suggested;
   }
 
-  // Lenient smoothing: when no Full Tank anchors a run, pull interior suggestions
-  // toward the average of their neighbours so steps stay small. Validated by a
-  // forward re-simulation; any segment that becomes infeasible reverts.
-  if (!strict && results.length >= 3) {
+  // Exponential Smoothing (alpha = 0.7) & Global Delta Constraints (MaxDelta = 1.5)
+  if (!strict && results.length > 1) {
     const original = results.map(r => r.suggested);
-    for (let i = 1; i < results.length - 1; i++) {
+
+    for (let i = 1; i < results.length; i++) {
       const r = results[i];
-      if (!r.feasible || r.isFullToFull || r.isFullTank || r.nextIsFull) continue;
-      // Long-trip segments deliberately take a wider step; don't smooth it away.
-      if (r.longTripCount > 0 || r.veryLongTripCount > 0) continue;
-      const p = results[i - 1];
-      const n = results[i + 1];
-      if (p.isFullToFull || p.isFullTank || p.nextIsFull || n.isFullToFull || n.isFullTank || n.nextIsFull) continue;
-      if (r.feasibleMin === null || r.feasibleMax === null || r.trips.length === 0) continue;
-      if (p.suggested === null || n.suggested === null || r.suggested === null) continue;
-      const avg = (p.suggested + n.suggested) / 2;
-      if (Math.abs(avg - r.suggested) <= 0.3) continue;
-      const cand = roundToOneDecimal(Math.min(r.feasibleMax, Math.max(r.feasibleMin, avg)));
-      r.suggested = cand;
+      const prevSeg = results[i - 1];
+      if (r.isGapSpan || r.warning?.includes('Locked') || prevSeg.suggested === null) continue;
+      if (r.trips.length === 0 || r.suggested === null) continue;
+
+      const segDist = r.distance;
+      const segFuel = r.fuelFed > 0 ? r.fuelFed : (r.trips.reduce((s, t) => s + roundToOneDecimal(t.fuel_pumped_amount ?? 0), 0));
+      let rawEcon = segFuel > 0 ? segDist / segFuel : prevSeg.suggested;
+      rawEcon = Math.min(50, Math.max(0.1, rawEcon));
+
+      const alpha = 0.7;
+      const prevFinal = prevSeg.suggested;
+      const smoothed = alpha * rawEcon + (1 - alpha) * prevFinal;
+      const roundedSmoothed = roundToOneDecimal(smoothed);
+
+      r.suggested = roundedSmoothed;
     }
+
+    const maxDelta = 1.5;
+    for (let iter = 0; iter < 3; iter++) {
+      for (let i = 1; i < results.length; i++) {
+        const prevSeg = results[i - 1];
+        const currSeg = results[i];
+        if (prevSeg.suggested === null || currSeg.suggested === null) continue;
+        if (prevSeg.isGapSpan || currSeg.isGapSpan || prevSeg.warning?.includes('Locked') || currSeg.warning?.includes('Locked')) continue;
+
+        const delta = currSeg.suggested - prevSeg.suggested;
+        if (Math.abs(delta) > maxDelta) {
+          const adjusted = prevSeg.suggested + Math.sign(delta) * maxDelta;
+          currSeg.suggested = roundToOneDecimal(Math.min(50, Math.max(0.1, adjusted)));
+        }
+      }
+    }
+
     let pos = posBeforeFirstSeg;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.isFullTank) pos = tankCapacity;
       if (r.trips.length > 0 && r.suggested !== null) {
         const v = simulateMaxViolation(r.trips, pos, r.suggested);
-        if (v >= 1e-9) r.suggested = original[i];
+        if (v >= 1e-9) {
+          r.suggested = original[i];
+        }
         if (r.suggested !== null) {
           pos = simulateFinalBalance(r.trips, pos, r.suggested);
         }
