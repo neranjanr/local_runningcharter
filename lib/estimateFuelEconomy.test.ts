@@ -148,22 +148,75 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     expect(est[1].fromDate).toBe('2024-03-15');
   });
 
-  it('Normal caps the step at 1.5 km/L while Strict stays feasibility-first', () => {
+  // A segment that drains the tank forces a feasibility floor well above the 7.8 seed,
+  // so the step from the previous economy has to be widened to reach it.
+  function forcedJumpScenario(midTripDistances: number[]): Trip[] {
     const trips: Trip[] = [
-      trip({ id: 't1', date: '2024-03-25', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 70, is_full_tank: true, trip_index: 1 }),
-      trip({ id: 't2', date: '2024-04-05', start_km: 50, end_km: 750, trip_distance: 700, trip_index: 2 }),
-      trip({ id: 't3', date: '2024-04-10', start_km: 750, end_km: 800, trip_distance: 50, fuel_pumped_amount: 70, trip_index: 3 }),
+      trip({ id: 'p0', date: '2024-03-25', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 70, is_full_tank: true, trip_index: 1 }),
     ];
+    let km = 50;
+    midTripDistances.forEach((d, i) => {
+      trips.push(trip({ id: `m${i}`, date: '2024-04-05', start_km: km, end_km: km + d, trip_distance: d, trip_index: i + 2 }));
+      km += d;
+    });
+    trips.push(trip({ id: 'p1', date: '2024-04-10', start_km: km, end_km: km + 30, trip_distance: 30, fuel_pumped_amount: 70, trip_index: midTripDistances.length + 2 }));
+    return trips;
+  }
+
+  it('keeps the 1.5 km/L cap when the segment has no long trips', () => {
+    // 20 x 35 km: floor ~9.4, so a 1.6 step is needed and the base cap bites at 9.3.
+    const trips = forcedJumpScenario(Array(20).fill(35));
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
     expect(est.length).toBe(2);
     const seg0 = est[0];
-    // Feasibility floor is ~9.5 (75 L tank, 700 km before the 70 L fill), so Strict jumps to 9.5.
-    expect(seg0.suggestedStrict).toBeGreaterThanOrEqual(9.5 - 1e-6);
-    // Normal caps the step from the 7.8 seed at 1.5 -> 9.3 and flags it.
-    expect(seg0.suggested).toBeLessThanOrEqual(7.8 + 1.5 + 1e-6);
-    expect(seg0.suggestedStrict).toBeGreaterThan(seg0.suggested);
+    expect(seg0.longTripCount).toBe(0);
+    expect(seg0.veryLongTripCount).toBe(0);
+    expect(seg0.suggested).toBeCloseTo(9.3, 5);
     expect(seg0.feasible).toBe(false);
     expect(seg0.warning ?? '').toContain('capped');
+    expect(seg0.warning ?? '').not.toContain('km trips');
+  });
+
+  it('widens the Normal cap to 2.5 km/L for >40 km trips', () => {
+    // 14 x 50 km: floor 9.6, a 1.8 step the base cap would block but 2.5 allows.
+    const trips = forcedJumpScenario(Array(14).fill(50));
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    const seg0 = est[0];
+    expect(seg0.longTripCount).toBe(14);
+    expect(seg0.veryLongTripCount).toBe(0);
+    expect(seg0.suggested).toBeCloseTo(9.6, 5);
+    expect(seg0.feasible).toBe(true);
+  });
+
+  it('widens the Normal cap to 3.0 km/L for 100 km+ trips (highest tier wins)', () => {
+    // One 777 km trip (>=100): floor 10.5, a 2.7 step that only the 3.0 tier can take.
+    const trips = forcedJumpScenario([777]);
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    const seg0 = est[0];
+    expect(seg0.veryLongTripCount).toBe(1);
+    expect(seg0.suggested).toBeCloseTo(10.5, 5);
+    expect(seg0.feasible).toBe(true);
+  });
+
+  it('treats a >40-only segment as the lower tier even with the same distance', () => {
+    // Same 777 km, but as 50 km hops: >40 tier caps at 2.5 -> 10.3, below the 10.6 floor.
+    const trips = forcedJumpScenario([...Array(15).fill(50), 27]);
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    const seg0 = est[0];
+    expect(seg0.longTripCount).toBe(15);
+    expect(seg0.veryLongTripCount).toBe(0);
+    expect(seg0.suggested).toBeCloseTo(10.3, 5);
+    expect(seg0.feasible).toBe(false);
+    expect(seg0.warning ?? '').toContain('>40 km trips');
+  });
+
+  it('keeps Strict feasibility-first beyond the widened Normal cap', () => {
+    const trips = forcedJumpScenario(Array(20).fill(35));
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    const seg0 = est[0];
+    expect(seg0.suggested).toBeCloseTo(9.3, 5);
+    expect(seg0.suggestedStrict).toBeCloseTo(9.4, 5);
+    expect(seg0.suggestedStrict).toBeGreaterThan(seg0.suggested);
   });
 
   it('reports the longest trip per segment for large-distance badges', () => {
@@ -182,5 +235,23 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     expect(est[1].maxTripDistance).toBe(30);
     expect(est[1].longTripCount).toBe(0);
     expect(est[1].veryLongTripCount).toBe(0);
+  });
+
+  it('detects ODO gaps and returns null suggestions (em-dash span) for gap-blanked segments', () => {
+    const trips: Trip[] = [
+      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, is_full_tank: true, trip_index: 1 }),
+      trip({ id: 't2', date: '2024-02-22', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 20, trip_index: 2 }),
+      // ODO Gap: expected start 200, actual start 300
+      trip({ id: 't3', date: '2024-02-25', start_km: 300, end_km: 400, trip_distance: 100, fuel_pumped_amount: 40, is_full_tank: true, trip_index: 3 }),
+    ];
+    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    expect(est.length).toBeGreaterThan(0);
+    // Segments spanning/after last full before gap or between gap and first full after should be blanked (isGapSpan = true, suggested = null)
+    const gapSegs = est.filter(e => e.isGapSpan);
+    expect(gapSegs.length).toBeGreaterThan(0);
+    for (const gs of gapSegs) {
+      expect(gs.suggested).toBeNull();
+      expect(gs.suggestedStrict).toBeNull();
+    }
   });
 });

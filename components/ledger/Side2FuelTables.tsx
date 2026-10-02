@@ -5,6 +5,8 @@ import type { LedgerDay, LedgerSummary } from '@/lib/ledgerCalculations';
 import { roundToOneDecimal } from '@/lib/tripCalculations';
 import type { PageGap, FuelGap } from '@/lib/continuityAlerts';
 import { getFuelLocksForPage } from '@/lib/fuelEconomyLockStore';
+import { isDateGapBlanked } from '@/lib/estimateFuelEconomy';
+import type { Trip } from '@/types';
 
 interface Props {
   pageNumber: number;
@@ -17,6 +19,7 @@ interface Props {
   onInTankChange: (dayIndex: number, value: string) => void;
   pageGaps?: PageGap[];
   dayGroupFuelGaps?: FuelGap[];
+  trips?: Trip[];
 }
 
 function formatAuditDate(iso: string): string {
@@ -24,7 +27,7 @@ function formatAuditDate(iso: string): string {
   return `${d}-${m}-${y}`;
 }
 
-export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCapacity, rawEconomies, rawInTanks, onEconomyChange, onInTankChange, pageGaps, dayGroupFuelGaps }: Props) {
+export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCapacity, rawEconomies, rawInTanks, onEconomyChange, onInTankChange, pageGaps, dayGroupFuelGaps, trips = [] }: Props) {
   if (ledgerDays.length === 0) {
     return (
       <div className="flex flex-col bg-paper-ledger p-2 md:p-3 rounded shadow-sm print:shadow-none print:border print:border-rule-line">
@@ -125,11 +128,13 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 {ledgerDays.map((d, idx) => {
                   let isLocked = false;
                   try { const locks = getFuelLocksForPage(`page-${pageNumber}`); isLocked = !!locks[idx]; } catch {}
-                  // fallback generic check via props id not available; try by date via localStorage
+                  const blanked = trips ? isDateGapBlanked(d.date, trips) && d.economySource !== 'explicit' && !isLocked : false;
                   return (
-                  <td key={d.date} className="py-2 px-3 text-center border border-rule-line">
+                  <td key={d.date} className="py-2 px-3 text-center border border-rule-line" title={blanked ? 'Economy not calculated — ODO gap' : undefined}>
                     <div className="flex flex-col items-center gap-1">
-                      <span className="text-[11px] font-mono text-on-surface font-bold flex items-center gap-1">{d.fuelEconomy.toFixed(1)} {isLocked && <span className="text-[9px] bg-slate-800 text-white px-1 rounded">🔒</span>}</span>
+                      <span className="text-[11px] font-mono text-on-surface font-bold flex items-center gap-1">
+                        {blanked ? '—' : d.fuelEconomy.toFixed(1)} {isLocked && <span className="text-[9px] bg-slate-800 text-white px-1 rounded">🔒</span>}
+                      </span>
                       <span className={`text-[9px] font-bold tracking-widest uppercase px-1 rounded ${d.economySource === 'explicit' ? 'bg-surface-container-highest text-telemetry-cyan' : 'text-on-surface-variant'}`}>
                         {isLocked ? 'Locked' : d.economySource === 'explicit' ? 'Adjusted' : d.economySource === 'inherited' ? '(Inh.)' : '(Def.)'}
                       </span>

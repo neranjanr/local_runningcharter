@@ -11,8 +11,10 @@ import {
   validateOdometerContinuity,
   validateFuelContinuity,
   assignPageForNewTrip,
+  assignPageForBackdatedTrip,
   calculateConsumed,
   calculateBalance,
+  type PageAssignment,
 } from './pagination';
 import type { BookPage, Trip } from '@/types';
 
@@ -346,5 +348,71 @@ describe('assignPageForNewTrip integration', () => {
     const result = assignPageForNewTrip({ pages: [page1], trips, newTripDate: '2024-10-22' }) as any;
     // Should be 2 (sorted: 21,22,23)
     expect(result.dayIndex).toBe(2);
+  });
+});
+
+describe('assignPageForBackdatedTrip', () => {
+  const page1 = makePage({ id: 'p1', page_number: 1, month: '2024-09', start_km: 100, end_km: 240 });
+  const page2 = makePage({ id: 'p2', page_number: 2, month: '2024-10', start_km: 240, end_km: 400 });
+  const sepTrips = [
+    makeTrip({ date: '2024-09-21', page_id: 'p1', day_index: 1, trip_index: 1, start_km: 100, end_km: 150 }),
+    makeTrip({ date: '2024-09-22', page_id: 'p1', day_index: 2, trip_index: 1, start_km: 160, end_km: 200 }),
+  ];
+  const octTrips = [
+    makeTrip({ date: '2024-10-05', page_id: 'p2', day_index: 1, trip_index: 1, start_km: 240, end_km: 300 }),
+  ];
+
+  it('assigns a back-dated gap to the predecessor Page, not the current last Page', () => {
+    const result = assignPageForBackdatedTrip({
+      pages: [page1, page2],
+      trips: [...sepTrips, ...octTrips],
+      tripDate: '2024-09-21',
+      anchorPageId: 'p1',
+    }) as PageAssignment;
+    expect(result.pageId).toBe('p1');
+    expect(result.requiresNewPage).toBe(false);
+    // 2024-09-21 already exists on p1 -> day 1, next trip index
+    expect(result.dayIndex).toBe(1);
+    expect(result.tripIndex).toBe(2);
+  });
+
+  it('resolves the Page by month when the anchor Page month differs from the date', () => {
+    const result = assignPageForBackdatedTrip({
+      pages: [page1, page2],
+      trips: [...sepTrips, ...octTrips],
+      tripDate: '2024-10-06',
+      anchorPageId: 'p1',
+    }) as PageAssignment;
+    expect(result.pageId).toBe('p2');
+    expect(result.dayIndex).toBe(2);
+    expect(result.tripIndex).toBe(1);
+  });
+
+  it('computes a new middle date index on the target Page', () => {
+    const result = assignPageForBackdatedTrip({
+      pages: [page1, page2],
+      trips: [...sepTrips, ...octTrips],
+      tripDate: '2024-09-25',
+      anchorPageId: 'p1',
+    }) as PageAssignment;
+    // p1 distinct: 21,22 -> adding 25 -> day 3
+    expect(result.pageId).toBe('p1');
+    expect(result.dayIndex).toBe(3);
+    expect(result.tripIndex).toBe(1);
+  });
+
+  it('blocks when the target Page already has MAX_TRIPS_PER_DAY on the date', () => {
+    const full = Array.from({ length: MAX_TRIPS_PER_DAY }, (_, i) =>
+      makeTrip({ date: '2024-09-21', page_id: 'p1', day_index: 1, trip_index: i + 1 })
+    );
+    const result = assignPageForBackdatedTrip({
+      pages: [page1, page2],
+      trips: [...full, ...octTrips],
+      tripDate: '2024-09-21',
+      anchorPageId: 'p1',
+    });
+    if (!('allowed' in result)) throw new Error('expected blocked assignment');
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe('MAX_TRIPS_PER_DAY');
   });
 });

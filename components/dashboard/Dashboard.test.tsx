@@ -176,6 +176,24 @@ describe('Dashboard components', () => {
     expect(row.textContent).toMatch(/10[^0-9]/);
   });
 
+  it('AllTripsMasterTable Day column shows 3-letter weekday and a holiday pill', () => {
+    const trips: Trip[] = [
+      makeTrip({ id: 'wd', date: '2024-10-21' }),  // Monday — plain weekday
+      makeTrip({ id: 'we', date: '2024-10-20' }),  // Sunday — weekend
+      makeTrip({ id: 'hol', date: '2024-10-17' }), // Vap Full Moon Poya (Thursday)
+    ];
+    const pages: BookPage[] = [makePage({ page_number: 1, id: 'page-1' })];
+    render(<AllTripsMasterTable trips={trips} pages={pages} />);
+    const wdRow = screen.getByTestId('trip-row-wd');
+    const weRow = screen.getByTestId('trip-row-we');
+    const holRow = screen.getByTestId('trip-row-hol');
+    expect(wdRow).toHaveTextContent('Mon');
+    expect(weRow).toHaveTextContent('Sun');
+    expect(holRow).toHaveTextContent('Thu');
+    expect(holRow).toHaveTextContent('Poya');
+    expect(wdRow).not.toHaveTextContent('Poya');
+  });
+
   it('MonthlyBreakdownChart shows last 6 by default with More button and modal', async () => {
     const data = Array.from({ length: 15 }, (_, i) => ({
       monthKey: `2024-${String(i + 1).padStart(2, '0')}`,

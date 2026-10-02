@@ -5,6 +5,7 @@
  * and dual Normal + Strict suggestions for the estimation popup.
  */
 import { roundToOneDecimal, roundToIntegerKm } from './tripCalculations';
+import { detectTripGaps } from './continuityAlerts';
 import type { BookPage, Trip, Vehicle } from '@/types';
 
 export interface FuelInSegmentInput {
@@ -26,9 +27,9 @@ export interface SegmentEstimate {
   pumpTiming: 'START' | 'END';
   prevEconomy: number | null;
   /** Normal (lenient) suggestion — balances in [1, tankCapacity]. */
-  suggested: number;
+  suggested: number | null;
   /** Strict Full-Tank suggestion — balance after a Full Tank pump kept near tankCapacity. */
-  suggestedStrict: number;
+  suggestedStrict: number | null;
   feasible: boolean;
   feasibleStrict: boolean;
   feasibleMin: number | null;
@@ -37,6 +38,7 @@ export interface SegmentEstimate {
   feasibleMaxStrict: number | null;
   warning?: string;
   warningStrict?: string;
+  isGapSpan: boolean;
   /** Longest single Trip in the segment (Integer KM) — long runs usually give better economy. */
   maxTripDistance: number;
   /** Number of Trips over 40 km in the segment. */
@@ -55,7 +57,7 @@ interface PassSegment {
   isFullTank: boolean;
   pumpTiming: 'START' | 'END';
   prevEconomy: number | null;
-  suggested: number;
+  suggested: number | null;
   feasible: boolean;
   feasibleMin: number | null;
   feasibleMax: number | null;
@@ -64,9 +66,66 @@ interface PassSegment {
   nextIsFull: boolean;
   startPos: number;
   trips: Trip[];
+  isGapSpan: boolean;
   maxTripDistance: number;
   longTripCount: number;
   veryLongTripCount: number;
+}
+
+export function getGapBlankedSegments(trips: Trip[]): Set<string> {
+  const sorted = [...trips].sort((a, b) => a.date.localeCompare(b.date) || a.start_km - b.start_km);
+  const gaps = detectTripGaps(sorted);
+  if (gaps.length === 0) return new Set();
+
+  const gapTripIds = new Set(gaps.map(g => g.tripId).filter(Boolean));
+  const chunks: Trip[][] = [];
+  let currentChunk: Trip[] = [];
+  for (const t of sorted) {
+    if (gapTripIds.has(t.id) && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = [t];
+    } else {
+      currentChunk.push(t);
+    }
+  }
+  if (currentChunk.length > 0) chunks.push(currentChunk);
+
+  const blankedDates = new Set<string>();
+
+  for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+    const chunk = chunks[cIdx];
+    const hasFullBefore = cIdx > 0;
+    const hasFullAfter = cIdx < chunks.length - 1;
+
+    const fullTankIndices: number[] = [];
+    chunk.forEach((t, idx) => { if (t.is_full_tank) fullTankIndices.push(idx); });
+
+    if (fullTankIndices.length > 0) {
+      if (hasFullBefore) {
+        const firstFull = fullTankIndices[0];
+        for (let i = 0; i <= firstFull; i++) {
+          blankedDates.add(chunk[i].date);
+        }
+      }
+      if (hasFullAfter) {
+        const lastFull = fullTankIndices[fullTankIndices.length - 1];
+        for (let i = lastFull + 1; i < chunk.length; i++) {
+          blankedDates.add(chunk[i].date);
+        }
+      }
+    } else {
+      if (cIdx > 0 && hasFullAfter) {
+        for (const t of chunk) blankedDates.add(t.date);
+      }
+    }
+  }
+
+  return blankedDates;
+}
+
+export function isDateGapBlanked(date: string, trips: Trip[]): boolean {
+  const blanked = getGapBlankedSegments(trips);
+  return blanked.has(date);
 }
 
 export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<string, number> }): FuelInSegmentInput[] {
@@ -99,6 +158,22 @@ export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<str
 }
 
 function estimatePrevEconomyFallback(): number { return 7.8; }
+
+const MAX_STEP_BASE = 1.5;
+const MAX_STEP_LONG = 2.5;
+const MAX_STEP_VERY_LONG = 3.0;
+
+/**
+ * Normal-path step cap from the previous economy, widened when the segment
+ * contains long trips: >40 km trips allow 2.5 km/L, 100 km+ trips allow 3.0 km/L
+ * (highest tier wins). Long runs usually give better economy, so a bigger step is
+ * justified; without long trips the historic 1.5 km/L cap is kept.
+ */
+function stepCapFor(longTripCount: number, veryLongTripCount: number): { cap: number; tier: string } {
+  if (veryLongTripCount > 0) return { cap: MAX_STEP_VERY_LONG, tier: '≥100 km trips' };
+  if (longTripCount > 0) return { cap: MAX_STEP_LONG, tier: '>40 km trips' };
+  return { cap: MAX_STEP_BASE, tier: '' };
+}
 
 function isStartMigrated(trip: Trip): boolean {
   return (trip.pump_timing === 'START') && roundToIntegerKm(trip.trip_distance) > 20 && (trip.fuel_pumped_amount ?? 0) > 0;
@@ -278,14 +353,24 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const maxTripDistance = segmentTrips.reduce((m, t) => Math.max(m, roundToIntegerKm(t.trip_distance)), 0);
     const longTripCount = segmentTrips.filter(t => roundToIntegerKm(t.trip_distance) > 40).length;
     const veryLongTripCount = segmentTrips.filter(t => roundToIntegerKm(t.trip_distance) >= 100).length;
+    const { cap: maxStep, tier: capTier } = stepCapFor(longTripCount, veryLongTripCount);
 
-    const push = (suggested: number, feasible: boolean, feasibleMin: number | null, feasibleMax: number | null, warning?: string) => {
+    const blankedDates = getGapBlankedSegments(trips);
+    const isGapSpan = segmentTrips.length > 0 && segmentTrips.some(t => blankedDates.has(t.date));
+
+    const push = (suggested: number | null, feasible: boolean, feasibleMin: number | null, feasibleMax: number | null, warning?: string, isGap = false) => {
       results.push({
         fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date,
         isFullTank, pumpTiming, prevEconomy: prev, suggested, feasible, feasibleMin, feasibleMax, warning,
-        isFullToFull, nextIsFull, startPos, trips: segmentTrips, maxTripDistance, longTripCount, veryLongTripCount,
+        isFullToFull, nextIsFull, startPos, trips: segmentTrips, isGapSpan: isGap, maxTripDistance, longTripCount, veryLongTripCount,
       });
     };
+
+    if (isGapSpan) {
+      push(null, false, null, null, 'Economy not calculated — ODO gap', true);
+      prevEconomy = prev;
+      continue;
+    }
 
     const lockedSet = params.lockedDatesSet;
     const lockedMap = params.lockedEconomyMap;
@@ -355,10 +440,10 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     }
 
     // Non Full->Full: choose by mode.
-    // Normal caps the step from the previous economy (MAX_STEP) so the sequence
+    // Normal caps the step from the previous economy (maxStep) so the sequence
     // stays smooth even when feasibility would force a jump; the segment is then
-    // flagged infeasible with a warning. Strict stays feasibility-first.
-    const MAX_STEP = 1.5;
+    // flagged infeasible with a warning. Long-trip segments get a wider cap.
+    // Strict stays feasibility-first.
     let bestE = candidatePrev;
     let foundFeasible = feasibleEs.length > 0;
     let warning: string | undefined;
@@ -381,10 +466,10 @@ function runEstimationPass(params: PassParams): PassSegment[] {
         let bestDist = Infinity;
         for (const e of feasibleEs) { const d = Math.abs(e - candidatePrev); if (d < bestDist - 1e-9) { bestDist = d; nearest = e; } }
         const step = nearest - candidatePrev;
-        if (!strict && Math.abs(step) > MAX_STEP + 1e-9) {
-          bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * MAX_STEP);
+        if (!strict && Math.abs(step) > maxStep + 1e-9) {
+          bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * maxStep);
           foundFeasible = false;
-          warning = `Step capped at ${MAX_STEP.toFixed(1)} km/L from ${candidatePrev.toFixed(1)} (nearest feasible ${nearest.toFixed(1)}) — balance may leave [1, ${tankCapacity.toFixed(1)}]L`;
+          warning = `Step capped at ${maxStep.toFixed(1)} km/L from ${candidatePrev.toFixed(1)} (nearest feasible ${nearest.toFixed(1)}${capTier ? `, ${capTier}` : ''}) — balance may leave [1, ${tankCapacity.toFixed(1)}]L`;
         } else {
           bestE = nearest;
         }
@@ -398,9 +483,9 @@ function runEstimationPass(params: PassParams): PassSegment[] {
         if (score < bestScore - 1e-9) { bestScore = score; bestE = e; }
       }
       const step = bestE - candidatePrev;
-      if (!strict && Math.abs(step) > MAX_STEP + 1e-9) {
-        bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * MAX_STEP);
-        warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — step capped to ${roundToOneDecimal(bestE).toFixed(1)} km/L (check KM/fuel gaps)`;
+      if (!strict && Math.abs(step) > maxStep + 1e-9) {
+        bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * maxStep);
+        warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — step capped to ${roundToOneDecimal(bestE).toFixed(1)} km/L${capTier ? ` (${capTier})` : ''} (check KM/fuel gaps)`;
       } else {
         warning = `No 1-dec economy keeps fuel in [1, ${tankCapacity.toFixed(1)}]L — nearest ${roundToOneDecimal(bestE).toFixed(1)} km/L suggested (check KM/fuel gaps)`;
       }
@@ -429,6 +514,8 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     for (let i = 1; i < results.length - 1; i++) {
       const r = results[i];
       if (!r.feasible || r.isFullToFull || r.isFullTank || r.nextIsFull) continue;
+      // Long-trip segments deliberately take a wider step; don't smooth it away.
+      if (r.longTripCount > 0 || r.veryLongTripCount > 0) continue;
       const p = results[i - 1];
       const n = results[i + 1];
       if (p.isFullToFull || p.isFullTank || p.nextIsFull || n.isFullToFull || n.isFullTank || n.nextIsFull) continue;
@@ -490,8 +577,8 @@ export function estimateFuelEconomies(params: {
       isFullTank: n.isFullTank,
       pumpTiming: n.pumpTiming,
       prevEconomy: n.prevEconomy,
-      suggested: n.suggested,
-      suggestedStrict: s.suggested,
+      suggested: n.isGapSpan ? null : n.suggested,
+      suggestedStrict: s.isGapSpan ? null : s.suggested,
       feasible: n.feasible,
       feasibleStrict: s.feasible,
       feasibleMin: n.feasibleMin,
@@ -500,6 +587,7 @@ export function estimateFuelEconomies(params: {
       feasibleMaxStrict: s.feasibleMax,
       warning: n.warning,
       warningStrict: s.warning,
+      isGapSpan: n.isGapSpan,
       maxTripDistance: n.maxTripDistance,
       longTripCount: n.longTripCount,
       veryLongTripCount: n.veryLongTripCount,

@@ -262,13 +262,13 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                         </td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.fuelFed.toFixed(1)} L</td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.prevEconomy !== null ? e.prevEconomy.toFixed(1) : '—'}</td>
-                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700">{e.suggested.toFixed(1)}</td>
+                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700">{e.suggested !== null ? e.suggested.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-center">
-                          <button onClick={() => handleApply(idx, 'normal')} disabled={locked} className={`px-2 py-1 rounded text-xs font-semibold ${locked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`} data-testid={`apply-normal-${idx}`}>Apply</button>
+                          <button onClick={() => handleApply(idx, 'normal')} disabled={locked || e.suggested === null} className={`px-2 py-1 rounded text-xs font-semibold ${locked || e.suggested === null ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`} data-testid={`apply-normal-${idx}`}>Apply</button>
                         </td>
-                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`}>{e.suggestedStrict.toFixed(1)}</td>
+                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`}>{e.suggestedStrict !== null ? e.suggestedStrict.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-center">
-                          <button onClick={() => handleApply(idx, 'strict')} disabled={locked} className={`px-2 py-1 rounded text-xs font-semibold ${locked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`} data-testid={`apply-strict-${idx}`}>Apply</button>
+                          <button onClick={() => handleApply(idx, 'strict')} disabled={locked || e.suggestedStrict === null} className={`px-2 py-1 rounded text-xs font-semibold ${locked || e.suggestedStrict === null ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`} data-testid={`apply-strict-${idx}`}>Apply</button>
                         </td>
                         <td className="py-2 px-2 text-center">{locked ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-800 text-white text-[10px] font-bold">🔒</span> : <span className="text-on-surface-variant text-xs">—</span>}</td>
                         <td className="py-2 px-2 text-xs max-w-[260px] truncate" title={[e.warning, e.warningStrict].filter(Boolean).join(' | ')}>

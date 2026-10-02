@@ -269,6 +269,7 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
             onInTankChange={handleInTankChange}
             pageGaps={pageGaps}
             dayGroupFuelGaps={dayGroupFuelGaps}
+            trips={trips}
           />
         </div>
       </div>

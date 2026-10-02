@@ -370,17 +370,20 @@ Leave History — persistent card below months: table Date | Day | Holiday | Not
     id: 'all-trips-daytype',
     title: '20. All Trips — Day Type Colors & Table Layout',
     group: 'Calendar & Leaves',
-    content: `Day Type column (All Trips Master Table) is color-coded with a dot icon:
-  • Sat/Sun or any holiday (Mercantile/Bank/Public) — RED bg-red-100 border-red-300 + red dot
-  • Poya (isPoya) — YELLOW bg-yellow-100 border-yellow-300 + yellow dot (takes priority over RED)
-  • Leave — ORANGE bg-orange-100 border-orange-300 + orange dot
-  • Weekday (Mon–Fri, not holiday/leave) — light GREEN bg-green-50 border-green-200 + green dot
+    content: `Day Type column (All Trips Master Table) always shows the 3-letter weekday (Mon–Sun), with a separate colored pill for holidays/leave:
+  • Weekend (Sat/Sun, no holiday/leave) — weekday text RED (no pill)
+  • Poya (isPoya) — YELLOW pill bg-yellow-100 border-yellow-300 + dot (priority over other holiday colors)
+  • Mercantile (MH) — AMBER pill bg-amber-100; Public (PH) — BLUE pill bg-sky-100; Bank (BH) — RED pill bg-red-100; other holiday (HOL) — SLATE pill bg-slate-100
+  • Leave — ORANGE pill bg-orange-100 + orange dot (highest priority)
+  • Weekday (Mon–Fri, not holiday/leave) — plain muted weekday text
 
 Private indication:
   • Type [Official/Private] column removed from All Trips table; Private trips are signaled solely by orange row background bg-orange-200 (RED gap cell bg-red-100 wins on Start KM, dark-blue text layers when fuel pumped). Use filter "All Types / Official / Private" or Insert/Gap-Fill dialogs to set type.
 
-Layout fix:
-  • Route column reduced 22% → 6% narrow (w-[6%], −20% from 8%, text-xs) and table min-w 1080→1020 on mobile; ⋯ menu column fixed w-10 min-w-[40px] so it stays fully visible; desktop stays w-full lg:min-w-0 lg:overflow-x-hidden so only vertical scroll appears and last columns (Pumped/Order No/Pos./In-Tank/Econ/Balance/Page/⋯) stay visible without horizontal scroll.`,
+Layout:
+  • Date shows as DD MMM YYYY (e.g. 21 Oct 2024). End Time column is narrow (w-16) and wraps its header/text instead of widening.
+  • Route column is a fixed w-24 (96px) with ellipsis truncation; hovering it shows the full route as a tooltip only when the route is longer than the column, otherwise the normal "Click to edit" tip.
+  • Table body/header use an Aptos-like normal font (Aptos → Segoe UI → Inter, class table-aptos) with tabular digits instead of Inter/JetBrains Mono, so all 17 columns fit on large screens without left↔right scrolling. ⋯ menu column fixed w-10 min-w-[40px] so it stays fully visible; overflow-x-auto remains as fallback for very narrow viewports.`,
   },
   {
     id: 'ps1-service',

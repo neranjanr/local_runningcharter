@@ -457,3 +457,61 @@ export function assignPageForNewTrip(params: {
     requiresNewPage: false,
   };
 }
+
+/**
+ * Assign a back-dated Trip to the existing Page that owns its date, rather than
+ * appending to the current (last) Page. Used by Gap Fill and back-dated Insert
+ * After, where the Trip belongs between existing Trips and must never spawn a new
+ * Page at the end of the book.
+ *
+ * Resolution order: the anchor Page (the predecessor's Page) when its month
+ * matches the Trip date, else the Page for that month whose Trip dates bracket
+ * the date (else the last Page of that month), else the anchor Page.
+ *
+ * Only blocks when the target Page already holds `MAX_TRIPS_PER_DAY` on that date.
+ * Exceeding `MAX_DAYS_PER_PAGE` is left to the caller's `validatePaginationConstraints`
+ * so it can raise the rebuild-required warning instead of failing the save.
+ */
+export function assignPageForBackdatedTrip(params: {
+  pages: BookPage[];
+  trips: Trip[];
+  tripDate: string;
+  anchorPageId?: string;
+}): AssignResult {
+  const { pages, trips, tripDate, anchorPageId } = params;
+  if (pages.length === 0) {
+    return { pageNumber: 1, pageId: 'page-1', dayIndex: 1, tripIndex: 1, requiresNewPage: true, reason: 'NEW_BOOK' };
+  }
+  const sorted = sortedPages(pages);
+  const month = getMonthKey(tripDate);
+  const anchor = anchorPageId ? sorted.find((p) => p.id === anchorPageId) : undefined;
+  let target: BookPage | undefined;
+  if (anchor && anchor.month === month) {
+    target = anchor;
+  } else {
+    const monthPages = sorted.filter((p) => p.month === month);
+    target = monthPages.find((p) => {
+      const dates = trips.filter((t) => t.page_id === p.id).map((t) => t.date).sort();
+      return dates.length > 0 && tripDate >= dates[0] && tripDate <= dates[dates.length - 1];
+    }) ?? monthPages[monthPages.length - 1];
+  }
+  if (!target) target = anchor ?? sorted[sorted.length - 1];
+
+  const pageTrips = trips.filter((t) => t.page_id === target!.id);
+  const countForDate = countTripsForDate(pageTrips, tripDate);
+  if (countForDate >= MAX_TRIPS_PER_DAY) {
+    return { allowed: false, reason: 'MAX_TRIPS_PER_DAY', pageNumber: target.page_number, dayIndex: 1, tripIndex: countForDate + 1 } as AssignResult;
+  }
+  const sortedDistinct = getDistinctDates(pageTrips);
+  let dayIndex: number;
+  let tripIndex: number;
+  if (sortedDistinct.includes(tripDate)) {
+    dayIndex = sortedDistinct.indexOf(tripDate) + 1;
+    tripIndex = countForDate + 1;
+  } else {
+    const withNew = [...sortedDistinct, tripDate].sort();
+    dayIndex = withNew.indexOf(tripDate) + 1;
+    tripIndex = 1;
+  }
+  return { pageNumber: target.page_number, pageId: target.id, dayIndex, tripIndex, requiresNewPage: false };
+}

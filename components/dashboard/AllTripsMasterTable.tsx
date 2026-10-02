@@ -13,7 +13,8 @@ import {
 import { computeGlobalSeq, computeLedgerDays, computeLedgerSummary, computeTripFuelMap } from '@/lib/ledgerCalculations';
 import { detectTripGaps, detectPageGaps, detectDayGroupFuelGaps } from '@/lib/continuityAlerts';
 import { updateTrip, deleteTrip, type TripUpdateFields } from '@/lib/tripStore';
-import { getLockedDates } from '@/lib/fuelEconomyLockStore';
+import { getLockedDates, getFuelLocksForPage } from '@/lib/fuelEconomyLockStore';
+import { isDateGapBlanked } from '@/lib/estimateFuelEconomy';
 import {
   generateAllTripsBuffer,
   getAllTripsFileName,
@@ -31,7 +32,7 @@ import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEco
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
 import { sortTripsChronologically, shiftForInsert, shiftForRemove, findNextGapAfter, shiftForInsertBounded, type GapInfo, shiftForReverseGapFill, getTotalPositiveGapExtent } from '@/lib/tripShift';
-import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip, MAX_DAYS_PER_PAGE, getDistinctDates } from '@/lib/pagination';
+import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip, assignPageForBackdatedTrip, MAX_DAYS_PER_PAGE, getDistinctDates } from '@/lib/pagination';
 import { saveVehicleProfile } from '@/lib/vehicleStore';
 import type { Vehicle } from '@/types';
 import { SheetSettingsDialog } from '@/components/SheetSettingsDialog';
@@ -78,6 +79,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [editState, setEditState] = useState<EditState | null>(null);
   const [confirmSave, setConfirmSave] = useState<{ tripId: string; fields: TripUpdateFields } | null>(null);
+  // Guards the trailing blur-triggered duplicate commit after a Ctrl+Enter direct save
+  const justSavedRef = useRef<{ tripId: string; field: EditableField; value: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
@@ -568,7 +571,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   const cancelEdit = () => setEditState(null);
 
-  const commitEdit = (tripId: string, field: EditableField, value: string) => {
+  const commitEdit = (tripId: string, field: EditableField, value: string, skipConfirm = false) => {
+    // Swallow the trailing blur-triggered duplicate after a Ctrl+Enter direct save
+    if (justSavedRef.current && justSavedRef.current.tripId === tripId && justSavedRef.current.field === field && justSavedRef.current.value === value) {
+      justSavedRef.current = null;
+      return;
+    }
     const trip = trips.find((t) => t.id === tripId);
     if (!trip) return;
 
@@ -701,18 +709,24 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const unchanged = Object.entries(fields).every(([k, v]) => (trip as unknown as Record<string, unknown>)[k] === v);
     if (unchanged) { cancelEdit(); return; }
 
-    setConfirmSave({ tripId, fields });
-    setEditState(null);
+    if (skipConfirm) {
+      // Ctrl+Enter: treat as confirmed — save directly without the Confirm Save dialog
+      justSavedRef.current = { tripId, field, value };
+      setEditState(null);
+      void performSave(tripId, fields);
+    } else {
+      setConfirmSave({ tripId, fields });
+      setEditState(null);
+    }
   };
 
-  const doSave = async () => {
-    if (!confirmSave) return;
-    const savedId = confirmSave.tripId;
+  const performSave = async (tripId: string, fields: TripUpdateFields) => {
+    const savedId = tripId;
     preserveTableScroll();
-    await updateTrip(confirmSave.tripId, confirmSave.fields);
+    await updateTrip(tripId, fields);
     setConfirmSave(null);
     // Run gap detection and alert
-    const gaps = detectTripGaps([...trips.filter(t=>t.id!==savedId), {...trips.find(t=>t.id===savedId)!, ...confirmSave.fields} as Trip]);
+    const gaps = detectTripGaps([...trips.filter(t=>t.id!==savedId), {...trips.find(t=>t.id===savedId)!, ...fields} as Trip]);
     if (gaps.length > 0) {
       const kmGaps = gaps.filter(g=>g.kind==='km').length;
       const fuelGaps = gaps.filter(g=>g.kind==='fuel').length;
@@ -722,6 +736,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setFocusedTripId(savedId);
     setTimeout(() => setFocusedTripId(null), 2200);
     notifyDataChanged();
+  };
+
+  const doSave = async () => {
+    if (!confirmSave) return;
+    await performSave(confirmSave.tripId, confirmSave.fields);
   };
 
   const handleDelete = async (tripId: string) => {
@@ -809,8 +828,10 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     // Build new trip
     const vp = await getVehicleProfile().catch(()=>null);
     const vehicleId = vp?.id ?? 'veh-1';
-    // Determine page assignment
-    const assignment = assignPageForNewTrip({ pages, trips, newTripDate: gapFillForm.date });
+    // Determine page assignment — a gap fill is back-dated and no-shift, so it must
+    // land on the Page that owns the gap (the predecessor's Page), never the current
+    // last Page (which would orphan it under a non-existent page id).
+    const assignment = assignPageForBackdatedTrip({ pages, trips, tripDate: gapFillForm.date, anchorPageId: gapFillTarget.predecessor.page_id });
     if ('allowed' in assignment && (assignment as any).allowed === false) {
       setGapFillError(`Cannot add trip: ${ (assignment as any).reason } limit reached for ${gapFillForm.date}`);
       return;
@@ -996,10 +1017,17 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const delta = e - s;
     const vp = await getVehicleProfile().catch(()=>null);
     const vehicleId = vp?.id ?? 'veh-1';
-    const assignment = assignPageForNewTrip({ pages, trips, newTripDate: insertForm.date });
     const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
     const last = sortedPages[sortedPages.length-1];
     const nextNumber = last ? last.page_number + 1 : 1;
+    const anchorPage = pages.find(p => p.id === insertTarget.anchor.page_id);
+    // Back-dated insert into an older Page: assign to that Page directly instead of
+    // appending to the current last Page. Appends to the last Page keep the existing
+    // auto-split path below.
+    const backdatedToOlderPage = !!anchorPage && !!last && anchorPage.id !== last.id && anchorPage.month === insertForm.date.slice(0, 7);
+    const assignment = backdatedToOlderPage
+      ? assignPageForBackdatedTrip({ pages, trips, tripDate: insertForm.date, anchorPageId: anchorPage!.id })
+      : assignPageForNewTrip({ pages, trips, newTripDate: insertForm.date });
 
     // Auto-split cases: MAX_TRIPS blocked OR requiresNewPage (MAX_DAYS / MONTH_ROLLOVER)
     const needsNewPage = ('allowed' in assignment && (assignment as any).allowed === false) || (assignment as any).requiresNewPage;
@@ -1229,7 +1257,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     };
   }, [rowContextMenu, closeRowMenu]);
 
-  // Helper: compact Day badge per spec - Weekday empty, Sat/Sun RED, Poya YELLOW, MH AMBER, PH BLUE, BH RED, HOL SLATE, Leave ORANGE
+  // Helper: compact holiday/leave pill for the Day cell (Poya YELLOW, MH AMBER, PH BLUE, BH RED, HOL SLATE, Leave ORANGE).
+  // The 3-letter weekday is always rendered by the cell; weekends colour the weekday text red instead of a pill.
   const getDayBadge = (date: string) => {
     const info = getDayTypeInfo(date, leaveDates);
     const hol = getHoliday(date);
@@ -1781,9 +1810,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           onChange={(e) => setEditState({ ...editState!, value: e.target.value })}
           onBlur={() => commitEdit(trip.id, field, editState!.value)}
           onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitEdit(trip.id, field, editState!.value, true); return; }
             if (e.key === 'Enter') commitEdit(trip.id, field, editState!.value);
             if (e.key === 'Escape') cancelEdit();
           }}
+          title="Enter: review in dialog · Ctrl+Enter: save directly"
           className={`w-full px-1 py-0.5 border border-telemetry-cyan rounded text-xs font-mono bg-white focus:outline-none focus:ring-1 focus:ring-telemetry-cyan ${align === 'right' ? 'text-right' : ''}`}
         />
       );
@@ -2074,7 +2105,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       {/* LedgerMasterTable — matches alltripsample */}
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden" data-purpose="ledger-table-container">
         <div ref={tableContainerRef} className={`overflow-x-auto overflow-y-auto ${compact ? 'max-h-[420px]' : 'max-h-[640px] min-h-[280px]'} relative`} style={{ scrollbarWidth: 'thin' }}>
-          <table className="w-full text-left border-collapse text-xs table-sticky-header [&_th]:px-1 [&_td]:px-1">
+          <table className="w-full text-left border-collapse text-xs table-aptos table-sticky-header [&_th]:px-1 [&_td]:px-1">
             <thead>
               <tr className="bg-slate-900 text-white border-b border-slate-800 uppercase font-semibold text-[11px] tracking-wider select-none sticky top-0 z-20 shadow-sm">
               <th className="py-2.5 px-2 text-center border-r border-rule-line w-12">#</th>
@@ -2085,7 +2116,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
               </th>
               <th className="py-2.5 px-1 border-r border-rule-line w-16 min-w-[56px] max-w-[64px] text-center">DAY</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Start Time</th>
-              <th className="py-2.5 px-2 border-r border-rule-line">End Time</th>
+              <th className="py-2.5 px-2 border-r border-rule-line w-16 leading-tight whitespace-normal">End Time</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">
                 <button onClick={() => handleSort('start_km')} className="flex items-center ml-auto hover:text-on-surface">
                   Start ODO <SortIcon col="start_km" />
@@ -2101,7 +2132,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   KM <SortIcon col="trip_distance" />
                 </button>
               </th>
-              <th className="py-2.5 px-2 border-r border-rule-line w-[6%] max-w-[6%]">
+              <th className="py-2.5 px-2 border-r border-rule-line w-24">
                 <button onClick={() => handleSort('places_visited')} className="flex items-center hover:text-on-surface">
                   Route <SortIcon col="places_visited" />
                 </button>
@@ -2174,11 +2205,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                             onChange={(e) => setEditState({ ...editState!, value: e.target.value })}
                             onBlur={() => commitEdit(t.id, 'date', editState!.value)}
                             onKeyDown={(e) => {
+                              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitEdit(t.id, 'date', editState!.value, true); return; }
                               if (e.key === 'Enter') commitEdit(t.id, 'date', editState!.value);
                               if (e.key === 'Escape') cancelEdit();
                             }}
+                            title={`${min || max ? `Allowed: ${min || '...'} to ${max || '...'} · ` : ''}Enter: review in dialog · Ctrl+Enter: save directly`}
                             className="w-full px-1 py-0.5 border border-telemetry-cyan rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-telemetry-cyan"
-                            title={min || max ? `Allowed: ${min || '...'} to ${max || '...'}` : undefined}
                           />
                         );
                       }
@@ -2193,7 +2225,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                           title={tip}
                           data-testid={`date-cell-${t.id}`}
                         >
-                          {new Date(t.date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })}
+                          {new Date(t.date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                         </span>
                       );
                     })()}
@@ -2201,14 +2233,23 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-1 whitespace-nowrap border-r border-rule-line text-[9px] text-center w-16 min-w-[56px] max-w-[64px]" title={holiday ? `${holiday.name} (${holiday.kinds.join('/')})${dayInfo.isLeave ? ` • Leave: ${leaveDates.has(t.date) ? 'personal' : ''}` : ''}` : dayInfo.label}>
                     {(() => {
                       const badge = getDayBadge(t.date);
-                      if (!badge) return <span className="text-on-surface-variant">—</span>;
-                      return <span className={`inline-flex items-center justify-center gap-0.5 px-1.5 py-0.5 rounded-full border font-semibold leading-none ${badge.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`} />{badge.text}</span>;
+                      const weekday = dayInfo.dayOfWeek.slice(0, 3);
+                      const weekendOnly = dayInfo.isWeekend && !holiday && !dayInfo.isLeave;
+                      const showHolidayPill = !!holiday || dayInfo.isLeave;
+                      return (
+                        <span className="inline-flex items-center justify-center gap-0.5">
+                          <span className={weekendOnly ? 'font-semibold text-red-600' : 'text-on-surface-variant'}>{weekday}</span>
+                          {showHolidayPill && badge && (
+                            <span className={`inline-flex items-center justify-center gap-0.5 px-1 py-0.5 rounded-full border font-semibold leading-none ${badge.cls}`}><span className={`w-1 h-1 rounded-full ${badge.dot}`} />{badge.text}</span>
+                          )}
+                        </span>
+                      );
                     })()}
                   </td>
                   <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
                     {renderEditableCell(t, 'start_time', t.start_time || '-')}
                   </td>
-                  <td className="py-2 px-2 whitespace-nowrap font-mono text-xs text-outline border-r border-rule-line">
+                  <td className="py-2 px-2 whitespace-normal break-words font-mono text-xs text-outline border-r border-rule-line">
                     {renderEditableCell(t, 'end_time', t.end_time || '-')}
                   </td>
                   <td className={`py-2 px-2 text-right font-odometer-sm text-xs border-r border-rule-line ${hasKmGap ? 'bg-red-100 font-bold' : ''}`}>
@@ -2232,9 +2273,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-right font-odometer-sm text-xs font-bold text-slate-surface border-r border-rule-line">
                     {Math.round(t.trip_distance).toLocaleString()}
                   </td>
-                  <td className="py-2 px-2 max-w-[6%] w-[6%] border-r border-rule-line text-xs" title={t.places_visited}>
-                    <span className="inline-flex items-center gap-1 min-w-0 max-w-full">
-                      <span className="truncate min-w-0">{renderEditableCell(t, 'places_visited', t.places_visited)}</span>
+                  <td className="py-2 px-2 border-r border-rule-line text-xs">
+                    <span className="flex items-center gap-1 w-24 min-w-0">
+                      <span
+                        className="truncate min-w-0 flex-1"
+                        onMouseEnter={(e) => {
+                          const clip = e.currentTarget;
+                          const target = clip.firstElementChild;
+                          if (!(target instanceof HTMLSpanElement)) return;
+                          target.title = clip.scrollWidth > clip.clientWidth + 1 ? (target.textContent || '') : 'Click to edit';
+                        }}
+                      >
+                        {renderEditableCell(t, 'places_visited', t.places_visited)}
+                      </span>
                       {isPrivateType && <span className="text-red-600 font-bold text-[10px] leading-none shrink-0" data-testid={`prv-tag-${t.id}`}>[PRV]</span>}
                     </span>
                   </td>
@@ -2254,9 +2305,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
                     {renderEditableCell(t, 'in_tank', fuel && fuel.inTank > 0 ? fuel.inTank.toFixed(1) : '-', 'right')}
                   </td>
-                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'fuel_economy', fuel ? fuel.economy.toFixed(1) : '10.5', 'right')}
-                  </td>
+                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line" title={(() => {
+                     const isExplicit = (() => { try { const p = pages.find(x => x.id === t.page_id); if (!p) return false; const idx = getDistinctDates(trips.filter(x => x.page_id === p.id)).indexOf(t.date); const arr = getFuelEconomiesForPage(p.id); return arr[idx] != null; } catch { return false; } })();
+                     const isLocked = (() => { try { const p = pages.find(x => x.id === t.page_id); if (!p) return false; const idx = getDistinctDates(trips.filter(x => x.page_id === p.id)).indexOf(t.date); return !!getFuelLocksForPage(p.id)[idx]; } catch { return false; } })();
+                     const blanked = isDateGapBlanked(t.date, trips) && !isExplicit && !isLocked;
+                     return blanked ? 'Economy not calculated — ODO gap' : undefined;
+                   })()}>
+                     {(() => {
+                       const isExplicit = (() => { try { const p = pages.find(x => x.id === t.page_id); if (!p) return false; const idx = getDistinctDates(trips.filter(x => x.page_id === p.id)).indexOf(t.date); const arr = getFuelEconomiesForPage(p.id); return arr[idx] != null; } catch { return false; } })();
+                       const isLocked = (() => { try { const p = pages.find(x => x.id === t.page_id); if (!p) return false; const idx = getDistinctDates(trips.filter(x => x.page_id === p.id)).indexOf(t.date); return !!getFuelLocksForPage(p.id)[idx]; } catch { return false; } })();
+                       const blanked = isDateGapBlanked(t.date, trips) && !isExplicit && !isLocked;
+                       return blanked ? '—' : renderEditableCell(t, 'fuel_economy', fuel ? fuel.economy.toFixed(1) : '10.5', 'right');
+                     })()}
+                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs font-bold border-r border-rule-line">
                     {fuel ? fuel.balance.toFixed(1) : '-'}
                   </td>

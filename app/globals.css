@@ -44,6 +44,19 @@ body {
   overscroll-behavior: none;
 }
 
+/* All Trips master table: normal font (Aptos, falling back to Segoe UI/Inter) instead
+   of Inter/JetBrains Mono so all 17 columns fit on large screens without horizontal
+   scrolling. Monospace cells are pulled back to the same face, keeping tabular digits. */
+.table-aptos {
+  font-family: Aptos, "Segoe UI", "Inter", var(--font-sans);
+}
+
+.table-aptos .font-mono,
+.table-aptos .font-odometer-sm {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
 ::-webkit-scrollbar {
   display: none;
 }
