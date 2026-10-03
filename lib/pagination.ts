@@ -51,9 +51,10 @@ export function calculateBalance(
   isFullTank: boolean = false
 ): number {
   const cap = tankCapacity > 0 ? tankCapacity : 75;
+  const ceil = isFullTank && drawn > 0 ? cap + 1 : cap;
   let base = isFullTank && drawn > 0 ? cap : previousBalance + inTank + drawn;
   const raw = base - consumed;
-  return roundToOneDecimal(Math.min(cap, raw));
+  return roundToOneDecimal(Math.min(ceil, raw));
 }
 
 export interface FuelValidationResult {
@@ -69,6 +70,7 @@ export function validateFuelFeasibility(
 ): FuelValidationResult {
   const cap = tankCapacity > 0 ? tankCapacity : 75;
   const strictMin = Math.max(1, cap - 3);
+  const strictMax = cap + 1;
   let bal = roundToOneDecimal(openingFuel);
   const sorted = [...trips].sort((a, b) => a.date.localeCompare(b.date) || a.start_km - b.start_km);
 
@@ -82,35 +84,35 @@ export function validateFuelFeasibility(
     if (pumped > 0 && timing === 'START' && dist > 20) {
       const postPump = roundToOneDecimal(bal + pumped);
       if (isFull) {
-        if (postPump < strictMin || postPump > cap) {
+        if (postPump < strictMin || postPump > strictMax) {
           return {
             isValid: false,
-            error: `Strict full-tank post-pump balance ${postPump.toFixed(1)}L at trip ${t.date} outside full-tank window [${strictMin.toFixed(1)}, ${cap.toFixed(1)}]L`,
+            error: `Strict full-tank post-pump balance ${postPump.toFixed(1)}L at trip ${t.date} outside full-tank window [${strictMin.toFixed(1)}, ${strictMax.toFixed(1)}]L`,
           };
         }
       }
-      bal = roundToOneDecimal(Math.min(cap, postPump));
+      bal = roundToOneDecimal(Math.min(isFull ? strictMax : cap, postPump));
       bal = roundToOneDecimal(bal - consumed);
     } else {
       bal = roundToOneDecimal(bal - consumed);
       if (pumped > 0) {
         const postPump = roundToOneDecimal(bal + pumped);
         if (isFull) {
-          if (postPump < strictMin || postPump > cap) {
+          if (postPump < strictMin || postPump > strictMax) {
             return {
               isValid: false,
-              error: `Strict full-tank post-pump balance ${postPump.toFixed(1)}L at trip ${t.date} outside full-tank window [${strictMin.toFixed(1)}, ${cap.toFixed(1)}]L`,
+              error: `Strict full-tank post-pump balance ${postPump.toFixed(1)}L at trip ${t.date} outside full-tank window [${strictMin.toFixed(1)}, ${strictMax.toFixed(1)}]L`,
             };
           }
         }
-        bal = roundToOneDecimal(Math.min(cap, postPump));
+        bal = roundToOneDecimal(Math.min(isFull ? strictMax : cap, postPump));
       }
     }
 
-    if (bal < 1 || bal > cap) {
+    if (bal < 1 || bal > strictMax) {
       return {
         isValid: false,
-        error: `Intermediate fuel balance ${bal.toFixed(1)}L at trip ${t.date} outside [1, ${cap.toFixed(1)}]L range`,
+        error: `Intermediate fuel balance ${bal.toFixed(1)}L at trip ${t.date} outside [1, ${strictMax.toFixed(1)}]L range`,
       };
     }
   }

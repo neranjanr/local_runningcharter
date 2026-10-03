@@ -46,19 +46,50 @@ describe('Feasibility Validation & Post-Pump Window Enforcement (Issue #5)', () 
     expect(res.error).toMatch(/Intermediate fuel balance.*outside \[1/);
   });
 
-  it('passes strict full-tank post-pump window [tankCapacity - 3, tankCapacity]', () => {
+  it('passes strict full-tank post-pump window [tankCapacity - 3, tankCapacity + 1]', () => {
     const trips = [
       makeTrip({
         id: 't1',
         start_km: 100,
         end_km: 120,
         trip_distance: 20,
-        fuel_pumped_amount: 3.8, // 72L - 1.9L consumed = 70.1L + 3.8L = 73.9L (in [72, 75])
+        fuel_pumped_amount: 3.8, // 72L - 1.9L consumed = 70.1L + 3.8L = 73.9L (in [72, 76])
         is_full_tank: true,
       }),
     ];
     const res = validateFuelFeasibility(trips, 75, 72, 10.5);
     expect(res.isValid).toBe(true);
+  });
+
+  it('allows Full-Tank post-pump up to cap+1 for measurement imprecision', () => {
+    const trips = [
+      makeTrip({
+        id: 't1',
+        start_km: 100,
+        end_km: 120,
+        trip_distance: 20,
+        fuel_pumped_amount: 5.4, // 72L - 1.9L = 70.1L + 5.4L = 75.5L (in [72, 76])
+        is_full_tank: true,
+      }),
+    ];
+    const res = validateFuelFeasibility(trips, 75, 72, 10.5);
+    expect(res.isValid).toBe(true);
+  });
+
+  it('rejects Full-Tank post-pump above cap+1', () => {
+    const trips = [
+      makeTrip({
+        id: 't1',
+        start_km: 100,
+        end_km: 120,
+        trip_distance: 20,
+        fuel_pumped_amount: 7.0, // 72L - 1.9L = 70.1L + 7.0L = 77.1L (> 76)
+        is_full_tank: true,
+      }),
+    ];
+    const res = validateFuelFeasibility(trips, 75, 72, 10.5);
+    expect(res.isValid).toBe(false);
+    expect(res.error).toMatch(/outside full-tank window \[72\.0, 76\.0\]/);
   });
 
   it('fails strict full-tank post-pump window when post-pump volume is below tankCapacity - 3', () => {

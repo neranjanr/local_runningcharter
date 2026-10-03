@@ -211,6 +211,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
   const minFuel = 1;
   const strict = !!params.strictFullTank;
   const strictMin = Math.max(1, tankCapacity - 3);
+  const strictMax = tankCapacity + 1;
   if (trips.length === 0) return [];
 
   const sortedTrips = [...trips].sort((a, b) => {
@@ -248,7 +249,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
       if (pumped > 0 && migrated) { bal = roundToOneDecimal(bal + pumped); const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); }
       else { const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); if (pumped > 0) bal = roundToOneDecimal(bal + pumped); }
       if (bal < minFuel) maxViolation = Math.max(maxViolation, minFuel - bal);
-      else if (bal > tankCapacity) maxViolation = Math.max(maxViolation, bal - tankCapacity);
+      else if (bal > strictMax) maxViolation = Math.max(maxViolation, bal - strictMax);
     }
     return maxViolation;
   };
@@ -341,9 +342,13 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const srcTrip = sortedTrips[seg.sourceIdx];
     const isFullTank = seg.isFullTank;
     const pumpTiming = seg.pumpTiming;
-    // A Full Tank pump physically fills the tank: anchor the segment's opening balance to capacity.
+    // A Full Tank pump physically fills the tank: anchor the segment's opening balance
+    // to capacity, but let a floated post-pump value in [cap-3, cap+1] carry forward
+    // so adjacent economies can be smoothed (Q6).
     if (isFullTank) {
-      runningPos = tankCapacity;
+      if (runningPos < strictMin || runningPos > strictMax) {
+        runningPos = tankCapacity;
+      }
     }
     const startPos = runningPos;
     const nextIsFull = seg.nextSrcIdx !== undefined ? !!sortedTrips[seg.nextSrcIdx].is_full_tank : false;
@@ -448,18 +453,50 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     let foundFeasible = feasibleEs.length > 0;
     let warning: string | undefined;
     if (feasibleEs.length > 0) {
-      if (strict && nextIsFull) {
-        // Strict: leave the post-pump balance as close to capacity as possible.
-        let bestDiff = Infinity;
-        for (const e of feasibleEs) {
+      if (nextIsFull) {
+        // Full-Tank Tolerance Window [cap-3, cap+1]: float post-pump inside the
+        // window to minimize economy variation (Q2/Q7). Both Normal and Strict
+        // share this; Normal still step-caps afterwards, Strict stays uncapped.
+        const inWindow = feasibleEs.filter(e => {
           const endBal = simulateFinalBalance(segmentTrips, runningPos, e);
           const postPump = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
-          const diff = Math.abs(postPump - tankCapacity);
-          if (diff < bestDiff - 1e-9) { bestDiff = diff; bestE = e; }
+          return postPump >= strictMin - 1e-9 && postPump <= strictMax + 1e-9;
+        });
+        const pool = inWindow.length > 0 ? inWindow : feasibleEs;
+        let nearest = pool[0];
+        let bestDist = Infinity;
+        let bestCapDiff = Infinity;
+        for (const e of pool) {
+          const d = Math.abs(e - candidatePrev);
+          const endBal = simulateFinalBalance(segmentTrips, runningPos, e);
+          const postPump = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
+          const capDiff = Math.abs(postPump - tankCapacity);
+          if (d < bestDist - 1e-9 || (Math.abs(d - bestDist) < 1e-9 && capDiff < bestCapDiff - 1e-9)) {
+            bestDist = d; bestCapDiff = capDiff; nearest = e;
+          }
         }
-        const endBal = simulateFinalBalance(segmentTrips, runningPos, bestE);
-        const postPump = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
-        if (postPump < strictMin) warning = `Strict: post-pump balance ${postPump.toFixed(1)}L below full-tank window [${strictMin.toFixed(1)}, ${tankCapacity.toFixed(1)}]L — nearest feasible suggested`;
+        if (!strict) {
+          const step = nearest - candidatePrev;
+          if (Math.abs(step) > maxStep + 1e-9) {
+            bestE = roundToOneDecimal(candidatePrev + Math.sign(step) * maxStep);
+            foundFeasible = false;
+            warning = `Step capped at ${maxStep.toFixed(1)} km/L from ${candidatePrev.toFixed(1)} (nearest feasible ${nearest.toFixed(1)}${capTier ? `, ${capTier}` : ''}) — balance may leave [1, ${tankCapacity.toFixed(1)}]L`;
+          } else {
+            bestE = nearest;
+            if (inWindow.length === 0) {
+              const endBal = simulateFinalBalance(segmentTrips, runningPos, bestE);
+              const postPump = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
+              warning = `Post-pump balance ${postPump.toFixed(1)}L outside full-tank window [${strictMin.toFixed(1)}, ${strictMax.toFixed(1)}]L — nearest feasible suggested`;
+            }
+          }
+        } else {
+          bestE = nearest;
+          if (inWindow.length === 0) {
+            const endBal = simulateFinalBalance(segmentTrips, runningPos, bestE);
+            const postPump = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
+            warning = `Strict: post-pump balance ${postPump.toFixed(1)}L outside full-tank window [${strictMin.toFixed(1)}, ${strictMax.toFixed(1)}]L — nearest feasible suggested`;
+          }
+        }
       } else {
         // Normal: nearest feasible to the previous economy, but cap the step.
         let nearest = candidatePrev;
@@ -502,7 +539,16 @@ function runEstimationPass(params: PassParams): PassSegment[] {
       }
     }
     push(suggested, foundFeasible, feasibleMin, feasibleMax, warning);
-    runningPos = simulateFinalBalance(segmentTrips, runningPos, suggested);
+    const endBal = simulateFinalBalance(segmentTrips, runningPos, suggested);
+    const postPumpCarry = roundToOneDecimal(endBal + (nextPumpIncluded ? 0 : nextPumpAmount));
+    // Float carries forward (Q6): if the next pump is Full Tank, its post-pump
+    // value in [cap-3, cap+1] becomes the next segment's opening; otherwise the
+    // end balance carries (clamped to the modelling ceiling).
+    if (nextIsFull) {
+      runningPos = Math.min(strictMax, Math.max(1, postPumpCarry));
+    } else {
+      runningPos = endBal;
+    }
     prevEconomy = suggested;
   }
 
