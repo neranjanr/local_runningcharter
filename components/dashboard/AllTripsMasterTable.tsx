@@ -95,6 +95,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   // Row right-click Private/Official toggle
   const [rowContextMenu, setRowContextMenu] = useState<{ tripId: string; x: number; y: number } | null>(null);
   const [confirmToggle, setConfirmToggle] = useState<Trip | null>(null);
+  const [shiftConfirm, setShiftConfirm] = useState<{ source: Trip; target: Trip; direction: 'prev' | 'next' } | null>(null);
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [showGapList, setShowGapList] = useState(false);
   const [gapFillTarget, setGapFillTarget] = useState<GapPair | null>(null);
   const [gapFillForm, setGapFillForm] = useState<{ date: string; places_visited: string; start_time: string; end_time: string; trip_type: 'Official' | 'Private'; fuel_pumped_amount: string; fuel_order_no: string }>({ date: '', places_visited: '', start_time: '', end_time: '', trip_type: 'Official', fuel_pumped_amount: '0', fuel_order_no: '' });
   const [gapFillError, setGapFillError] = useState<string | null>(null);
@@ -149,6 +152,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   // Holiday/Leave state
   const [leaveDates, setLeaveDates] = useState<Set<string>>(new Set());
   const [dayTypeFilter, setDayTypeFilter] = useState<'All' | 'Off' | 'Working'>('All');
+  const [fuelOnly, setFuelOnly] = useState(false);
   useEffect(() => { getLeaves().then(lvs => setLeaveDates(new Set(lvs.map(l=>l.date)))).catch(()=>{}); }, [trips]);
   useEffect(() => {
     const h = () => getLeaves().then(lvs => setLeaveDates(new Set(lvs.map(l=>l.date)))).catch(()=>{});
@@ -181,11 +185,26 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   }, [trips, search, tripType, month, sortColumn, sortDirection]);
 
   const filtered = useMemo(() => {
-    if (dayTypeFilter === 'All') return filteredBase;
-    return filteredBase.filter(t => {
-      const info = getDayTypeInfo(t.date, leaveDates);
-      return dayTypeFilter === 'Off' ? info.isOffDay : !info.isOffDay;
-    });
+    let out = filteredBase;
+    if (dayTypeFilter !== 'All') {
+      out = out.filter(t => {
+        const info = getDayTypeInfo(t.date, leaveDates);
+        return dayTypeFilter === 'Off' ? info.isOffDay : !info.isOffDay;
+      });
+    }
+    if (fuelOnly) out = out.filter(t => (t.fuel_pumped_amount ?? 0) > 0);
+    return out;
+  }, [filteredBase, dayTypeFilter, leaveDates, fuelOnly]);
+
+  const fuelPumpedCount = useMemo(() => {
+    let base = filteredBase;
+    if (dayTypeFilter !== 'All') {
+      base = base.filter(t => {
+        const info = getDayTypeInfo(t.date, leaveDates);
+        return dayTypeFilter === 'Off' ? info.isOffDay : !info.isOffDay;
+      });
+    }
+    return base.filter(t => (t.fuel_pumped_amount ?? 0) > 0).length;
   }, [filteredBase, dayTypeFilter, leaveDates]);
 
   const sums = useMemo(() => computeFilteredSums(filtered), [filtered]);
@@ -235,6 +254,47 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
   const totalPositiveGapExtent = useMemo(() => positiveGapPairs.reduce((s, g) => s + g.delta, 0), [positiveGapPairs]);
   const hasNegativeOverlap = useMemo(() => gapPairs.some(g => g.delta < 0), [gapPairs]);
   const recordedFinalOdo = useMemo(() => sortedAll.length > 0 ? roundToIntegerKm(sortedAll[sortedAll.length - 1].end_km) : 0, [sortedAll]);
+
+  // Fuel gaps: Page-level (start/end fuel balance) + Day-group (balance vs next position)
+  const pageFuelGaps = useMemo(() => {
+    try { return detectPageGaps(pages).filter(g => g.kind === 'fuel'); } catch { return []; }
+  }, [pages]);
+  const allLedgerDaysForGaps = useMemo(() => {
+    try {
+      const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
+      const days: import('@/lib/ledgerCalculations').LedgerDay[] = [];
+      let runningFuelPos: number | null = null;
+      for (const page of sortedPages) {
+        const economies = getFuelEconomiesForPage(page.id);
+        const inTanks = getInTanksForPage(page.id);
+        const pageForCompute = runningFuelPos !== null ? { ...page, start_fuel_balance: runningFuelPos } : page;
+        const ds = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks });
+        for (const d of ds) days.push(d);
+        if (ds.length > 0) runningFuelPos = ds[ds.length - 1].balance;
+        else if (runningFuelPos === null) runningFuelPos = page.start_fuel_balance;
+      }
+      return days.sort((a, b) => a.date.localeCompare(b.date));
+    } catch { return []; }
+  }, [pages, trips]);
+  const dayFuelGaps = useMemo(() => {
+    try { return detectDayGroupFuelGaps(allLedgerDaysForGaps); } catch { return []; }
+  }, [allLedgerDaysForGaps]);
+  const fuelGapCount = pageFuelGaps.length + dayFuelGaps.length;
+  const firstTripIdByPageId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of sortedAll) { if (!m.has(t.page_id)) m.set(t.page_id, t.id); }
+    return m;
+  }, [sortedAll]);
+  const firstTripIdByDate = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of sortedAll) { if (!m.has(t.date)) m.set(t.date, t.id); }
+    return m;
+  }, [sortedAll]);
+  const pageIdByNumber = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const p of pages) m.set(p.page_number, p.id);
+    return m;
+  }, [pages]);
 
   const openReverseDialog = useCallback(() => {
     const defaultPhys = totalPositiveGapExtent > 0 ? String(recordedFinalOdo - totalPositiveGapExtent) : '';
@@ -407,6 +467,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
 
   const focusTrip = useCallback((tripId: string | null, opts?: { clearFilter?: boolean }) => {
     if (!tripId) return;
+    // Fuel-only filter hides non-pumped rows — always reveal focused row
+    setFuelOnly(false);
     // If filtered view hides the row, clear filters per Q1
     if (opts?.clearFilter) {
       setSearch('');
@@ -1242,6 +1304,57 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     setImportMsg(`Trip on ${confirmToggle.date} marked as ${newType}`);
   }, [confirmToggle, preserveTableScroll, notifyDataChanged]);
 
+  // Drawn Fuel Shift: move fuel_pumped_amount + fuel_order_no + is_full_tank + pump_timing to same-date neighbour
+  const getShiftNeighbour = useCallback((trip: Trip, direction: 'prev' | 'next'): { target: Trip | null; blocked?: string } => {
+    const idx = sortedIdToIndex.get(trip.id) ?? -1;
+    if (idx < 0) return { target: null, blocked: 'Trip not found in order' };
+    const target = direction === 'prev' ? (idx > 0 ? sortedAll[idx - 1] : null) : (idx >= 0 && idx < sortedAll.length - 1 ? sortedAll[idx + 1] : null);
+    if (!target) return { target: null, blocked: direction === 'prev' ? 'No previous trip (first of ledger)' : 'No next trip (last of ledger)' };
+    if (target.date !== trip.date) return { target: null, blocked: `Neighbour is on ${target.date}, not same date (${trip.date})` };
+    if ((target.fuel_pumped_amount ?? 0) > 0) return { target: null, blocked: `Target Row #${globalSeqMap.get(target.id) ?? '?'} already has ${(target.fuel_pumped_amount ?? 0).toFixed(1)} L — clear it first` };
+    return { target };
+  }, [sortedAll, sortedIdToIndex, globalSeqMap]);
+
+  const requestShiftPumped = useCallback((trip: Trip, direction: 'prev' | 'next') => {
+    setRowContextMenu(null);
+    closeMenu();
+    if (!((trip.fuel_pumped_amount ?? 0) > 0)) return;
+    const { target, blocked } = getShiftNeighbour(trip, direction);
+    if (!target) {
+      setImportMsg(`Cannot shift pumped fuel ${direction === 'prev' ? 'to previous row' : 'to next row'}: ${blocked}`);
+      return;
+    }
+    setShiftConfirm({ source: trip, target, direction });
+  }, [getShiftNeighbour, closeMenu]);
+
+  const doShiftPumped = useCallback(async () => {
+    if (!shiftConfirm || shiftBusy) return;
+    const { source, target } = shiftConfirm;
+    setShiftBusy(true);
+    try {
+      preserveTableScroll();
+      const payload = {
+        fuel_pumped_amount: source.fuel_pumped_amount ?? 0,
+        fuel_order_no: source.fuel_order_no ?? '',
+        is_full_tank: !!source.is_full_tank,
+        pump_timing: (source.pump_timing ?? 'END') as 'START' | 'END',
+      };
+      await updateTrip(target.id, payload);
+      await updateTrip(source.id, { fuel_pumped_amount: 0, fuel_order_no: '', is_full_tank: false, pump_timing: 'END' });
+      setShiftConfirm(null);
+      setFocusedTripId(target.id);
+      setTimeout(() => setFocusedTripId(null), 2200);
+      notifyDataChanged();
+      const label = `${payload.fuel_pumped_amount.toFixed(1)} L${payload.fuel_order_no ? ` #${payload.fuel_order_no}` : ''}${payload.is_full_tank ? ' ★FULL' : ''} ${payload.pump_timing}`;
+      setImportMsg(`Shifted pumped ${label} — Row #${globalSeqMap.get(source.id) ?? '?'} → Row #${globalSeqMap.get(target.id) ?? '?'}`);
+    } catch (e: unknown) {
+      const m = e instanceof Error ? e.message : String(e);
+      setImportMsg(`Shift failed: ${m}`);
+    } finally {
+      setShiftBusy(false);
+    }
+  }, [shiftConfirm, shiftBusy, preserveTableScroll, notifyDataChanged, globalSeqMap]);
+
   // Close row context menu on scroll/resize/Escape/click
   useEffect(() => {
     if (!rowContextMenu) return;
@@ -1924,25 +2037,25 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" strokeLinecap="round" strokeLinejoin="round"></path></svg>
           </div>
         </div>
-        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
-          <div>
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm" title={`Working: ${offDaySummary.workingDayTrips} trips • ${offDaySummary.workingDayKm.toLocaleString()} km (Official ${sums.officialKm.toLocaleString()} km • Private ${sums.privateKm.toLocaleString()} km)`}>
+          <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Working Dist.</p>
             <div className="flex items-baseline gap-1 mt-0.5">
-              <p className="text-xl font-bold tracking-tight text-slate-900 font-mono">{kpiWorking.toLocaleString()}</p>
-              <span className="text-xs text-slate-400 font-medium">km</span>
+              <p className="text-xl font-bold tracking-tight text-slate-900 font-mono truncate" title={`${kpiWorking.toLocaleString()} km — ${offDaySummary.workingDayTrips} working trips`}>{kpiWorking.toLocaleString()}</p>
+              <span className="text-xs text-slate-400 font-medium shrink-0">km</span>
             </div>
           </div>
-          <div className="h-9 w-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-medium text-xs">{sums.officialKm.toLocaleString().slice(0,4)}</div>
+          <div className="h-9 min-w-9 px-1 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-medium text-xs whitespace-nowrap shrink-0" title={`Official ${sums.officialKm.toLocaleString()} km`}>{sums.officialKm.toLocaleString()}</div>
         </div>
-        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
-          <div>
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm" title={`Off-day: ${offDaySummary.offDayTrips} trips • ${offDaySummary.offDayKm.toLocaleString()} km`}>
+          <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Off-day Dist.</p>
             <div className="flex items-baseline gap-1 mt-0.5">
-              <p className="text-xl font-bold tracking-tight text-slate-900 font-mono">{kpiOffDay.toLocaleString()}</p>
-              <span className="text-xs text-slate-400 font-medium">km</span>
+              <p className="text-xl font-bold tracking-tight text-slate-900 font-mono truncate" title={`${kpiOffDay.toLocaleString()} km — ${offDaySummary.offDayTrips} off-day trips`}>{kpiOffDay.toLocaleString()}</p>
+              <span className="text-xs text-slate-400 font-medium shrink-0">km</span>
             </div>
           </div>
-          <div className="h-9 w-9 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-medium text-xs">{offDaySummary.offDayTrips} tr</div>
+          <div className="h-9 min-w-9 px-1 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-medium text-xs whitespace-nowrap shrink-0" title={`${offDaySummary.offDayTrips} off-day trips • ${offDaySummary.offDayKm.toLocaleString()} km`}>{offDaySummary.offDayTrips} tr</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 flex items-center justify-between shadow-sm">
           <div>
@@ -1966,7 +2079,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       </section>
 
       {/* Continuity Gap Banner — matches alltripsample ContinuityGapBanner */}
-      {gapPairs.length > 0 && (
+      {(gapPairs.length > 0 || fuelGapCount > 0) && (
         <section aria-label="Continuity Gap Alert" className="rounded-xl border-l-4 border-l-rose-600 bg-gradient-to-r from-rose-50/90 via-amber-50/60 to-white border border-rose-200/70 p-4 shadow-sm" data-purpose="continuity-gap-alert">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="flex items-start gap-3.5">
@@ -1974,20 +2087,30 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" strokeLinecap="round" strokeLinejoin="round"></path></svg>
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-bold text-slate-900">Continuity Gap Detected: {gapPairs.length} Odometer Mismatch{gapPairs.length>1?'es':''}</h2>
-                  <span className="text-[11px] px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold uppercase tracking-wide">Row #{globalSeqMap.get(gapPairs[0].successor.id) ?? '?'}</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-sm font-bold text-slate-900">Continuity Gap Detected:{gapPairs.length > 0 ? ` ${gapPairs.length} Odometer Mismatch${gapPairs.length>1?'es':''}` : ''}{gapPairs.length > 0 && fuelGapCount > 0 ? ' +' : ''}{fuelGapCount > 0 ? ` ${fuelGapCount} Fuel Mismatch${fuelGapCount>1?'es':''}` : ''}</h2>
+                  {gapPairs.length > 0 && <span className="text-[11px] px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold uppercase tracking-wide">Row #{globalSeqMap.get(gapPairs[0].successor.id) ?? '?'}</span>}
+                  {fuelGapCount > 0 && <span className="text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold uppercase tracking-wide border border-amber-300">⛽ {fuelGapCount} fuel gap{fuelGapCount>1?'s':''}</span>}
                 </div>
+                {gapPairs.length > 0 ? (
                 <p className="text-xs text-slate-600 mt-1">
                   Trip on <strong className="text-slate-800 font-medium">{new Date(gapPairs[0].successor.date+'T00:00:00').toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric', year:'numeric'})}</strong> Start ODO (<span className="font-mono font-medium text-rose-700">{gapPairs[0].actual.toLocaleString()}</span>) does not match previous End ODO (<span className="font-mono font-medium text-slate-800">{gapPairs[0].expected.toLocaleString()}</span>). <span className="text-rose-700 font-semibold font-mono">Missing: +{Math.abs(gapPairs[0].delta).toLocaleString()} km.</span>
+                  {fuelGapCount > 0 && <span className="text-amber-700 font-medium"> Plus {fuelGapCount} fuel gap{fuelGapCount>1?'s':''} — open list for details.</span>}
                 </p>
+                ) : (
+                <p className="text-xs text-slate-600 mt-1">
+                  <span className="text-amber-700 font-medium">{fuelGapCount} fuel gap{fuelGapCount>1?'s':''} detected (Page / Day-Group fuel continuity) — ODO chain clean. Open list for details.</span>
+                </p>
+                )}
               </div>
             </div>
             <div className="flex items-center flex-wrap gap-2.5 shrink-0">
+              {gapPairs.length > 0 && (
               <button onClick={() => openGapFill(gapPairs[0])} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 text-white hover:bg-rose-700 shadow-sm transition" type="button">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path d="M12 4.5v15m7.5-7.5h-15" strokeLinecap="round" strokeLinejoin="round"></path></svg>
                 <span>Auto-Fill Missing {Math.abs(gapPairs[0].delta).toLocaleString()} KM</span>
               </button>
+              )}
               {positiveGapPairs.length > 0 && (
                 <button
                   data-testid="reverse-gap-fill-btn"
@@ -2001,14 +2124,90 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   <span className="text-[10px] font-bold bg-white/20 px-1.5 py-0.5 rounded">{totalPositiveGapExtent.toLocaleString()} km</span>
                 </button>
               )}
+              {gapPairs.length > 0 && (
               <button onClick={() => { const id=gapPairs[0].successor.id; focusTrip(id, {clearFilter: false}); }} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition shadow-sm" type="button">
                 <span>Jump to Row #{globalSeqMap.get(gapPairs[0].successor.id) ?? '?'}</span>
                 <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5" strokeLinecap="round" strokeLinejoin="round"></path></svg>
               </button>
-              <span className="text-xs text-slate-500 px-2 font-medium">{gapPairs.length>1 ? `+${gapPairs.length-1} more` : ''}</span>
+              )}
+              <button onClick={() => setShowGapList(true)} data-testid="gap-list-btn" className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 transition shadow-sm" type="button" title={fuelGapCount > 0 ? `View all ${gapPairs.length} ODO + ${fuelGapCount} fuel gaps` : `View all ${gapPairs.length} ODO gaps`}>
+                <span>View all {gapPairs.length + fuelGapCount} gaps</span>
+                <span className="text-[10px] font-bold bg-slate-100 px-1.5 py-0.5 rounded">{gapPairs.length>1 ? `+${gapPairs.length-1} ODO` : ''}{gapPairs.length>1 && fuelGapCount>0 ? ' • ' : ''}{fuelGapCount>0 ? `+${fuelGapCount} fuel` : ''}</span>
+              </button>
             </div>
           </div>
         </section>
+      )}
+
+      {/* All Gaps list popup: ODO (RED) + Fuel (AMBER), each linked to Row # */}
+      {showGapList && gapPairs.length + fuelGapCount > 0 && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="gap-list-dialog" onClick={() => setShowGapList(false)}>
+          <div className="bg-white rounded-xl shadow-xl p-5 max-w-3xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-900">Continuity Gaps — {gapPairs.length} ODO + {fuelGapCount} fuel</h3>
+              <button onClick={() => setShowGapList(false)} className="px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-100 rounded" data-testid="gap-list-close">✕ Close</button>
+            </div>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-rose-700 mb-1">Odometer gaps ({gapPairs.length})</h4>
+            <table className="w-full text-xs border-collapse mb-4">
+              <thead><tr className="bg-rose-50 text-rose-900 uppercase text-[10px]"><th className="text-left px-2 py-1 border">#</th><th className="text-left px-2 py-1 border">Date</th><th className="text-right px-2 py-1 border">Expected → Actual (Δ)</th><th className="text-center px-2 py-1 border">Row #</th><th className="text-center px-2 py-1 border">Action</th></tr></thead>
+              <tbody>
+                {gapPairs.map((g, i) => {
+                  const rowNo = globalSeqMap.get(g.successor.id) ?? '?';
+                  return (
+                    <tr key={`odo-${i}-${g.successor.id}`} className="border-b hover:bg-rose-50/50">
+                      <td className="px-2 py-1 border font-mono">{i + 1}</td>
+                      <td className="px-2 py-1 border">{g.successor.date}</td>
+                      <td className="px-2 py-1 border text-right font-mono">{g.expected.toLocaleString()} → {g.actual.toLocaleString()} (<span className="font-bold text-rose-700">{g.delta > 0 ? '+' : ''}{g.delta.toLocaleString()} km</span>)</td>
+                      <td className="px-2 py-1 border text-center font-mono font-bold">#{String(rowNo)}</td>
+                      <td className="px-2 py-1 border text-center">
+                        <button data-testid={`gap-jump-${g.successor.id}`} onClick={() => { setShowGapList(false); focusTrip(g.successor.id, { clearFilter: false }); }} className="px-2 py-0.5 text-[11px] font-semibold rounded bg-white border border-slate-300 hover:bg-slate-50">Jump to #{String(rowNo)}</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-amber-700 mb-1">Fuel gaps ({fuelGapCount})</h4>
+            {fuelGapCount === 0 ? (
+              <p className="text-xs text-slate-500 mb-2">No fuel gaps — fuel chain continuous.</p>
+            ) : (
+            <table className="w-full text-xs border-collapse">
+              <thead><tr className="bg-amber-50 text-amber-900 uppercase text-[10px]"><th className="text-left px-2 py-1 border">#</th><th className="text-left px-2 py-1 border">Source</th><th className="text-right px-2 py-1 border">Expected → Actual (Δ)</th><th className="text-center px-2 py-1 border">Row #</th><th className="text-center px-2 py-1 border">Action</th></tr></thead>
+              <tbody>
+                {pageFuelGaps.map((g, i) => {
+                  const pid = pageIdByNumber.get(g.pageNumber);
+                  const tripId = pid ? firstTripIdByPageId.get(pid) : undefined;
+                  const rowNo = tripId ? globalSeqMap.get(tripId) ?? '?' : '—';
+                  const delta = Math.round((g.actual - g.expected) * 10) / 10;
+                  return (
+                    <tr key={`fuelseg-${i}`} className="border-b hover:bg-amber-50/60">
+                      <td className="px-2 py-1 border font-mono">{i + 1}</td>
+                      <td className="px-2 py-1 border">Page {g.pageNumber} start fuel</td>
+                      <td className="px-2 py-1 border text-right font-mono">{g.expected.toFixed(1)} → {g.actual.toFixed(1)} L (<span className="font-bold text-amber-700">{delta > 0 ? '+' : ''}{delta.toFixed(1)} L</span>)</td>
+                      <td className="px-2 py-1 border text-center font-mono font-bold">{tripId ? `#${rowNo}` : '—'}</td>
+                      <td className="px-2 py-1 border text-center">{tripId ? <button data-testid={`fuel-gap-jump-page-${g.pageNumber}`} onClick={() => { setShowGapList(false); focusTrip(tripId, { clearFilter: false }); }} className="px-2 py-0.5 text-[11px] font-semibold rounded bg-white border border-slate-300 hover:bg-slate-50">Jump to #{String(rowNo)}</button> : <span className="text-slate-400">—</span>}</td>
+                    </tr>
+                  );
+                })}
+                {dayFuelGaps.map((g, i) => {
+                  const tripId = firstTripIdByDate.get(g.date);
+                  const rowNo = tripId ? globalSeqMap.get(tripId) ?? '?' : '?';
+                  const delta = Math.round((g.actual - g.expected) * 10) / 10;
+                  return (
+                    <tr key={`fuelday-${g.date}-${i}`} className="border-b hover:bg-amber-50/60">
+                      <td className="px-2 py-1 border font-mono">{pageFuelGaps.length + i + 1}</td>
+                      <td className="px-2 py-1 border">{g.date} position</td>
+                      <td className="px-2 py-1 border text-right font-mono">{g.expected.toFixed(1)} → {g.actual.toFixed(1)} L (<span className="font-bold text-amber-700">{delta > 0 ? '+' : ''}{delta.toFixed(1)} L</span>)</td>
+                      <td className="px-2 py-1 border text-center font-mono font-bold">#{String(rowNo)}</td>
+                      <td className="px-2 py-1 border text-center">{tripId ? <button data-testid={`fuel-gap-jump-${tripId}`} onClick={() => { setShowGapList(false); focusTrip(tripId, { clearFilter: false }); }} className="px-2 py-0.5 text-[11px] font-semibold rounded bg-white border border-slate-300 hover:bg-slate-50">Jump to #{String(rowNo)}</button> : <span className="text-slate-400">—</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            )}
+          </div>
+        </div>
       )}
 
         {importMsg && (
@@ -2081,8 +2280,12 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         </div>
         <div className="flex items-center flex-wrap gap-2 pt-2 border-t border-slate-100 text-xs">
           <span className="text-slate-400 text-[11px] font-medium uppercase tracking-wider mr-1">Quick Filters:</span>
-          <button onClick={() => { setTripType('All'); setDayTypeFilter('All'); }} className={`px-2.5 py-1 rounded-md text-xs font-medium shadow-sm border ${tripType==='All' && dayTypeFilter==='All' ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80 border-slate-200'}`}>
+          <button onClick={() => { setTripType('All'); setDayTypeFilter('All'); setFuelOnly(false); }} className={`px-2.5 py-1 rounded-md text-xs font-medium shadow-sm border ${tripType==='All' && dayTypeFilter==='All' && !fuelOnly ? 'bg-slate-900 text-white border-slate-900' : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80 border-slate-200'}`}>
             All <span className="ml-1 opacity-70">{filtered.length}</span>
+          </button>
+          <button onClick={() => setFuelOnly(v => !v)} data-testid="quick-filter-fuel" title={fuelOnly ? 'Show all trips (clear fuel filter)' : `Show only fuel-pumped trips (${fuelPumpedCount})`} className={`px-2.5 py-1 rounded-md text-xs font-medium transition border ${fuelOnly ? 'bg-blue-600 text-white border-blue-600' : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-200/80'}`}>
+            <span className="mr-1">⛽</span>
+            Fuel <span className="ml-1 opacity-70">{fuelPumpedCount}</span>
           </button>
           <button onClick={() => { setTripType('Official'); }} className="px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition border border-emerald-200/80">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>
@@ -2137,13 +2340,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   Route <SortIcon col="places_visited" />
                 </button>
               </th>
-              <th className="py-2.5 px-2 text-right border-r border-rule-line">Pumped</th>
+              <th className="py-2.5 px-1 text-center border-r border-rule-line w-[72px] min-w-[72px] max-w-[72px] leading-tight">Pumped</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Order No</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Pos.</th>
-              <th className="py-2.5 px-2 text-right border-r border-rule-line">In-Tank</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Econ</th>
               <th className="py-2.5 px-2 text-right border-r border-rule-line">Balance</th>
               <th className="py-2.5 px-2 border-r border-rule-line">Page</th>
+              <th className="py-2.5 px-2 text-right border-r border-rule-line">In-Tank</th>
               <th className="py-2.5 px-1 w-10 min-w-[40px] text-center bg-slate-900 sticky right-0 z-10 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">⋯</th>
             </tr>
           </thead>
@@ -2289,21 +2492,22 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                       {isPrivateType && <span className="text-red-600 font-bold text-[10px] leading-none shrink-0" data-testid={`prv-tag-${t.id}`}>[PRV]</span>}
                     </span>
                   </td>
-                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    <span className="inline-flex items-center justify-end gap-1 w-full">
-                      {renderEditableCell(t, 'fuel_pumped_amount', (t.fuel_pumped_amount ?? 0) > 0 ? `${(t.fuel_pumped_amount ?? 0).toFixed(1)}` : '-', 'right')}
-                      {t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
-                      {(t.fuel_pumped_amount ?? 0) > 0 && <span className={`shrink-0 inline-flex items-center px-1 py-0.5 rounded border text-[8px] font-bold tracking-widest leading-none ${ (t.pump_timing ?? 'END')==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={`Fueled at ${t.pump_timing ?? 'END'} — ${ (t.pump_timing ?? 'END')==='START' && t.trip_distance>20 ? 'distance charged to next economy' : 'distance charged to previous economy'}`}>{(t.pump_timing ?? 'END')==='START' ? 'START' : 'END'}</span>}
-                    </span>
+                  <td className="py-1 px-1 text-center font-mono text-xs border-r border-rule-line w-[72px] min-w-[72px] max-w-[72px]">
+                    {isFuelPumped ? (
+                      <span className="flex flex-col items-center justify-center gap-0.5 leading-tight">
+                        <span className="text-[11px]">{renderEditableCell(t, 'fuel_pumped_amount', `${(t.fuel_pumped_amount ?? 0).toFixed(1)}`, 'right')}</span>
+                        {t.is_full_tank && <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
+                        <span className={`inline-flex items-center px-1 py-0.5 rounded border text-[8px] font-bold tracking-widest leading-none ${ (t.pump_timing ?? 'END')==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={`Fueled at ${t.pump_timing ?? 'END'} — ${ (t.pump_timing ?? 'END')==='START' && t.trip_distance>20 ? 'distance charged to next economy' : 'distance charged to previous economy'}`}>{(t.pump_timing ?? 'END')==='START' ? 'START' : 'END'}</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
                   </td>
                   <td className="py-2 px-1 text-xs font-mono text-on-surface-variant border-r border-rule-line">
                     {renderEditableCell(t, 'fuel_order_no', t.fuel_order_no || '-')}
                   </td>
                   <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line" title={isEarliest ? 'Click to edit opening fuel (auto-counts downstream)' : 'Auto-calculated from opening fuel — edit earliest date only'}>
                     {isEarliest ? renderEditableCell(t, 'fuel_position', fuel ? fuel.position.toFixed(1) : '-', 'right') : <span className="font-mono">{fuel ? fuel.position.toFixed(1) : '-'}</span>}
-                  </td>
-                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
-                    {renderEditableCell(t, 'in_tank', fuel && fuel.inTank > 0 ? fuel.inTank.toFixed(1) : '-', 'right')}
                   </td>
                    <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line" title={(() => {
                      const isExplicit = (() => { try { const p = pages.find(x => x.id === t.page_id); if (!p) return false; const idx = getDistinctDates(trips.filter(x => x.page_id === p.id)).indexOf(t.date); const arr = getFuelEconomiesForPage(p.id); return arr[idx] != null; } catch { return false; } })();
@@ -2323,6 +2527,9 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                   </td>
                   <td className="py-2 px-2 text-xs font-mono border-r border-rule-line">
                     {t.page_id.replace('page-', 'P')}
+                  </td>
+                  <td className="py-2 px-2 text-right font-mono text-xs border-r border-rule-line">
+                    {renderEditableCell(t, 'in_tank', fuel && fuel.inTank > 0 ? fuel.inTank.toFixed(1) : '-', 'right')}
                   </td>
                   <td className="py-2 px-1 text-center w-10 min-w-[40px] bg-paper-gutter sticky right-0 z-[5] shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]">
                     <button
@@ -2373,8 +2580,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             const tripForMenu = filtered.find(x => x.id === openMenuId) ?? sortedAll.find(x => x.id === openMenuId);
             const gapForMenu = predecessorGapMap.get(openMenuId) ?? null;
             const hasPumpedForMenu = (tripForMenu?.fuel_pumped_amount ?? 0) > 0;
-            const menuW = 192;
-            const menuH = gapForMenu ? (hasPumpedForMenu ? 224 : 160) : (hasPumpedForMenu ? 196 : 132);
+            const menuW = 220;
+            const menuH = gapForMenu ? (hasPumpedForMenu ? 300 : 160) : (hasPumpedForMenu ? 272 : 132);
             const gap = 6;
             const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
             const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -2433,6 +2640,26 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     <span>{(tripForMenu?.pump_timing ?? 'END') === 'START' ? '◀' : '▶'}</span> Fueled at {(tripForMenu?.pump_timing ?? 'END') === 'START' ? 'Start' : 'End'} → {(tripForMenu?.pump_timing ?? 'END') === 'START' ? 'End' : 'Start'}
                   </button>
                 )}
+                {hasPumpedForMenu && tripForMenu && (
+                  <>
+                    <button
+                      data-testid={`shift-pumped-prev-menu-${openMenuId}`}
+                      onClick={() => requestShiftPumped(tripForMenu, 'prev')}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter flex items-center gap-1.5 text-indigo-700"
+                      title="Move Drawn Fuel (amount + order no + full + timing) to same-date previous trip"
+                    >
+                      <span>⛽←</span> Shift Pumped info to previous row
+                    </button>
+                    <button
+                      data-testid={`shift-pumped-next-menu-${openMenuId}`}
+                      onClick={() => requestShiftPumped(tripForMenu, 'next')}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-paper-gutter flex items-center gap-1.5 text-indigo-700"
+                      title="Move Drawn Fuel (amount + order no + full + timing) to same-date next trip"
+                    >
+                      <span>⛽→</span> Shift Pumped info to next row
+                    </button>
+                  </>
+                )}
                 <button
                   data-testid={`delete-menu-${openMenuId}`}
                   onClick={() => { const id = openMenuId; closeMenu(); setConfirmDelete(id); }}
@@ -2459,8 +2686,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             const hasPumped = (trip.fuel_pumped_amount ?? 0) > 0;
             const isFull = !!trip.is_full_tank;
             const isStart = (trip.pump_timing ?? 'END') === 'START';
-            const menuW = 220;
-            const menuH = hasPumped ? 116 : 36;
+            const menuW = 240;
+            const menuH = hasPumped ? 196 : 36;
             const gap = 4;
             const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
             const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -2505,6 +2732,28 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     Fueled at {isStart ? 'Start' : 'End'} → {isStart ? 'End' : 'Start'}
                   </button>
                 )}
+                {hasPumped && (
+                  <button
+                    data-testid={`shift-pumped-prev-${rowContextMenu.tripId}`}
+                    onClick={() => requestShiftPumped(trip, 'prev')}
+                    className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-paper-gutter flex items-center gap-2 text-indigo-700"
+                    title="Move Drawn Fuel to same-date previous trip"
+                  >
+                    <span className="text-[11px]">⛽←</span>
+                    Shift Pumped information to previous row
+                  </button>
+                )}
+                {hasPumped && (
+                  <button
+                    data-testid={`shift-pumped-next-${rowContextMenu.tripId}`}
+                    onClick={() => requestShiftPumped(trip, 'next')}
+                    className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-paper-gutter flex items-center gap-2 text-indigo-700"
+                    title="Move Drawn Fuel to same-date next trip"
+                  >
+                    <span className="text-[11px]">⛽→</span>
+                    Shift Pumped information to next row
+                  </button>
+                )}
               </div>
             );
           })()}
@@ -2523,6 +2772,23 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirmToggle(null)} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg transition-colors" data-testid="confirm-toggle-cancel">Cancel</button>
               <button onClick={doToggleTripType} className={`px-4 py-2 text-sm font-semibold text-white rounded-lg transition-colors ${confirmToggle.trip_type === 'Private' ? 'bg-slate-700 hover:bg-slate-800' : 'bg-orange-600 hover:bg-orange-700'}`} data-testid="confirm-toggle-ok">{confirmToggle.trip_type === 'Private' ? 'Mark as Official' : 'Mark as Private'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Drawn Fuel Shift */}
+      {shiftConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="confirm-shift-dialog" onClick={() => !shiftBusy && setShiftConfirm(null)}>
+          <div className="bg-paper-sheet rounded-xl shadow-xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-on-surface mb-2">Shift Pumped Information {shiftConfirm.direction === 'prev' ? 'to previous row' : 'to next row'}</h3>
+            <p className="text-sm text-on-surface-variant mb-2">
+              Move <span className="font-mono font-bold text-slate-900">{(shiftConfirm.source.fuel_pumped_amount ?? 0).toFixed(1)} L{shiftConfirm.source.fuel_order_no ? ` #${shiftConfirm.source.fuel_order_no}` : ''}{shiftConfirm.source.is_full_tank ? ' ★FULL' : ''} {shiftConfirm.source.pump_timing ?? 'END'}</span> from Row #{globalSeqMap.get(shiftConfirm.source.id) ?? '?'} ({shiftConfirm.source.date} {Math.round(shiftConfirm.source.start_km)}–{Math.round(shiftConfirm.source.end_km)}) to Row #{globalSeqMap.get(shiftConfirm.target.id) ?? '?'} ({shiftConfirm.target.date} {Math.round(shiftConfirm.target.start_km)}–{Math.round(shiftConfirm.target.end_km)})?
+            </p>
+            <p className="text-xs text-slate-500 mb-4">Source will be cleared to 0 / empty. Fuel economy chain recalculates after move.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShiftConfirm(null)} disabled={shiftBusy} className="px-4 py-2 text-sm font-semibold text-on-surface-variant hover:bg-paper-gutter rounded-lg transition-colors disabled:opacity-50" data-testid="confirm-shift-cancel">Cancel</button>
+              <button onClick={doShiftPumped} disabled={shiftBusy} className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50" data-testid="confirm-shift-ok">{shiftBusy ? 'Shifting…' : 'Shift Fuel'}</button>
             </div>
           </div>
         </div>
