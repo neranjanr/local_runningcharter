@@ -2496,7 +2496,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
                     {isFuelPumped ? (
                       <span className="flex flex-col items-center justify-center gap-0.5 leading-tight">
                         <span className="text-[11px]">{renderEditableCell(t, 'fuel_pumped_amount', `${(t.fuel_pumped_amount ?? 0).toFixed(1)}`, 'right')}</span>
-                        {t.is_full_tank && <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
+                        {!!t.is_full_tank && <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
                         <span className={`inline-flex items-center px-1 py-0.5 rounded border text-[8px] font-bold tracking-widest leading-none ${ (t.pump_timing ?? 'END')==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={`Fueled at ${t.pump_timing ?? 'END'} — ${ (t.pump_timing ?? 'END')==='START' && t.trip_distance>20 ? 'distance charged to next economy' : 'distance charged to previous economy'}`}>{(t.pump_timing ?? 'END')==='START' ? 'START' : 'END'}</span>
                       </span>
                     ) : (
