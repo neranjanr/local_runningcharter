@@ -25,6 +25,8 @@ export interface SegmentEstimate {
   orderDate: string;
   isFullTank: boolean;
   pumpTiming: 'START' | 'END';
+  /** Trip ids in this trip-delimited cycle (Issue #8) — apply writes them all. */
+  tripIds: string[];
   prevEconomy: number | null;
   /** Normal (lenient) suggestion — balances in [1, tankCapacity]. */
   suggested: number | null;
@@ -176,7 +178,8 @@ function stepCapFor(longTripCount: number, veryLongTripCount: number): { cap: nu
 }
 
 function isStartMigrated(trip: Trip): boolean {
-  return (trip.pump_timing === 'START') && roundToIntegerKm(trip.trip_distance) > 20 && (trip.fuel_pumped_amount ?? 0) > 0;
+  // Spec #6 Issue #8: START applies at any distance — no short-trip downgrade.
+  return (trip.pump_timing === 'START') && (trip.fuel_pumped_amount ?? 0) > 0;
 }
 
 function getSafeWindow(vehicle: Vehicle | null): { low: number; high: number; margin: number } {
@@ -302,25 +305,9 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     builtSegs.push({ start, end, sourceIdx: srcIdx, trips: segTrips, fromDate, toDate, distance, fuelFed, isFullTank: !!srcTrip.is_full_tank, pumpTiming: (srcTrip.pump_timing ?? 'END') as 'START'|'END', nextSrcIdx: nextIdx });
   }
 
-  // Collapse same-day multiple pumps into a single range: there is only ever one
-  // Fuel-In Segment between two consecutive fuel-in dates.
-  const mergedSegs: BuiltSeg[] = [];
-  for (const seg of builtSegs) {
-    const last = mergedSegs[mergedSegs.length - 1];
-    if (last && last.fromDate === seg.fromDate) {
-      last.end = seg.end;
-      last.trips = sortedTrips.slice(last.start, last.end + 1);
-      last.distance = roundToIntegerKm(last.trips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
-      last.fuelFed = roundToOneDecimal(last.fuelFed + seg.fuelFed);
-      last.isFullTank = last.isFullTank || seg.isFullTank;
-      last.nextSrcIdx = seg.nextSrcIdx;
-      last.toDate = seg.toDate;
-    } else {
-      mergedSegs.push({ ...seg });
-    }
-  }
-
-  const firstStart = mergedSegs.length > 0 ? mergedSegs[0].start : (pumpIndices[0] + 1);
+  // Spec #6 Issue #8: trip-delimited cycles — every pumped Trip is a boundary
+  // with no collapsing, so one date can hold several segments.
+  const firstStart = builtSegs.length > 0 ? builtSegs[0].start : (pumpIndices[0] + 1);
   const initialTrips = sortedTrips.slice(0, firstStart);
   if (initialTrips.length > 0) {
     runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy!);
@@ -331,8 +318,8 @@ function runEstimationPass(params: PassParams): PassSegment[] {
   const results: PassSegment[] = [];
   const safeWin = getSafeWindow(vehicle);
 
-  for (let segIdx = 0; segIdx < mergedSegs.length; segIdx++) {
-    const seg = mergedSegs[segIdx];
+  for (let segIdx = 0; segIdx < builtSegs.length; segIdx++) {
+    const seg = builtSegs[segIdx];
     const segmentTrips = seg.trips;
     const totalDist = seg.distance;
     const fuelFed = seg.fuelFed;
@@ -648,6 +635,7 @@ export function estimateFuelEconomies(params: {
       orderDate: n.orderDate,
       isFullTank: n.isFullTank,
       pumpTiming: n.pumpTiming,
+      tripIds: n.trips.map((t) => t.id),
       prevEconomy: n.prevEconomy,
       suggested: n.isGapSpan ? null : n.suggested,
       suggestedStrict: s.isGapSpan ? null : s.suggested,

@@ -132,7 +132,7 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     expect(est.some(s => s.fromDate === '2024-03-12')).toBe(false);
   });
 
-  it('collapses same-day multiple pumps into one range', () => {
+  it('opens separate cycles for same-day multiple pumps (no collapsing, issue #8)', () => {
     const trips: Trip[] = [
       trip({ id: 't1', date: '2024-03-03', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 30, trip_index: 1 }),
       trip({ id: 't2', date: '2024-03-03', start_km: 50, end_km: 120, trip_distance: 70, fuel_pumped_amount: 26, trip_index: 2 }),
@@ -140,12 +140,13 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       trip({ id: 't4', date: '2024-03-20', start_km: 200, end_km: 260, trip_distance: 60, trip_index: 4 }),
     ];
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    // Two distinct fuel-in dates -> two ranges; the same-day pumps are merged.
-    expect(est.length).toBe(2);
+    // Three pumps -> three trip-delimited cycles; same-day pumps stay separate.
+    expect(est.length).toBe(3);
     expect(est[0].fromDate).toBe('2024-03-03');
-    expect(est[0].toDate).toBe('2024-03-15');
-    expect(est[0].fuelFed).toBeCloseTo(56, 1);
-    expect(est[1].fromDate).toBe('2024-03-15');
+    expect(est[0].fuelFed).toBeCloseTo(30, 1);
+    expect(est[1].fromDate).toBe('2024-03-03');
+    expect(est[1].fuelFed).toBeCloseTo(26, 1);
+    expect(est[2].fromDate).toBe('2024-03-15');
   });
 
   // A segment that drains the tank forces a feasibility floor well above the 7.8 seed,

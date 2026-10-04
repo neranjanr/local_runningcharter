@@ -264,10 +264,60 @@ export function computePageSeq(dayGroups: DayGroup[]): number[] {
 }
 
 /**
- * Trip-level fuel info with economy applied only after the pumped trip.
- * A pumped trip still uses the previous economy; the next trip uses the next segment's economy.
+ * A START pump puts the pumped Trip in the next cycle at any distance;
+ * an END pump keeps it in the previous one (Spec #6, Issue #8).
+ * No distance guard, no collapsing — every pumped Trip is a boundary.
+ */
+export function isStartPumpTrip(t: Trip): boolean {
+  return t.pump_timing === 'START' && (t.fuel_pumped_amount ?? 0) > 0;
+}
+
+export function isEndPumpTrip(t: Trip): boolean {
+  return (t.pump_timing ?? 'END') === 'END' && (t.fuel_pumped_amount ?? 0) > 0;
+}
+
+function sortTripsForCycles(trips: Trip[]): Trip[] {
+  return [...trips].sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
+    return a.start_km - b.start_km;
+  });
+}
+
+/**
+ * Trip-delimited Fuel-In cycles (Issue #8).
+ * Boundaries are exactly the pumped Trips in chronological order with no
+ * collapsing: a START pump opens the next cycle at the pumped Trip itself,
+ * an END pump closes the previous cycle after the pumped Trip. One date can
+ * therefore hold several cycles.
+ */
+export function buildTripCycles(trips: Trip[]): Trip[][] {
+  const sorted = sortTripsForCycles(trips);
+  const cycles: Trip[][] = [];
+  let current: Trip[] = [];
+  for (const t of sorted) {
+    if (isStartPumpTrip(t) && current.length > 0) {
+      cycles.push(current);
+      current = [t];
+    } else {
+      current.push(t);
+    }
+    if (isEndPumpTrip(t)) {
+      cycles.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) cycles.push(current);
+  return cycles;
+}
+
+/**
+ * Trip-level fuel info with trip-delimited cycle economies (Issue #8).
+ * A START pumped Trip uses the next cycle's economy (fuel available before its
+ * distance is driven); an END pumped Trip keeps the previous cycle's economy.
  * In-Tank is added at the first trip of each date. Balances are per-trip using
- * Position (balance before trip) -> Consumed -> +Drawn -> next Position.
+ * Position (balance before trip) -> Consumed -> +Drawn -> next Position
+ * (START adds fuel before consuming).
  * Used by All Trips Master Table and Trend graph for intra-day pump splits.
  */
 export interface TripFuelInfo {
@@ -286,29 +336,59 @@ export function computeTripFuelMap(params: {
   dateInTank?: Map<string, number>;
   openingFuel: number;
   tankCapacity?: number;
+  /** Per-trip effective economies (Issue #8): explicit per-trip value wins,
+   * otherwise falls back to dateEconomy with forward propagation. Lets a
+   * same-date pump split display two economies. */
+  tripEconomy?: Map<string, number>;
 }): Map<string, TripFuelInfo> {
-  const { trips, dateEconomy, dateInTank, openingFuel, tankCapacity = 75 } = params;
+  const { trips, dateEconomy, dateInTank, openingFuel, tankCapacity = 75, tripEconomy } = params;
   const cap = tankCapacity > 0 ? tankCapacity : 75;
-  const sorted = [...trips].sort((a, b) => {
-    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
-    if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
-    return a.start_km - b.start_km;
-  });
+  const sorted = sortTripsForCycles(trips);
   const distinctDates = Array.from(new Set(sorted.map(t => t.date))).sort();
   const result = new Map<string, TripFuelInfo>();
   if (sorted.length === 0) return result;
-  let balance = roundToOneDecimal(openingFuel);
-  let currentEconomy = dateEconomy.get(sorted[0].date) ?? DEFAULT_FUEL_ECONOMY;
-  const dateFirstSeen = new Set<string>();
-  const isStartMigrated = (t: Trip) => (t.pump_timing === 'START') && roundToIntegerKm(t.trip_distance) > 20 && (t.fuel_pumped_amount ?? 0) > 0;
-  const getNextEconomy = (fromDate: string): number | null => {
+
+  // Raw base per trip: explicit per-trip wins, else date-level, else undefined.
+  const rawBase: (number | null)[] = sorted.map((t) => {
+    const perTrip = tripEconomy?.get(t.id);
+    if (perTrip !== undefined && perTrip !== null && Number(perTrip) > 0) {
+      return roundToOneDecimal(Number(perTrip));
+    }
+    const perDate = dateEconomy.get(t.date);
+    if (perDate !== undefined && perDate !== null && Number(perDate) > 0) {
+      return roundToOneDecimal(Number(perDate));
+    }
+    return null;
+  });
+  // Forward-propagate with fallback at the book start.
+  const propBase: number[] = [];
+  let running = roundToOneDecimal(dateEconomy.get(sorted[0].date) ?? DEFAULT_FUEL_ECONOMY);
+  if (rawBase[0] !== null) running = rawBase[0]!;
+  for (let i = 0; i < sorted.length; i++) {
+    if (i === 0) {
+      propBase.push(roundToOneDecimal(running));
+      continue;
+    }
+    if (rawBase[i] !== null) running = rawBase[i]!;
+    propBase.push(roundToOneDecimal(running));
+  }
+
+  const nextPropAfter = (i: number): number | null => {
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (rawBase[j] !== null) return propBase[j];
+    }
+    // No explicit value ahead — fall back to the next dated economy.
+    const fromDate = sorted[i].date;
     const idx = distinctDates.indexOf(fromDate);
     for (let j = idx + 1; j < distinctDates.length; j++) {
       const nd = distinctDates[j];
-      if (dateEconomy.has(nd)) return dateEconomy.get(nd)!;
+      if (dateEconomy.has(nd)) return roundToOneDecimal(dateEconomy.get(nd)!);
     }
     return null;
   };
+
+  let balance = roundToOneDecimal(openingFuel);
+  const dateFirstSeen = new Set<string>();
   for (let i = 0; i < sorted.length; i++) {
     const t = sorted[i];
     let inTankForTrip = 0;
@@ -317,21 +397,23 @@ export function computeTripFuelMap(params: {
       inTankForTrip = roundToOneDecimal(dateInTank?.get(t.date) ?? 0);
       if (inTankForTrip) balance = roundToOneDecimal(Math.min(cap, balance + inTankForTrip));
     }
-    const migrated = isStartMigrated(t);
-    if (migrated && (t.fuel_pumped_amount ?? 0) > 0) {
-      const nxt = getNextEconomy(t.date);
-      if (nxt !== null) currentEconomy = nxt;
-      else if (i + 1 < sorted.length) {
-        // same-date split: try to peek at next date's economy via sorted next trip's date
-        const nextDate = sorted[i + 1].date;
-        if (nextDate !== t.date) {
-          const ndEcon = dateEconomy.get(nextDate);
-          if (ndEcon !== undefined) currentEconomy = ndEcon;
-        }
+    const migrated = isStartPumpTrip(t);
+    let economy: number;
+    if (migrated) {
+      // START at any distance joins the next cycle. An explicit per-trip
+      // value on the pumped Trip itself wins; otherwise inherit the next
+      // cycle's economy ahead.
+      const explicit = tripEconomy?.get(t.id);
+      if (explicit !== undefined && explicit !== null && Number(explicit) > 0) {
+        economy = roundToOneDecimal(Number(explicit));
+      } else {
+        economy = nextPropAfter(i) ?? propBase[i];
       }
+    } else {
+      economy = propBase[i];
     }
+    economy = roundToOneDecimal(economy);
     const position = roundToOneDecimal(balance);
-    const economy = roundToOneDecimal(currentEconomy);
     const distance = roundToIntegerKm(t.trip_distance);
     const consumed = calculateConsumed(distance, economy);
     const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
@@ -355,23 +437,6 @@ export function computeTripFuelMap(params: {
       drawn: pumped,
     });
     balance = newBalance;
-    if (!migrated && pumped > 0 && i + 1 < sorted.length) {
-      const currIdx = distinctDates.indexOf(t.date);
-      let nextEconomy: number | null = null;
-      for (let j = currIdx + 1; j < distinctDates.length; j++) {
-        const nd = distinctDates[j];
-        if (dateEconomy.has(nd)) { nextEconomy = dateEconomy.get(nd)!; break; }
-      }
-      if (nextEconomy !== null) {
-        currentEconomy = nextEconomy;
-      }
-    } else if (pumped === 0 && i + 1 < sorted.length) {
-      const nextDate = sorted[i + 1].date;
-      if (nextDate !== t.date) {
-        const nextDateEcon = dateEconomy.get(nextDate);
-        if (nextDateEcon !== undefined) currentEconomy = nextDateEcon;
-      }
-    }
   }
   return result;
 }

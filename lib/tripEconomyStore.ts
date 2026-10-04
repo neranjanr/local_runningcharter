@@ -10,7 +10,7 @@
 import type { Trip } from '@/types';
 import { getDistinctDates } from './pagination';
 import { roundToOneDecimal } from './tripCalculations';
-import { DEFAULT_FUEL_ECONOMY } from './ledgerCalculations';
+import { DEFAULT_FUEL_ECONOMY, buildTripCycles } from './ledgerCalculations';
 
 const STORAGE_KEY = 'fleetledger_trip_economy_v1';
 
@@ -82,6 +82,20 @@ export function getAllTripEconomyOverrides(): TripEconomyOverrides {
   return out;
 }
 
+/**
+ * Per-trip effective economies as a Map (Issue #8 reader helper).
+ * Normalized positive values only; absent ids inherit via forward
+ * propagation in `computeTripFuelMap`.
+ */
+export function getTripEconomyMap(): Map<string, number> {
+  const overrides = getAllTripEconomyOverrides();
+  const map = new Map<string, number>();
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== null && v !== undefined && Number(v) > 0) map.set(k, Number(v));
+  }
+  return map;
+}
+
 export function saveTripEconomyOverride(tripId: string, value: number | null): void {
   const all = readAll();
   const n = normalizeOverride(value);
@@ -125,6 +139,31 @@ export function resolveTripEconomies(
     result.set(t.id, roundToOneDecimal(current));
   }
   return result;
+}
+
+/**
+ * Write an economy value to a whole trip-delimited Fuel-In cycle (Issue #8).
+ * Editing one Trip writes its entire cycle so manual corrections stay
+ * consistent; clearing (null) deletes the override on every Trip of the
+ * cycle so they inherit again. Cycle membership follows the same
+ * START/END boundary rule as the ledger engine (no distance guard, no
+ * collapsing). Returns the affected trip ids.
+ */
+export function saveTripCycleOverride(
+  trips: Trip[],
+  tripId: string,
+  value: number | null,
+): string[] {
+  const cycles = buildTripCycles(trips);
+  const cycle = cycles.find((c) => c.some((t) => t.id === tripId)) ?? [];
+  const all = readAll();
+  const n = normalizeOverride(value);
+  for (const t of cycle) {
+    if (n === null) delete all[t.id];
+    else all[t.id] = n;
+  }
+  writeAll(all);
+  return cycle.map((t) => t.id);
 }
 
 /**

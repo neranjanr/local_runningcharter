@@ -4,6 +4,7 @@ import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react'
 import type { Trip, BookPage, Vehicle } from '@/types';
 import { computeLedgerDays, computeTripFuelMap } from '@/lib/ledgerCalculations';
 import { getFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
+import { getTripEconomyMap } from '@/lib/tripEconomyStore';
 import { getInTanksForPage } from '@/lib/inTankStore';
 import { detectTripGaps } from '@/lib/continuityAlerts';
 
@@ -68,7 +69,11 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
     }
     let tripMap: Map<string, { economy: number }>;
     try {
-      const tm = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel });
+      let tripEconomy: Map<string, number> | undefined;
+      try {
+        tripEconomy = getTripEconomyMap();
+      } catch {}
+      const tm = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy });
       tripMap = new Map(Array.from(tm.entries()).map(([id, v]) => [id, { economy: v.economy }]));
     } catch {
       tripMap = new Map();

@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import type { BookPage, Trip, Vehicle } from '@/types';
 import { estimateFuelEconomies, type SegmentEstimate } from '@/lib/estimateFuelEconomy';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
+import { saveTripEconomyOverride } from '@/lib/tripEconomyStore';
 import { getDistinctDates } from '@/lib/pagination';
 import { getLockedDates, setLocksForDateRange, getFuelLocksForPage } from '@/lib/fuelEconomyLockStore';
 
@@ -85,6 +86,12 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
 
   const applySegment = (seg: SegmentEstimate, mode: ApplyMode) => {
     const val = mode === 'strict' ? seg.suggestedStrict : seg.suggested;
+    // Issue #8: write the whole trip-delimited cycle so the table reflects it.
+    try {
+      if (val !== null && val !== undefined && seg.tripIds) {
+        for (const tid of seg.tripIds) saveTripEconomyOverride(tid, val);
+      }
+    } catch {}
     const allSortedDates = Array.from(new Set(trips.map(t => t.date))).sort();
     const targetDates = allSortedDates.filter(d => d >= seg.fromDate && d <= seg.toDate);
     const pageForDate = new Map<string, string>();
@@ -244,7 +251,7 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                       const locked = isSegmentLocked(e);
                       const sameSuggestion = e.suggested !== null && e.suggestedStrict !== null && Math.abs(e.suggested - e.suggestedStrict) < 0.05;
                       return (
-                      <tr key={e.fromDate} className={locked ? 'bg-slate-100 opacity-80' : e.feasible ? 'bg-white' : 'bg-amber-50'}>
+                      <tr key={`${e.fromDate}#${idx}:${(e.tripIds ?? []).join(',')}`} className={locked ? 'bg-slate-100 opacity-80' : e.feasible ? 'bg-white' : 'bg-amber-50'}>
                         <td className="py-2 px-2 text-center"><input type="checkbox" checked={selected.has(idx)} onChange={()=>toggleSelect(idx)} /></td>
                         <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">{formatDdMmYyyy(e.fromDate)}</td>
                         <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">{formatDdMmYyyy(e.toDate)}</td>

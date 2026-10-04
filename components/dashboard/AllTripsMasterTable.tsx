@@ -29,6 +29,7 @@ import { getTrips } from '@/lib/tripStore';
 import { estimateStartTime, roundToIntegerKm, roundToOneDecimal, calculateTripDistance, calculateEndKm, parseTimeToMinutes, formatMinutesToTime, calculateDurationMinutes } from '@/lib/tripCalculations';
 import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
+import { backfillTripEconomiesFromPerDay, getTripEconomyMap, saveTripCycleOverride } from '@/lib/tripEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
 import { sortTripsChronologically, shiftForInsert, shiftForRemove, findNextGapAfter, shiftForInsertBounded, type GapInfo, shiftForReverseGapFill, getTotalPositiveGapExtent } from '@/lib/tripShift';
@@ -457,10 +458,15 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         else if (runningFuelPos === null) runningFuelPos = page.start_fuel_balance;
       } catch {}
     }
-    // Trip-level map with economy after pumped trip (intra-day split)
+    // Trip-level map with trip-delimited cycle economies (Issue #8):
+    // per-trip overrides backfilled from per-day values, START at any distance.
     let tripFuelMap = new Map<string, { position: number; economy: number; balance: number; pumped: number; inTank: number; drawn: number }>();
     try {
-      tripFuelMap = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel });
+      try {
+        backfillTripEconomiesFromPerDay(trips, (pid) => getFuelEconomiesForPage(pid));
+      } catch {}
+      const tripEconomy = getTripEconomyMap();
+      tripFuelMap = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy });
     } catch {}
     return { fuelMap: map, tripFuelMap };
   }, [trips, pages]);
@@ -661,6 +667,11 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         while (arr.length < dayIndex) arr.push(null);
         arr[dayIndex - 1] = Math.round(num * 10) / 10;
         saveFuelEconomiesForPage(pageId, arr);
+        // Issue #8: mirror the edit onto the whole trip-delimited cycle so a
+        // same-date split stays consistent (per-day store retired in #12).
+        try {
+          saveTripCycleOverride(trips, tripId, Math.round(num * 10) / 10);
+        } catch {}
       } else if (field === 'in_tank') {
         const arr = getInTanksForPage(pageId);
         while (arr.length < dayIndex) arr.push(null);
