@@ -38,7 +38,7 @@ _Avoid_: Custom economy, edited economy
 **Fuel Position**: Fuel balance carried from the previous Trip's Closing Balance; Page N+1 Day 1 inherits Page N's final Closing Balance.
 _Avoid_: Opening fuel, previous balance
 
-**In-Tank Fuel**: Fuel present in the tank at a Trip before that Trip's Drawn fuel, default 0 unless typed; mid-day top-ups without a pump record are rare.
+**In-Tank Fuel**: Fuel present in the tank at a Trip before that Trip's Drawn fuel, typed per Trip with each Trip's input feeding its own Trip's balance under the existing capacity rule (untouched Trips default to 0); mid-day top-ups without a pump record are rare.
 _Avoid_: On-hand fuel, carried fuel
 
 **Drawn Fuel**: Fuel pumped on a Trip, recorded as Fuel Pumped Amount with Fuel Order No.

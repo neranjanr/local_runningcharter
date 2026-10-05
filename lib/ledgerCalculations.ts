@@ -87,8 +87,13 @@ export function computeLedgerDays(params: {
   fallbackEconomy?: number;
   inTanks?: (number | null | undefined)[];
   tankCapacity?: number;
+  /** Per-trip in-tank inputs (Issue #10): when provided, a day's in-tank
+   * is the sum of its trips' effective values (explicit per-trip entry
+   * wins, otherwise the legacy per-date value on the first trip of the
+   * date, zero elsewhere). Absent means legacy per-day behavior. */
+  tripInTanks?: Map<string, number>;
 }): LedgerDay[] {
-  const { page, trips, economies, fallbackEconomy, inTanks, tankCapacity = 75 } = params;
+  const { page, trips, economies, fallbackEconomy, inTanks, tankCapacity = 75, tripInTanks } = params;
   const cap = tankCapacity > 0 ? tankCapacity : 75;
   const tripsForPage = getTripsForPage(trips, page.id);
   if (tripsForPage.length === 0) return [];
@@ -148,7 +153,19 @@ export function computeLedgerDays(params: {
     const fuelOrderDate = drawn > 0 ? date : '';
 
     const fuelPosition = roundToOneDecimal(prevBalance);
-    const inTank = roundToOneDecimal(rawInTanks[i] ?? 0);
+    // Issue #10: per-trip inputs sum into the day total; legacy per-day
+    // value survives as the first-trip fallback so backfilled books match.
+    let inTank = roundToOneDecimal(rawInTanks[i] ?? 0);
+    if (tripInTanks) {
+      const firstId = dayTrips.length > 0 ? dayTrips[0].id : null;
+      let total = 0;
+      for (const t of dayTrips) {
+        const explicit = tripInTanks.get(t.id);
+        if (explicit !== undefined && Number(explicit) > 0) total = roundToOneDecimal(total + Number(explicit));
+        else if (t.id === firstId) total = roundToOneDecimal(total + inTank);
+      }
+      inTank = roundToOneDecimal(total);
+    }
     const consumed = calculateConsumed(distance, econ);
     const isFullTank = dayTrips.some(t => !!t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0);
     const balance = calculateBalance(fuelPosition, drawn, consumed, inTank, cap, isFullTank);
@@ -340,8 +357,12 @@ export function computeTripFuelMap(params: {
    * otherwise falls back to dateEconomy with forward propagation. Lets a
    * same-date pump split display two economies. */
   tripEconomy?: Map<string, number>;
+  /** Per-trip in-tank inputs (Issue #10): explicit per-trip value wins and
+   * is added at its own trip; otherwise the legacy per-date value applies
+   * at the first trip of the date. Untouched trips default to zero. */
+  tripInTank?: Map<string, number>;
 }): Map<string, TripFuelInfo> {
-  const { trips, dateEconomy, dateInTank, openingFuel, tankCapacity = 75, tripEconomy } = params;
+  const { trips, dateEconomy, dateInTank, openingFuel, tankCapacity = 75, tripEconomy, tripInTank } = params;
   const cap = tankCapacity > 0 ? tankCapacity : 75;
   const sorted = sortTripsForCycles(trips);
   const distinctDates = Array.from(new Set(sorted.map(t => t.date))).sort();
@@ -391,12 +412,20 @@ export function computeTripFuelMap(params: {
   const dateFirstSeen = new Set<string>();
   for (let i = 0; i < sorted.length; i++) {
     const t = sorted[i];
+    // Issue #10: an explicit per-trip input is added at its own trip under
+    // the existing capacity rule; otherwise the legacy per-date value
+    // applies once at the first trip of the date. Untouched trips get zero.
+    const explicit = tripInTank?.get(t.id);
+    const hasExplicit = explicit !== undefined && Number(explicit) > 0;
+    const isFirstOfDate = !dateFirstSeen.has(t.date);
+    dateFirstSeen.add(t.date);
     let inTankForTrip = 0;
-    if (!dateFirstSeen.has(t.date)) {
-      dateFirstSeen.add(t.date);
+    if (hasExplicit) {
+      inTankForTrip = roundToOneDecimal(Number(explicit));
+    } else if (isFirstOfDate) {
       inTankForTrip = roundToOneDecimal(dateInTank?.get(t.date) ?? 0);
-      if (inTankForTrip) balance = roundToOneDecimal(Math.min(cap, balance + inTankForTrip));
     }
+    if (inTankForTrip) balance = roundToOneDecimal(Math.min(cap, balance + inTankForTrip));
     const migrated = isStartPumpTrip(t);
     let economy: number;
     if (migrated) {

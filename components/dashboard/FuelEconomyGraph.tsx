@@ -6,7 +6,10 @@ import { computeLedgerDays, computeTripFuelMap } from '@/lib/ledgerCalculations'
 import { getFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getTripEconomyMap } from '@/lib/tripEconomyStore';
 import { getInTanksForPage } from '@/lib/inTankStore';
+import { backfillTripInTanksFromPerDay, getTripInTankMap } from '@/lib/tripInTankStore';
 import { detectTripGaps } from '@/lib/continuityAlerts';
+import { getDistinctDates } from '@/lib/pagination';
+import { roundToOneDecimal } from '@/lib/tripCalculations';
 
 interface Props {
   trips: Trip[];
@@ -55,16 +58,29 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
     const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
     const dateEconomy = new Map<string, number>();
     const dateInTank = new Map<string, number>();
+    // Issue #10: same per-trip in-tank sourcing as the master table.
+    try {
+      backfillTripInTanksFromPerDay(trips, (pid) => getInTanksForPage(pid));
+    } catch {}
+    let tripInTanks: Map<string, number> | undefined;
+    try {
+      tripInTanks = getTripInTankMap();
+    } catch {}
     let openingFuel = sortedPages.length > 0 ? sortedPages[0].start_fuel_balance : 10;
     for (const page of sortedPages) {
       try {
         const economies = getFuelEconomiesForPage(page.id);
         const inTanks = getInTanksForPage(page.id);
-        const ledgerDays = computeLedgerDays({ page, trips, economies, inTanks });
+        const ledgerDays = computeLedgerDays({ page, trips, economies, inTanks, tripInTanks });
         for (const d of ledgerDays) {
           if (!dateEconomy.has(d.date)) dateEconomy.set(d.date, d.fuelEconomy);
-          if (!dateInTank.has(d.date)) dateInTank.set(d.date, d.inTank);
         }
+        // Issue #10: trip-map fallback needs RAW per-day values, not the
+        // trip-summed day totals (see AllTripsMasterTable fuelMap).
+        const pageDistinct = getDistinctDates(trips.filter((t) => t.page_id === page.id));
+        pageDistinct.forEach((dd, di) => {
+          if (!dateInTank.has(dd)) dateInTank.set(dd, roundToOneDecimal(inTanks[di] ?? 0));
+        });
       } catch {}
     }
     let tripMap: Map<string, { economy: number }>;
@@ -73,7 +89,7 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
       try {
         tripEconomy = getTripEconomyMap();
       } catch {}
-      const tm = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy });
+      const tm = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy, tripInTank: tripInTanks });
       tripMap = new Map(Array.from(tm.entries()).map(([id, v]) => [id, { economy: v.economy }]));
     } catch {
       tripMap = new Map();

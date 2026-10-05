@@ -8,6 +8,8 @@ import { PageNavigation } from './PageNavigation';
 import { computeLedgerDays, computeLedgerSummary, groupTripsByDateForSide1, computePageSeq } from '@/lib/ledgerCalculations';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
+import { backfillTripInTanksFromPerDay, getTripInTankMap, saveTripInTank } from '@/lib/tripInTankStore';
+import { getDistinctDates } from '@/lib/pagination';
 import { roundToOneDecimal, roundToIntegerKm } from '@/lib/tripCalculations';
 import { ExcelExportButton } from '@/components/ExcelExportButton';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
@@ -93,11 +95,30 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
     }
     setRawInTanks(next);
     saveInTanksForPage(currentPage.id, next);
+    // Issue #10: the day editor owns the legacy slot — mirror it onto the
+    // first trip of the date so per-trip readers stay consistent.
+    try {
+      const pageTrips = trips.filter((t) => t.page_id === currentPage.id);
+      const date = getDistinctDates(pageTrips)[dayIdx];
+      const first = [...pageTrips]
+        .filter((t) => t.date === date)
+        .sort((a, b) => a.trip_index - b.trip_index || a.start_km - b.start_km)[0];
+      if (first) saveTripInTank(first.id, next[dayIdx]);
+    } catch {}
   };
 
   const ledgerDays = useMemo(() => {
     if (!currentPage) return [];
-    return computeLedgerDays({ page: currentPage, trips, economies: rawEconomies, inTanks: rawInTanks });
+    // Issue #10: backfill legacy per-day values, then render day totals
+    // from per-trip inputs so a mid-day top-up flows into Side 2.
+    try {
+      backfillTripInTanksFromPerDay(trips, (pid) => getInTanksForPage(pid));
+    } catch {}
+    let tripInTanks: Map<string, number> | undefined;
+    try {
+      tripInTanks = getTripInTankMap();
+    } catch {}
+    return computeLedgerDays({ page: currentPage, trips, economies: rawEconomies, inTanks: rawInTanks, tripInTanks });
   }, [currentPage, trips, rawEconomies, rawInTanks]);
 
   const summary = useMemo(() => computeLedgerSummary(ledgerDays), [ledgerDays]);

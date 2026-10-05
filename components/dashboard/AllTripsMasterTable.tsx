@@ -30,7 +30,8 @@ import { estimateStartTime, roundToIntegerKm, roundToOneDecimal, calculateTripDi
 import { getStoredSpeedConfigSync, loadSpeedConfig } from '@/lib/speedConfig';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { backfillTripEconomiesFromPerDay, getTripEconomyMap, saveTripCycleOverride } from '@/lib/tripEconomyStore';
-import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
+import { getInTanksForPage } from '@/lib/inTankStore';
+import { backfillTripInTanksFromPerDay, getTripInTankMap, saveTripInTank } from '@/lib/tripInTankStore';
 import { EstimateFuelEconomy } from '@/components/ledger/EstimateFuelEconomy';
 import { sortTripsChronologically, shiftForInsert, shiftForRemove, findNextGapAfter, shiftForInsertBounded, type GapInfo, shiftForReverseGapFill, getTotalPositiveGapExtent } from '@/lib/tripShift';
 import { validatePaginationConstraints, recalculatePageBalancesFromOpening, assignPageForNewTrip, assignPageForBackdatedTrip, MAX_DAYS_PER_PAGE, getDistinctDates } from '@/lib/pagination';
@@ -265,11 +266,19 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
       const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number);
       const days: import('@/lib/ledgerCalculations').LedgerDay[] = [];
       let runningFuelPos: number | null = null;
+      // Issue #10: same per-trip in-tank sourcing as the fuel map above.
+      try {
+        backfillTripInTanksFromPerDay(trips, (pid) => getInTanksForPage(pid));
+      } catch {}
+      let gapTripInTanks: Map<string, number> | undefined;
+      try {
+        gapTripInTanks = getTripInTankMap();
+      } catch {}
       for (const page of sortedPages) {
         const economies = getFuelEconomiesForPage(page.id);
         const inTanks = getInTanksForPage(page.id);
         const pageForCompute = runningFuelPos !== null ? { ...page, start_fuel_balance: runningFuelPos } : page;
-        const ds = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks });
+        const ds = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks, tripInTanks: gapTripInTanks });
         for (const d of ds) days.push(d);
         if (ds.length > 0) runningFuelPos = ds[ds.length - 1].balance;
         else if (runningFuelPos === null) runningFuelPos = page.start_fuel_balance;
@@ -442,18 +451,34 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const sortedPages = [...pages].sort((a,b)=>a.page_number-b.page_number);
     let runningFuelPos: number | null = null;
     let openingFuel = sortedPages.length > 0 ? sortedPages[0].start_fuel_balance : 10;
+    // Issue #10: backfill legacy per-day in-tanks onto first trips, then
+    // render day totals from per-trip inputs so mid-day top-ups flow in.
+    try {
+      backfillTripInTanksFromPerDay(trips, (pid) => getInTanksForPage(pid));
+    } catch {}
+    let tripInTanks: Map<string, number> | undefined;
+    try {
+      tripInTanks = getTripInTankMap();
+    } catch {}
     for (const page of sortedPages) {
       try {
         const economies = getFuelEconomiesForPage(page.id);
         const inTanks = getInTanksForPage(page.id);
         // Continuous carry-forward: use computed running pos instead of stored start_fuel_balance for pages > 1
         const pageForCompute = runningFuelPos !== null ? { ...page, start_fuel_balance: runningFuelPos } : page;
-        const days = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks });
+        const days = computeLedgerDays({ page: pageForCompute, trips, economies, inTanks, tripInTanks });
         for (const d of days) {
           if (!map.has(d.date)) map.set(d.date, { position: d.fuelPosition, inTank: d.inTank, pumped: d.drawn, economy: d.fuelEconomy, balance: d.balance });
           if (!dateEconomy.has(d.date)) dateEconomy.set(d.date, d.fuelEconomy);
-          if (!dateInTank.has(d.date)) dateInTank.set(d.date, d.inTank);
         }
+        // Issue #10: the trip-map fallback must see RAW per-day values, not
+        // the trip-summed day totals above — otherwise a typed mid-day
+        // top-up would count twice (once via fallback at the first trip,
+        // once via the explicit entry).
+        const pageDistinct = getDistinctDates(trips.filter((t) => t.page_id === page.id));
+        pageDistinct.forEach((dd, di) => {
+          if (!dateInTank.has(dd)) dateInTank.set(dd, roundToOneDecimal(inTanks[di] ?? 0));
+        });
         if (days.length > 0) runningFuelPos = days[days.length - 1].balance;
         else if (runningFuelPos === null) runningFuelPos = page.start_fuel_balance;
       } catch {}
@@ -466,7 +491,7 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         backfillTripEconomiesFromPerDay(trips, (pid) => getFuelEconomiesForPage(pid));
       } catch {}
       const tripEconomy = getTripEconomyMap();
-      tripFuelMap = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy });
+      tripFuelMap = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy, tripInTank: tripInTanks });
     } catch {}
     return { fuelMap: map, tripFuelMap };
   }, [trips, pages]);
@@ -648,7 +673,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
     const trip = trips.find((t) => t.id === tripId);
     if (!trip) return;
 
-    // Fuel economy / in-tank / position are per-day per-page, handle via stores directly
+    // Fuel economy / in-tank / position are handled via stores directly
+    // (in-tank is per-trip since issue #10; economy mirrors onto the cycle)
     if (field === 'fuel_economy' || field === 'in_tank' || field === 'fuel_position') {
       const num = parseFloat(value);
       if (isNaN(num) || num < 0) { cancelEdit(); return; }
@@ -673,10 +699,13 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           saveTripCycleOverride(trips, tripId, Math.round(num * 10) / 10);
         } catch {}
       } else if (field === 'in_tank') {
-        const arr = getInTanksForPage(pageId);
-        while (arr.length < dayIndex) arr.push(null);
-        arr[dayIndex - 1] = Math.round(num * 10) / 10;
-        saveInTanksForPage(pageId, arr);
+        // Issue #10: tripwise input — typed on a trip, stored on that trip.
+        // Zero clears back to the default (absent). Legacy per-day values
+        // were backfilled onto first trips at read time, so no per-day
+        // write is needed here.
+        try {
+          saveTripInTank(tripId, Math.round(num * 10) / 10);
+        } catch {}
       } else if (field === 'fuel_position') {
         // Continuous auto-count: update Book Opening (first page) and downstream pages will display via running chain
         const sorted = [...pages].sort((a,b)=>a.page_number-b.page_number);
@@ -690,16 +719,22 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
           // Optionally propagate stored start_fuel_balance downstream for continuity alerts (fire-and-forget)
           let running = Math.round(num * 10) / 10;
           (async () => {
+            // Issue #10: chain the recompute through per-trip in-tanks too.
+            let chainTripInTanks: Map<string, number> | undefined;
+            try {
+              backfillTripInTanksFromPerDay(trips, (pid) => getInTanksForPage(pid));
+              chainTripInTanks = getTripInTankMap();
+            } catch {}
             for (let i = 0; i < sorted.length; i++) {
               const p = sorted[i];
               if (i === 0) {
-                const days = computeLedgerDays({ page: p, trips, economies: getFuelEconomiesForPage(p.id), inTanks: getInTanksForPage(p.id) });
+                const days = computeLedgerDays({ page: p, trips, economies: getFuelEconomiesForPage(p.id), inTanks: getInTanksForPage(p.id), tripInTanks: chainTripInTanks });
                 running = days.length > 0 ? days[days.length - 1].balance : running;
               } else {
                 const updated = { ...p, start_fuel_balance: running };
                 // Avoid spamming API, write local only if needed; savePage will handle
                 await savePage(updated as BookPage);
-                const days = computeLedgerDays({ page: updated as BookPage, trips, economies: getFuelEconomiesForPage(p.id), inTanks: getInTanksForPage(p.id) });
+                const days = computeLedgerDays({ page: updated as BookPage, trips, economies: getFuelEconomiesForPage(p.id), inTanks: getInTanksForPage(p.id), tripInTanks: chainTripInTanks });
                 running = days.length > 0 ? days[days.length - 1].balance : running;
               }
             }

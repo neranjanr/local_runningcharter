@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { calculateBalance, calculateConsumed } from './pagination';
-import { computeLedgerDays, computeLedgerSummary } from './ledgerCalculations';
+import { computeLedgerDays, computeLedgerSummary, computeTripFuelMap } from './ledgerCalculations';
+import { backfillTripInTanksFromPerDay, getTripInTankMap, clearAllTripInTanks } from './tripInTankStore';
 import type { BookPage, Trip } from '@/types';
 
 function makeTrip(overrides: Partial<Trip> & { date: string; page_id: string }): Trip {
@@ -133,6 +134,123 @@ describe('Fuel model with In-Tank (Issue 03)', () => {
     // Weighted economy unchanged by inTank
     const manualWeighted = Math.round((summary.totalDistance / summary.totalConsumed) * 10) / 10;
     expect(summary.weightedEconomy).toBe(manualWeighted);
+  });
+
+  describe('tripwise in-tank input (issue #10)', () => {
+    function tripFuelSetup() {
+      const page = makePage({ id: 'page-1', start_fuel_balance: 30, start_km: 100, end_km: 400 });
+      const trips = [
+        makeTrip({ id: 't1', date: '2024-10-21', page_id: 'page-1', trip_index: 1, start_km: 100, end_km: 200, trip_distance: 100 }),
+        makeTrip({ id: 't2', date: '2024-10-21', page_id: 'page-1', trip_index: 2, start_km: 200, end_km: 250, trip_distance: 50 }),
+        makeTrip({ id: 't3', date: '2024-10-22', page_id: 'page-1', trip_index: 1, start_km: 250, end_km: 310, trip_distance: 60 }),
+      ];
+      const dateEconomy = new Map<string, number>([['2024-10-21', 10.5], ['2024-10-22', 10.5]]);
+      return { page, trips, dateEconomy };
+    }
+
+    it('in-tank typed on a trip is added at that trip only (hand-computed mid-day top-up)', () => {
+      const { trips, dateEconomy } = tripFuelSetup();
+      // t1: 30 - 9.5 (100/10.5) = 20.5; t2: position 20.5 + 5, 25.5 - 4.8 (50/10.5) = 20.7; t3: 20.7 - 5.7 (60/10.5) = 15.0
+      const m = computeTripFuelMap({
+        trips, pages: [], dateEconomy, openingFuel: 30,
+        tripInTank: new Map([['t2', 5]]),
+      });
+      expect(m.get('t1')!.inTank).toBe(0);
+      expect(m.get('t1')!.balance).toBe(20.5);
+      expect(m.get('t2')!.inTank).toBe(5);
+      expect(m.get('t2')!.position).toBe(25.5);
+      expect(m.get('t2')!.balance).toBe(20.7);
+      expect(m.get('t3')!.inTank).toBe(0);
+      expect(m.get('t3')!.position).toBe(20.7);
+      expect(m.get('t3')!.balance).toBe(15.0);
+    });
+
+    it('untouched trips default to zero and render unchanged without a trip map', () => {
+      const { trips, dateEconomy } = tripFuelSetup();
+      const m = computeTripFuelMap({ trips, pages: [], dateEconomy, openingFuel: 30 });
+      expect(m.get('t1')!.inTank).toBe(0);
+      expect(m.get('t2')!.inTank).toBe(0);
+      expect(m.get('t3')!.inTank).toBe(0);
+      // Legacy day-level fallback still applies a per-date value at the first trip of the date.
+      const legacy = computeTripFuelMap({
+        trips, pages: [], dateEconomy, openingFuel: 30,
+        dateInTank: new Map([['2024-10-21', 4]]),
+      });
+      expect(legacy.get('t1')!.inTank).toBe(4);
+      expect(legacy.get('t2')!.inTank).toBe(0);
+      // 30 + 4 - 9.5 = 24.5; 24.5 - 4.8 = 19.7
+      expect(legacy.get('t1')!.balance).toBe(24.5);
+      expect(legacy.get('t2')!.balance).toBe(19.7);
+    });
+
+    it('per-trip in-tank wins over the legacy per-date value and respects the capacity cap', () => {
+      const { trips, dateEconomy } = tripFuelSetup();
+      const m = computeTripFuelMap({
+        trips, pages: [], dateEconomy, openingFuel: 74,
+        dateInTank: new Map([['2024-10-21', 2]]),
+        tripInTank: new Map([['t1', 6]]),
+      });
+      // t1: min(75, 74 + 6) - 9.5 = 65.5 (per-trip 6 wins over per-date 2)
+      expect(m.get('t1')!.inTank).toBe(6);
+      expect(m.get('t1')!.balance).toBe(65.5);
+      // t2 untouched: no date fallback consumed by t1's explicit entry path — stays 0
+      expect(m.get('t2')!.inTank).toBe(0);
+    });
+
+    it('explicit per-trip entry replaces the same raw per-date value (no double-add)', () => {
+      const { trips, dateEconomy } = tripFuelSetup();
+      // Backfilled shape: first trip carries the legacy per-day 5 AND the raw
+      // per-date map still holds 5 — the trip must see 5 once, not 5 + 5.
+      const m = computeTripFuelMap({
+        trips, pages: [], dateEconomy, openingFuel: 30,
+        dateInTank: new Map([['2024-10-21', 5]]),
+        tripInTank: new Map([['t1', 5]]),
+      });
+      expect(m.get('t1')!.inTank).toBe(5);
+      // 30 + 5 - 9.5 (100/10.5) = 25.5
+      expect(m.get('t1')!.balance).toBe(25.5);
+      expect(m.get('t2')!.inTank).toBe(0);
+    });
+
+    it('backfilled legacy book renders identical balances (display-neutral migration)', () => {
+      const page = makePage({ id: 'page-1', start_fuel_balance: 30, start_km: 100, end_km: 400 });
+      const trips = [
+        makeTrip({ id: 't1', date: '2024-10-21', page_id: 'page-1', trip_index: 1, start_km: 100, end_km: 200, trip_distance: 100 }),
+        makeTrip({ id: 't2', date: '2024-10-21', page_id: 'page-1', trip_index: 2, start_km: 200, end_km: 250, trip_distance: 50 }),
+      ];
+      const legacy = computeLedgerDays({ page, trips, economies: [10.5], inTanks: [4] });
+      try {
+        backfillTripInTanksFromPerDay(trips, () => [4]);
+        const tripwise = computeLedgerDays({
+          page, trips, economies: [10.5], inTanks: [4],
+          tripInTanks: getTripInTankMap(),
+        });
+        expect(tripwise[0].inTank).toBe(legacy[0].inTank);
+        expect(tripwise[0].balance).toBe(legacy[0].balance);
+        expect(tripwise[0].balance).toBe(19.7);
+      } finally {
+        clearAllTripInTanks();
+      }
+    });
+
+    it('computeLedgerDays sums per-trip in-tanks into the day total; legacy path unchanged', () => {
+      const page = makePage({ id: 'page-1', start_fuel_balance: 30, start_km: 100, end_km: 400 });
+      const trips = [
+        makeTrip({ id: 't1', date: '2024-10-21', page_id: 'page-1', trip_index: 1, start_km: 100, end_km: 200, trip_distance: 100 }),
+        makeTrip({ id: 't2', date: '2024-10-21', page_id: 'page-1', trip_index: 2, start_km: 200, end_km: 250, trip_distance: 50 }),
+      ];
+      const legacy = computeLedgerDays({ page, trips, economies: [10.5], inTanks: [4] });
+      expect(legacy[0].inTank).toBe(4);
+      // Day distance 150, consumed 14.3 (150/10.5); 30 + 4 - 14.3 = 19.7
+      expect(legacy[0].balance).toBe(19.7);
+      const tripwise = computeLedgerDays({
+        page, trips, economies: [10.5], inTanks: [4],
+        tripInTanks: new Map([['t1', 4], ['t2', 5]]),
+      });
+      expect(tripwise[0].inTank).toBe(9);
+      // 30 + 9 - 14.3 = 24.7
+      expect(tripwise[0].balance).toBe(24.7);
+    });
   });
 
   it('Full tank trip sets balance to tankCapacity (e.g. 75L) and caps balances at tankCapacity', () => {
