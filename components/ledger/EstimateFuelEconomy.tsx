@@ -13,6 +13,12 @@ function formatDdMmYyyy(iso: string): string {
   return `${d}-${m}-${y}`;
 }
 
+function suggestionTitle(seg: SegmentEstimate): string | undefined {
+  if (seg.isPending) return 'Pending — no trips in this cycle yet';
+  if (seg.isGapSpan) return 'Economy not calculated — ODO gap';
+  return undefined;
+}
+
 type ApplyMode = 'normal' | 'strict';
 
 interface Props {
@@ -86,9 +92,12 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
 
   const applySegment = (seg: SegmentEstimate, mode: ApplyMode) => {
     const val = mode === 'strict' ? seg.suggestedStrict : seg.suggested;
+    // Issue #9: a pending cycle carries no suggestion — never write (a null
+    // would clear the per-day slot below and the trip overrides).
+    if (val === null || val === undefined) return { val: null as number | null, wrote: 0 };
     // Issue #8: write the whole trip-delimited cycle so the table reflects it.
     try {
-      if (val !== null && val !== undefined && seg.tripIds) {
+      if (seg.tripIds) {
         for (const tid of seg.tripIds) saveTripEconomyOverride(tid, val);
       }
     } catch {}
@@ -137,8 +146,9 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     let count = 0;
     for (const seg of estimates) {
       if (isSegmentLocked(seg)) continue;
-      applySegment(seg, mode);
-      count++;
+      const { val } = applySegment(seg, mode);
+      // Pending cycles carry no suggestion and are skipped, not counted.
+      if (val !== null) count++;
     }
     setApplyMsg(`Applied ${mode === 'strict' ? 'Strict Full-Tank' : 'Normal'} economies to ${count} segment${count === 1 ? '' : 's'}`);
     onApplied?.();
@@ -213,6 +223,7 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                 </p>
                 <p className="text-[11px] text-on-surface-variant mt-0.5">
                   Distance badges: <span className="inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[9px] font-bold">N× &gt;40</span> counts trips over 40 km, <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[9px] font-bold">N× ≥100</span> counts trips 100 km or longer — long runs usually give better economy.
+                  An <span className="font-semibold">⏳ PENDING</span> row is an empty next cycle (e.g. END pump on the final trip) with nothing to estimate; <span className="font-semibold">⚠ LOW-CONF</span> marks a single-trip START cycle — a thin calibration.
                 </p>
               </div>
               <button onClick={() => setOpen(false)} className="text-on-surface-variant hover:text-on-surface text-lg leading-none shrink-0">✕</button>
@@ -253,7 +264,10 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                       return (
                       <tr key={`${e.fromDate}#${idx}:${(e.tripIds ?? []).join(',')}`} className={locked ? 'bg-slate-100 opacity-80' : e.feasible ? 'bg-white' : 'bg-amber-50'}>
                         <td className="py-2 px-2 text-center"><input type="checkbox" checked={selected.has(idx)} onChange={()=>toggleSelect(idx)} /></td>
-                        <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">{formatDdMmYyyy(e.fromDate)}</td>
+                        <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">
+                          {formatDdMmYyyy(e.fromDate)}
+                          {e.isPending && <span className="ml-1 inline-flex items-center px-1 py-0.5 rounded bg-slate-200 border border-slate-300 text-slate-600 text-[9px] font-bold tracking-widest leading-none" title="Empty next cycle — no trips to estimate yet">⏳ PENDING</span>}
+                        </td>
                         <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">{formatDdMmYyyy(e.toDate)}</td>
                         <td className="py-2 px-2 text-center">
                           {e.isFullTank ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[10px] font-bold" title="Full Tank pump">★ FULL</span> : <span className="text-on-surface-variant text-xs">—</span>}
@@ -264,17 +278,18 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                         <td className="py-2 px-2 text-right font-mono text-xs">
                           <span className="inline-flex items-center justify-end gap-1 w-full flex-wrap">
                             <span>{e.distance} KM</span>
+                            {e.isLowConfidence && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-violet-100 border border-violet-300 text-violet-700 text-[8px] font-bold tracking-widest leading-none" title="Single-trip START cycle — thin calibration, treat with skepticism">⚠ LOW-CONF</span>}
                             {e.longTripCount > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[8px] font-bold tracking-widest leading-none" title={`${e.longTripCount} trip(s) over 40 km (longest ${e.maxTripDistance} km)`}>{e.longTripCount}× &gt;40</span>}
                             {e.veryLongTripCount > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title={`${e.veryLongTripCount} trip(s) 100 km or longer (longest ${e.maxTripDistance} km) — long runs usually show better economy`}>{e.veryLongTripCount}× ≥100</span>}
                           </span>
                         </td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.fuelFed.toFixed(1)} L</td>
                         <td className="py-2 px-2 text-right font-mono text-xs">{e.prevEconomy !== null ? e.prevEconomy.toFixed(1) : '—'}</td>
-                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700" title={e.isGapSpan ? 'Economy not calculated — ODO gap' : undefined}>{e.suggested !== null ? e.suggested.toFixed(1) : '—'}</td>
+                        <td className="py-2 px-2 text-right font-mono text-xs font-bold text-sky-700" title={suggestionTitle(e)}>{e.suggested !== null ? e.suggested.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-center">
                           <button onClick={() => handleApply(idx, 'normal')} disabled={locked || e.suggested === null} className={`px-2 py-1 rounded text-xs font-semibold ${locked || e.suggested === null ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`} data-testid={`apply-normal-${idx}`}>Apply</button>
                         </td>
-                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`} title={e.isGapSpan ? 'Economy not calculated — ODO gap' : undefined}>{e.suggestedStrict !== null ? e.suggestedStrict.toFixed(1) : '—'}</td>
+                        <td className={`py-2 px-2 text-right font-mono text-xs font-bold ${sameSuggestion ? 'text-on-surface-variant' : 'text-emerald-700'}`} title={suggestionTitle(e)}>{e.suggestedStrict !== null ? e.suggestedStrict.toFixed(1) : '—'}</td>
                         <td className="py-2 px-2 text-center">
                           <button onClick={() => handleApply(idx, 'strict')} disabled={locked || e.suggestedStrict === null} className={`px-2 py-1 rounded text-xs font-semibold ${locked || e.suggestedStrict === null ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`} data-testid={`apply-strict-${idx}`}>Apply</button>
                         </td>

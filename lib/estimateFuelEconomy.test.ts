@@ -293,15 +293,100 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     });
   });
 
+  describe('Issue 9 — trip-delimited suggestion segments (pending / low-confidence / cycle-apply)', () => {
+    it('END pump on the final trip renders its empty next cycle as pending with no suggestion', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 300, trip_distance: 200, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-10', start_km: 300, end_km: 400, trip_distance: 100, fuel_pumped_amount: 25, trip_index: 3 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(2);
+      const pending = est[1];
+      expect(pending.tripIds).toEqual([]);
+      expect(pending.isPending).toBe(true);
+      expect(pending.suggested).toBeNull();
+      expect(pending.suggestedStrict).toBeNull();
+      expect(pending.isLowConfidence).toBe(false);
+    });
+
+    it('flags a single-trip START cycle as low-confidence but keeps its suggestion', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 150, trip_distance: 50, fuel_pumped_amount: 30, pump_timing: 'START', trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-06', start_km: 150, end_km: 210, trip_distance: 60, fuel_pumped_amount: 25, pump_timing: 'START', trip_index: 3 }),
+        trip({ id: 't4', date: '2024-03-10', start_km: 210, end_km: 290, trip_distance: 80, trip_index: 4 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(3);
+      // t1 END immediately followed by a START pump: its next cycle is empty -> pending.
+      expect(est[0].isPending).toBe(true);
+      // Single-trip START cycle [t2] carries a suggestion with a low-confidence flag.
+      expect(est[1].tripIds).toEqual(['t2']);
+      expect(est[1].isPending).toBe(false);
+      expect(est[1].isLowConfidence).toBe(true);
+      expect(est[1].suggested).not.toBeNull();
+      expect(est[1].suggestedStrict).not.toBeNull();
+      // Multi-trip START cycle [t3, t4] is not flagged.
+      expect(est[2].tripIds).toEqual(['t3', 't4']);
+      expect(est[2].isLowConfidence).toBe(false);
+    });
+
+    it('does not flag a single-trip cycle sourced by an END pump', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 30, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, trip_index: 3 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(2);
+      // Segment 0 covers exactly the next pumped trip [t2].
+      expect(est[0].tripIds).toEqual(['t2']);
+      expect(est[0].isPending).toBe(false);
+      expect(est[0].isLowConfidence).toBe(false);
+    });
+
+    it('exposes the full trip-delimited cycle as tripIds so apply writes every trip of the cycle', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, pump_timing: 'START', trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, fuel_pumped_amount: 30, trip_index: 3 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(2);
+      // START pump opens the cycle at itself and the END pump closes it: [t1, t2, t3].
+      expect(est[0].tripIds).toEqual(['t1', 't2', 't3']);
+      expect(est[0].isPending).toBe(false);
+      expect(est[1].isPending).toBe(true);
+    });
+
+    it('keeps the previous-economy chain intact across a pending segment', () => {
+      const trips: Trip[] = [
+        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 150, trip_distance: 50, fuel_pumped_amount: 30, pump_timing: 'START', trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-06', start_km: 150, end_km: 210, trip_distance: 60, fuel_pumped_amount: 25, pump_timing: 'START', trip_index: 3 }),
+        trip({ id: 't4', date: '2024-03-10', start_km: 210, end_km: 290, trip_distance: 80, trip_index: 4 }),
+      ];
+      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(est[0].isPending).toBe(true);
+      // Pending carries no suggestion, so the next segment still chains off the same prev.
+      expect(est[1].prevEconomy).toBe(est[0].prevEconomy);
+    });
+  });
+
   describe('Issue 4 — Exponential Smoothing & Global Delta Constraints', () => {
     it('applies weighted moving average exponential smoothing with alpha = 0.7 across segments', () => {
       const trips: Trip[] = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 10, is_full_tank: true, trip_index: 1 }),
         trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 10, is_full_tank: true, trip_index: 2 }),
         trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, fuel_pumped_amount: 7, is_full_tank: true, trip_index: 3 }),
+        // Trailing trip so the final cycle is real (an END pump on the final
+        // trip now pends per Issue 9 instead of echoing the previous value).
+        trip({ id: 't4', date: '2024-03-15', start_km: 300, end_km: 400, trip_distance: 100, trip_index: 4 }),
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
       expect(est.length).toBe(3);
+      expect(est[2].isPending).toBe(false);
       expect(est[2].suggested).toBeLessThan(14.3);
       expect(est[2].suggested).toBeGreaterThan(10.0);
     });
@@ -310,9 +395,13 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       const trips: Trip[] = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 12, is_full_tank: true, trip_index: 1 }),
         trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 7, is_full_tank: true, trip_index: 2 }),
+        // Trailing trip so the final cycle is real (an END pump on the final
+        // trip now pends per Issue 9 instead of echoing the previous value).
+        trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, trip_index: 3 }),
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
       expect(est.length).toBe(2);
+      expect(est[1].isPending).toBe(false);
       const delta = Math.abs((est[1].suggested ?? 0) - (est[0].suggested ?? 0));
       expect(delta).toBeLessThanOrEqual(1.51);
     });

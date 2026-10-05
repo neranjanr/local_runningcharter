@@ -27,6 +27,10 @@ export interface SegmentEstimate {
   pumpTiming: 'START' | 'END';
   /** Trip ids in this trip-delimited cycle (Issue #8) — apply writes them all. */
   tripIds: string[];
+  /** Empty next cycle (e.g. END pump on the final trip): pending, nothing to estimate (Issue #9). */
+  isPending: boolean;
+  /** Single-trip cycle opened by a START pump: thin calibration, treat with skepticism (Issue #9). */
+  isLowConfidence: boolean;
   prevEconomy: number | null;
   /** Normal (lenient) suggestion — balances in [1, tankCapacity]. */
   suggested: number | null;
@@ -69,6 +73,8 @@ interface PassSegment {
   startPos: number;
   trips: Trip[];
   isGapSpan: boolean;
+  isPending: boolean;
+  isLowConfidence: boolean;
   maxTripDistance: number;
   longTripCount: number;
   veryLongTripCount: number;
@@ -350,16 +356,29 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const blankedDates = getGapBlankedSegments(trips);
     const isGapSpan = segmentTrips.length > 0 && segmentTrips.some(t => blankedDates.has(t.date));
 
+    // Issue #9: an empty trip list is a pending next cycle (e.g. END pump on
+    // the final trip) — nothing to estimate. A single-trip cycle opened by a
+    // START pump is a thin calibration — flag low-confidence, keep the value.
+    const isPending = segmentTrips.length === 0;
+    const isLowConfidence = !isPending && !isGapSpan && segmentTrips.length === 1 && isStartMigrated(srcTrip);
+
     const push = (suggested: number | null, feasible: boolean, feasibleMin: number | null, feasibleMax: number | null, warning?: string, isGap = false) => {
       results.push({
         fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date,
         isFullTank, pumpTiming, prevEconomy: prev, suggested, feasible, feasibleMin, feasibleMax, warning,
         isFullToFull, nextIsFull, startPos, trips: segmentTrips, isGapSpan: isGap, maxTripDistance, longTripCount, veryLongTripCount,
+        isPending, isLowConfidence,
       });
     };
 
     if (isGapSpan) {
       push(null, false, null, null, 'Economy not calculated — ODO gap', true);
+      prevEconomy = prev;
+      continue;
+    }
+
+    if (isPending) {
+      push(null, false, null, null, 'Pending — no trips in this cycle yet');
       prevEconomy = prev;
       continue;
     }
@@ -636,6 +655,8 @@ export function estimateFuelEconomies(params: {
       isFullTank: n.isFullTank,
       pumpTiming: n.pumpTiming,
       tripIds: n.trips.map((t) => t.id),
+      isPending: n.isPending,
+      isLowConfidence: n.isLowConfidence,
       prevEconomy: n.prevEconomy,
       suggested: n.isGapSpan ? null : n.suggested,
       suggestedStrict: s.isGapSpan ? null : s.suggested,
