@@ -12,6 +12,13 @@ import { roundToOneDecimal, roundToIntegerKm } from './tripCalculations';
 export const MAX_DAYS_PER_PAGE = 4;
 export const MAX_TRIPS_PER_DAY = 13;
 
+// Day-slot counting with the 40 km split-collapse rule (Spec #6,
+// Issue #11, ADR-0035) lives in `./tripCycleSlots`, shared with the ledger
+// engine so validation and display cannot drift. Re-exported here so
+// pagination callers keep a single import site.
+export { countLedgerColumnSlots, SPLIT_DAY_THRESHOLD_KM as SPLIT_DAY_COLUMN_THRESHOLD_KM } from './tripCycleSlots';
+import { countLedgerColumnSlots as countSlots } from './tripCycleSlots';
+
 // ---------------------------------------------------------------------------
 // Date / pagination helpers
 // ---------------------------------------------------------------------------
@@ -147,8 +154,15 @@ export function validateTripForPage(
 
   const distinct = getDistinctDates(tripsOnCurrentPage);
   const isNewDistinctDay = !distinct.includes(newTripDate);
-  if (isNewDistinctDay && distinct.length >= MAX_DAYS_PER_PAGE) {
-    return { allowed: true, requiresNewPage: true, reason: 'MAX_DAYS' };
+  if (isNewDistinctDay) {
+    // A new date always needs at least one more day-slot; a split large
+    // day can need several, but its pumps/distances are unknown until the
+    // trips exist — the overflow then surfaces via
+    // `validatePaginationConstraints` (rebuild warning).
+    const before = countSlots(tripsOnCurrentPage);
+    if (before + 1 > MAX_DAYS_PER_PAGE) {
+      return { allowed: true, requiresNewPage: true, reason: 'MAX_DAYS' };
+    }
   }
 
   return { allowed: true, requiresNewPage: false };
@@ -384,15 +398,18 @@ export function recalculatePageBalancesFromOpening(params: {
 
 /**
  * Validate pagination constraints still hold after renumber.
- * Returns list of violations if any page exceeds 4 distinct days, 13 trips per day, or month split.
+ * Returns list of violations if any page exceeds 4 day-slots (one per
+ * date, plus one extra slot per cycle slice on split large days over
+ * 40 km), 13 trips per day, or month split.
  */
 export function validatePaginationConstraints(pages: BookPage[], trips: Trip[]): Array<{ pageId: string; pageNumber: number; violation: string }> {
   const violations: Array<{ pageId: string; pageNumber: number; violation: string }> = [];
   for (const page of pages) {
     const pageTrips = trips.filter((t) => t.page_id === page.id);
     const distinct = getDistinctDates(pageTrips);
-    if (distinct.length > MAX_DAYS_PER_PAGE) {
-      violations.push({ pageId: page.id, pageNumber: page.page_number, violation: `MAX_DAYS exceeded: ${distinct.length} > ${MAX_DAYS_PER_PAGE}` });
+    const slots = countSlots(pageTrips);
+    if (slots > MAX_DAYS_PER_PAGE) {
+      violations.push({ pageId: page.id, pageNumber: page.page_number, violation: `MAX_DAYS exceeded: ${slots} day-slots > ${MAX_DAYS_PER_PAGE} (${distinct.length} dates, split large days consume extra slots)` });
     }
     for (const d of distinct) {
       const cnt = countTripsForDate(pageTrips, d);

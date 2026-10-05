@@ -2,7 +2,8 @@
 
 import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import type { Trip, BookPage, Vehicle } from '@/types';
-import { computeLedgerDays, computeTripFuelMap } from '@/lib/ledgerCalculations';
+import { computeLedgerDays, computeTripFuelMap, buildCycleStems } from '@/lib/ledgerCalculations';
+import type { TripFuelInfo } from '@/lib/ledgerCalculations';
 import { getFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getTripEconomyMap } from '@/lib/tripEconomyStore';
 import { getInTanksForPage } from '@/lib/inTankStore';
@@ -84,49 +85,42 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
       } catch {}
     }
     let tripMap: Map<string, { economy: number }>;
+    let tripFuelFull = new Map<string, TripFuelInfo>();
     try {
       let tripEconomy: Map<string, number> | undefined;
       try {
         tripEconomy = getTripEconomyMap();
       } catch {}
       const tm = computeTripFuelMap({ trips, pages, dateEconomy, dateInTank, openingFuel, tripEconomy, tripInTank: tripInTanks });
+      tripFuelFull = tm;
       tripMap = new Map(Array.from(tm.entries()).map(([id, v]) => [id, { economy: v.economy }]));
     } catch {
       tripMap = new Map();
     }
+    // Issue #11: one stem per trip-delimited cycle slice (a mid-day pump
+    // splits the date into two stems even when both slices share the same
+    // economy) instead of one stem per distinct economy per date.
     const sortedTrips = [...trips].sort((a, b) => {
       if (a.date !== b.date) return a.date < b.date ? -1 : 1;
       if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
       return a.start_km - b.start_km;
     });
-    const dateToEconomies = new Map<string, number[]>();
-    const seenPerDate = new Map<string, Set<number>>();
-    for (const t of sortedTrips) {
-      const econ = tripMap.get(t.id)?.economy ?? dateEconomy.get(t.date) ?? 10.5;
-      const set = seenPerDate.get(t.date) ?? new Set<number>();
-      if (!set.has(econ)) {
-        set.add(econ);
-        seenPerDate.set(t.date, set);
-        const arr = dateToEconomies.get(t.date) ?? [];
-        arr.push(econ);
-        dateToEconomies.set(t.date, arr);
-      }
+    let stems: Array<{ date: string; economy: number; key: string; tripRange: string | null }> = [];
+    try {
+      stems = buildCycleStems({ trips: sortedTrips, fuelMap: tripFuelFull });
+    } catch {
+      stems = [];
     }
-    const allDays: Array<{ fuelEconomy: number; date: string; key: string }> = [];
-    if (dateToEconomies.size > 0) {
-      const sortedDates = Array.from(dateToEconomies.keys()).sort();
-      for (const d of sortedDates) {
-        const ecos = dateToEconomies.get(d)!;
-        for (let idx = 0; idx < ecos.length; idx++) {
-          const econ = ecos[idx];
-          allDays.push({ fuelEconomy: econ, date: d, key: `${d}#${idx}:${econ}` });
-        }
+    const allDays: Array<{ fuelEconomy: number; date: string; key: string; tripRange: string | null }> = [];
+    if (stems.length > 0) {
+      for (const s of stems) {
+        allDays.push({ fuelEconomy: s.economy, date: s.date, key: s.key, tripRange: s.tripRange });
       }
-    } else {
+    } else if (tripMap.size > 0) {
       const dayMap = new Map<string, { fuelEconomy: number; date: string }>();
       for (const [d, econ] of dateEconomy.entries()) dayMap.set(d, { fuelEconomy: econ, date: d });
       const tmp = Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-      for (const v of tmp) allDays.push({ ...v, key: v.date });
+      for (const v of tmp) allDays.push({ ...v, key: v.date, tripRange: null });
     }
     const max = allDays.length ? Math.max(...allDays.map(d => d.fuelEconomy), 10) : 10;
     const min = allDays.length ? Math.min(...allDays.map(d => d.fuelEconomy)) : 10;
@@ -342,7 +336,7 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
           Fuel Economy Trend
         </h3>
-        <p className="text-xs text-slate-500">No fuel economy data yet — add trips with ledger to see per-day km/L.</p>
+        <p className="text-xs text-slate-500">No fuel economy data yet — add trips with ledger to see per-cycle km/L.</p>
         <div className="flex-1 flex items-center justify-center py-8 text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">No data</div>
       </div>
     );
@@ -381,7 +375,7 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
-            <span className="font-medium text-slate-600">Per DayGroup km/L</span>
+            <span className="font-medium text-slate-600">Per cycle km/L</span>
             <span className="text-slate-300">•</span>
             <span>gaps show odometer loss / missing sync periods</span>
           </p>
@@ -479,18 +473,19 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
                       const shade = band.bg; // absolute band coloring per Typical Fuel Economy Range (ADR-0025)
                       const dotColor = band.label === 'green' ? 'text-emerald-600' : band.label === 'amber' ? 'text-amber-600' : 'text-red-600';
                       return (
-                        <div key={d.key} className="group relative flex flex-col items-center w-8 shrink-0">
+                        <div key={d.key} className="group relative flex flex-col items-center w-8 shrink-0" title={d.tripRange ? `${d.date} ${d.tripRange} · Fuel-In Segment` : d.date}>
                           <span className={`text-[11px] font-mono font-medium mb-1 ${dotColor}`}>{d.fuelEconomy.toFixed(1)}</span>
+                          {d.tripRange && <span className="text-[8px] font-bold font-mono text-telemetry-cyan leading-none mb-0.5">{d.tripRange}</span>}
                           <div className="w-5 bg-slate-100 rounded-t-sm h-48 flex items-end">
                             <div
                               className={`w-full rounded-t-sm hover:brightness-110 transition-all ${shade} ${band.label !== 'green' ? 'ring-1 ring-inset ' + (band.label === 'amber' ? 'ring-amber-500' : 'ring-red-600') : ''}`}
                               style={{ height: `${Math.max(6, barPct)}%` }}
-                              title={`${d.date}: ${d.fuelEconomy.toFixed(1)} km/L (${band.label}) [${low.toFixed(1)}–${high.toFixed(1)} ±${(((low+high)/2)*0.2).toFixed(1)}]`}
+                              title={`${d.date}${d.tripRange ? ` ${d.tripRange}` : ''}: ${d.fuelEconomy.toFixed(1)} km/L (${band.label}) [${low.toFixed(1)}–${high.toFixed(1)} ±${(((low+high)/2)*0.2).toFixed(1)}]`}
                             />
                           </div>
                           <div className="pointer-events-none absolute bottom-full mb-6 hidden group-hover:flex flex-col bg-slate-900 text-white text-[10px] rounded py-1 px-2 z-30 shadow-lg whitespace-nowrap">
                             <span className={`font-bold ${band.label === 'green' ? 'text-emerald-400' : band.label === 'amber' ? 'text-amber-400' : 'text-red-400'}`}>{d.fuelEconomy.toFixed(1)} km/L · {band.label}</span>
-                            <span>{d.date}</span>
+                            <span>{d.date}{d.tripRange ? ` ${d.tripRange}` : ''}</span>
                           </div>
                         </div>
                       );
@@ -513,7 +508,7 @@ export function FuelEconomyGraph({ trips, pages, vehicle }: Props) {
                 return (
                   <div key={`d-yg-${g.year}-${idx}`} className="inline-flex items-center gap-1.5 shrink-0">
                     {g.stems.map(d => (
-                      <span key={`dl-${d.key}`} className="w-8 text-center shrink-0">
+                      <span key={`dl-${d.key}`} className="w-8 text-center shrink-0" title={d.tripRange ? `${d.date} ${d.tripRange}` : d.date}>
                         {formatDayLabel(d.date)}
                       </span>
                     ))}

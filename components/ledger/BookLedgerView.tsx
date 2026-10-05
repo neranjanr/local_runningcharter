@@ -5,10 +5,11 @@ import type { BookPage, Trip, Vehicle } from '@/types';
 import { Side1TripsLog } from './Side1TripsLog';
 import { Side2FuelTables } from './Side2FuelTables';
 import { PageNavigation } from './PageNavigation';
-import { computeLedgerDays, computeLedgerSummary, groupTripsByDateForSide1, computePageSeq } from '@/lib/ledgerCalculations';
+import { computeLedgerDays, computeLedgerSummary, groupTripsByDateForSide1, computePageSeq, buildSide2Columns, computeTripFuelMap } from '@/lib/ledgerCalculations';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { getInTanksForPage, saveInTanksForPage } from '@/lib/inTankStore';
 import { backfillTripInTanksFromPerDay, getTripInTankMap, saveTripInTank } from '@/lib/tripInTankStore';
+import { backfillTripEconomiesFromPerDay, getTripEconomyMap } from '@/lib/tripEconomyStore';
 import { getDistinctDates } from '@/lib/pagination';
 import { roundToOneDecimal, roundToIntegerKm } from '@/lib/tripCalculations';
 import { ExcelExportButton } from '@/components/ExcelExportButton';
@@ -122,6 +123,54 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
   }, [currentPage, trips, rawEconomies, rawInTanks]);
 
   const summary = useMemo(() => computeLedgerSummary(ledgerDays), [ledgerDays]);
+
+  // Issue #11: Side 2 per-cycle columns with the 40 km split-collapse rule.
+  // Balances chain per trip (START adds fuel before consuming, END after),
+  // so a mid-day pump splits a large day into one column per cycle slice;
+  // small split days collapse to one column with exact balances and an
+  // averaged economy. Built from the book-wide trip fuel chain (same
+  // pattern as the trend graph) so columns stay continuous across pages.
+  const { ledgerColumns, columnSummary } = useMemo(() => {
+    if (!currentPage) return { ledgerColumns: [], columnSummary: computeLedgerSummary([]) };
+    try {
+      backfillTripInTanksFromPerDay(trips, (pid) => getInTanksForPage(pid));
+    } catch {}
+    let tripInTanks: Map<string, number> | undefined;
+    try {
+      tripInTanks = getTripInTankMap();
+    } catch {}
+    const dateEconomy = new Map<string, number>();
+    const dateInTank = new Map<string, number>();
+    for (const page of sortedPages) {
+      try {
+        const economies = page.id === currentPage.id ? rawEconomies : getFuelEconomiesForPage(page.id);
+        const inTanks = page.id === currentPage.id ? rawInTanks : getInTanksForPage(page.id);
+        const days = computeLedgerDays({ page, trips, economies, inTanks, tripInTanks });
+        for (const d of days) {
+          if (!dateEconomy.has(d.date)) dateEconomy.set(d.date, d.fuelEconomy);
+        }
+        const pageDistinct = getDistinctDates(trips.filter((t) => t.page_id === page.id));
+        pageDistinct.forEach((dd, di) => {
+          if (!dateInTank.has(dd)) dateInTank.set(dd, roundToOneDecimal(inTanks[di] ?? 0));
+        });
+      } catch {}
+    }
+    try {
+      backfillTripEconomiesFromPerDay(trips, (pid) => getFuelEconomiesForPage(pid));
+    } catch {}
+    let tripEconomy: Map<string, number> | undefined;
+    try {
+      tripEconomy = getTripEconomyMap();
+    } catch {}
+    const openingFuel = sortedPages.length > 0 ? sortedPages[0].start_fuel_balance : 10;
+    let fuelMap = new Map<string, { position: number; economy: number; balance: number; pumped: number; inTank: number; drawn: number }>();
+    try {
+      fuelMap = computeTripFuelMap({ trips, pages: sortedPages, dateEconomy, dateInTank, openingFuel, tripEconomy, tripInTank: tripInTanks });
+    } catch {}
+    const pageTrips = trips.filter((t) => t.page_id === currentPage.id);
+    const cols = buildSide2Columns({ trips: pageTrips, fuelMap });
+    return { ledgerColumns: cols, columnSummary: computeLedgerSummary(cols) };
+  }, [currentPage, trips, sortedPages, rawEconomies, rawInTanks]);
 
   const dayGroups = useMemo(() => {
     if (!currentPage) return [];
@@ -281,8 +330,8 @@ export function BookLedgerView({ pages, trips, vehicle, initialPageNumber }: Pro
         <div className="print:break-before-page">
           <Side2FuelTables
             pageNumber={currentPage.page_number}
-            ledgerDays={ledgerDays}
-            summary={summary}
+            ledgerDays={ledgerColumns.length > 0 ? ledgerColumns : ledgerDays}
+            summary={ledgerColumns.length > 0 ? columnSummary : summary}
             vehicleTankCapacity={vehicle?.tank_capacity ?? 65}
             rawEconomies={rawEconomies}
             rawInTanks={rawInTanks}

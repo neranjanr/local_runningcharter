@@ -8,6 +8,26 @@
 import type { BookPage, Trip } from '@/types';
 import { roundToOneDecimal, roundToIntegerKm } from './tripCalculations';
 import { calculateConsumed, calculateBalance, getDistinctDates } from './pagination';
+import {
+  buildTripCycles,
+  countLedgerColumnSlots,
+  cycleSlicesForDate,
+  isEndPumpTrip,
+  isStartPumpTrip,
+  sortTripsForCycles,
+  SPLIT_DAY_THRESHOLD_KM,
+} from './tripCycleSlots';
+
+// Re-exported so existing Issue #8 readers keep working:
+// `tripEconomyStore`, estimator tests, and cycle tests import the
+// trip-delimited boundary rule from this module.
+export {
+  buildTripCycles,
+  countLedgerColumnSlots,
+  isEndPumpTrip,
+  isStartPumpTrip,
+  SPLIT_DAY_THRESHOLD_KM,
+};
 
 export const DEFAULT_FUEL_ECONOMY = 10.5;
 
@@ -281,54 +301,6 @@ export function computePageSeq(dayGroups: DayGroup[]): number[] {
 }
 
 /**
- * A START pump puts the pumped Trip in the next cycle at any distance;
- * an END pump keeps it in the previous one (Spec #6, Issue #8).
- * No distance guard, no collapsing — every pumped Trip is a boundary.
- */
-export function isStartPumpTrip(t: Trip): boolean {
-  return t.pump_timing === 'START' && (t.fuel_pumped_amount ?? 0) > 0;
-}
-
-export function isEndPumpTrip(t: Trip): boolean {
-  return (t.pump_timing ?? 'END') === 'END' && (t.fuel_pumped_amount ?? 0) > 0;
-}
-
-function sortTripsForCycles(trips: Trip[]): Trip[] {
-  return [...trips].sort((a, b) => {
-    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
-    if (a.trip_index !== b.trip_index) return a.trip_index - b.trip_index;
-    return a.start_km - b.start_km;
-  });
-}
-
-/**
- * Trip-delimited Fuel-In cycles (Issue #8).
- * Boundaries are exactly the pumped Trips in chronological order with no
- * collapsing: a START pump opens the next cycle at the pumped Trip itself,
- * an END pump closes the previous cycle after the pumped Trip. One date can
- * therefore hold several cycles.
- */
-export function buildTripCycles(trips: Trip[]): Trip[][] {
-  const sorted = sortTripsForCycles(trips);
-  const cycles: Trip[][] = [];
-  let current: Trip[] = [];
-  for (const t of sorted) {
-    if (isStartPumpTrip(t) && current.length > 0) {
-      cycles.push(current);
-      current = [t];
-    } else {
-      current.push(t);
-    }
-    if (isEndPumpTrip(t)) {
-      cycles.push(current);
-      current = [];
-    }
-  }
-  if (current.length > 0) cycles.push(current);
-  return cycles;
-}
-
-/**
  * Trip-level fuel info with trip-delimited cycle economies (Issue #8).
  * A START pumped Trip uses the next cycle's economy (fuel available before its
  * distance is driven); an END pumped Trip keeps the previous cycle's economy.
@@ -483,4 +455,244 @@ export function computeGlobalSeq(trips: Trip[]): Map<string, number> {
   const map = new Map<string, number>();
   sorted.forEach((t, idx) => map.set(t.id, idx + 1));
   return map;
+}
+
+/**
+ * Side 2 per-cycle columns with the 40 km split-collapse rule (Spec #6,
+ * Issue #11).
+ *
+ * A date whose total distance exceeds 40 km renders one column per
+ * trip-delimited Fuel-In Segment slice (labeled with the date plus its
+ * trip range); 40 km or less collapses to a single column with exact
+ * balances and a distance-weighted-average economy plus a split marker.
+ * Unsplit dates render one column each. Every column consumes one
+ * day-slot toward the per-page limit. Segment slicing itself lives in
+ * `./tripCycleSlots` (shared with pagination so the two cannot drift).
+ */
+
+export interface LedgerCycleColumn {
+  key: string;
+  date: string;
+  dayLabel: string;
+  /** e.g. "21 Oct T1-2" for split slices, "21 Oct" otherwise. */
+  columnLabel: string;
+  /** 1-based column slot across the page (consumes day-slots). */
+  dayIndex: number;
+  /** e.g. "T1-2" for split slices, null for single columns. */
+  tripRange: string | null;
+  tripIds: string[];
+  startKm: number;
+  endKm: number;
+  distance: number;
+  fuelEconomy: number;
+  economySource: LedgerDay['economySource'];
+  fuelPosition: number;
+  inTank: number;
+  drawn: number;
+  fuelOrderNo: string;
+  fuelOrderDate: string;
+  consumed: number;
+  balance: number;
+  isFullTank: boolean;
+  /** The date holds more than one cycle slice. */
+  isSplit: boolean;
+  /** Split date collapsed to one column (total <= 40 km). */
+  isCollapsed: boolean;
+}
+
+export interface CycleStem {
+  date: string;
+  economy: number;
+  key: string;
+  tripRange: string | null;
+  tripIds: string[];
+}
+
+/** Cycle slices of one date live in `./tripCycleSlots` (shared with pagination). */
+
+function tripRangeLabel(slice: Trip[], dateTrips: Trip[]): string {
+  const order = new Map(dateTrips.map((t, i) => [t.id, i + 1]));
+  const positions = slice.map((t) => order.get(t.id) ?? 0).sort((a, b) => a - b);
+  if (positions.length === 0) return '';
+  if (positions.length === 1) return `T${positions[0]}`;
+  return `T${positions[0]}-${positions[positions.length - 1]}`;
+}
+
+/**
+ * One trend stem per trip-delimited Fuel-In Segment slice (no 40 km
+ * collapsing) — a mid-day pump splits the date into two stems even when
+ * both slices share the same economy.
+ */
+export function buildCycleStems(params: {
+  trips: Trip[];
+  fuelMap: Map<string, TripFuelInfo>;
+}): CycleStem[] {
+  const { trips, fuelMap } = params;
+  if (trips.length === 0) return [];
+  const sorted = sortTripsForCycles(trips);
+  const cycles = buildTripCycles(sorted);
+  const dates = Array.from(new Set(sorted.map((t) => t.date))).sort();
+  const stems: CycleStem[] = [];
+  for (const date of dates) {
+    const dateTrips = sorted.filter((t) => t.date === date);
+    const slices = cycleSlicesForDate(dateTrips, cycles);
+    slices.forEach((slice, i) => {
+      const economy =
+        fuelMap.get(slice[0].id)?.economy ?? DEFAULT_FUEL_ECONOMY;
+      stems.push({
+        date,
+        economy: roundToOneDecimal(economy),
+        key: slices.length > 1 ? `${date}#${i}` : date,
+        tripRange: slices.length > 1 ? tripRangeLabel(slice, dateTrips) : null,
+        tripIds: slice.map((t) => t.id),
+      });
+    });
+  }
+  return stems;
+}
+
+/**
+ * Side 2 ledger columns for a set of trips (typically one page), applying
+ * the 40 km split-collapse rule. Balances chain exactly: each column opens
+ * at its first trip's position and closes at its last trip's balance, with
+ * consumed summed per trip so full-tank anchoring stays exact. A collapsed
+ * column shows the distance-weighted-average economy
+ * (totalDistance / totalConsumed).
+ */
+export function buildSide2Columns(params: {
+  trips: Trip[];
+  fuelMap: Map<string, TripFuelInfo>;
+  tankCapacity?: number;
+}): LedgerCycleColumn[] {
+  const { trips, fuelMap } = params;
+  if (trips.length === 0) return [];
+  const sorted = sortTripsForCycles(trips);
+  const cycles = buildTripCycles(sorted);
+  const dates = Array.from(new Set(sorted.map((t) => t.date))).sort();
+
+  const columns: LedgerCycleColumn[] = [];
+  let prevEconomy: number | null = null;
+  let isFirst = true;
+
+  const perTripConsumed = (t: Trip, economy: number): number =>
+    calculateConsumed(roundToIntegerKm(t.trip_distance), economy);
+
+  const makeColumn = (
+    date: string,
+    slice: Trip[],
+    dateTrips: Trip[],
+    isSplit: boolean,
+    isCollapsed: boolean,
+  ): LedgerCycleColumn => {
+    const ordered = sortTripsForCycles(slice);
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    const startKm = roundToIntegerKm(first.start_km);
+    const endKm = roundToIntegerKm(last.end_km);
+    const distance = roundToIntegerKm(
+      ordered.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0),
+    );
+    const economies = ordered.map(
+      (t) => fuelMap.get(t.id)?.economy ?? DEFAULT_FUEL_ECONOMY,
+    );
+    let fuelEconomy: number;
+    if (isCollapsed) {
+      const totalConsumed = roundToOneDecimal(
+        ordered.reduce((s, t, i) => s + perTripConsumed(t, economies[i]), 0),
+      );
+      fuelEconomy =
+        totalConsumed > 0
+          ? roundToOneDecimal(distance / totalConsumed)
+          : roundToOneDecimal(economies[0]);
+    } else {
+      fuelEconomy = roundToOneDecimal(economies[0]);
+    }
+    const fuelPosition = roundToOneDecimal(
+      fuelMap.get(first.id)?.position ?? columns[columns.length - 1]?.balance ?? 0,
+    );
+    const inTank = roundToOneDecimal(
+      ordered.reduce((s, t) => s + roundToOneDecimal(fuelMap.get(t.id)?.inTank ?? 0), 0),
+    );
+    const drawn = roundToOneDecimal(
+      ordered.reduce(
+        (s, t) => s + roundToOneDecimal(fuelMap.get(t.id)?.drawn ?? fuelMap.get(t.id)?.pumped ?? t.fuel_pumped_amount ?? 0),
+        0,
+      ),
+    );
+    const balance = roundToOneDecimal(
+      fuelMap.get(last.id)?.balance ?? fuelPosition,
+    );
+    const consumed = roundToOneDecimal(
+      ordered.reduce((s, t, i) => s + perTripConsumed(t, economies[i]), 0),
+    );
+    const orderNos = ordered
+      .filter((t) => t.fuel_order_no && t.fuel_order_no.trim() !== '')
+      .map((t) => t.fuel_order_no!.trim());
+    const isFullTank = ordered.some(
+      (t) => !!t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0,
+    );
+    let economySource: LedgerCycleColumn['economySource'];
+    if (isFirst) economySource = 'fallback';
+    else if (isCollapsed || fuelEconomy !== prevEconomy) economySource = 'explicit';
+    else economySource = 'inherited';
+    const tripRange =
+      isSplit && !isCollapsed ? tripRangeLabel(ordered, dateTrips) : null;
+    const dayLabel = shortDayLabel(date);
+    return {
+      key: tripRange ? `${date}#${tripRange}` : date,
+      date,
+      dayLabel,
+      columnLabel: tripRange ? `${dayLabel} ${tripRange}` : dayLabel,
+      dayIndex: 0, // assigned below in column order
+      tripRange,
+      tripIds: ordered.map((t) => t.id),
+      startKm,
+      endKm,
+      distance,
+      fuelEconomy,
+      economySource,
+      fuelPosition,
+      inTank,
+      drawn,
+      fuelOrderNo: orderNos.join(', '),
+      fuelOrderDate: drawn > 0 ? date : '',
+      consumed,
+      balance,
+      isFullTank,
+      isSplit,
+      isCollapsed,
+    };
+  };
+
+  for (const date of dates) {
+    const dateTrips = sorted.filter((t) => t.date === date);
+    const totalDist = roundToIntegerKm(
+      dateTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0),
+    );
+    const slices = cycleSlicesForDate(dateTrips, cycles);
+    const isSplit = slices.length > 1;
+    if (!isSplit) {
+      const col = makeColumn(date, slices[0], dateTrips, false, false);
+      prevEconomy = col.fuelEconomy;
+      isFirst = false;
+      columns.push(col);
+    } else if (totalDist > SPLIT_DAY_THRESHOLD_KM) {
+      for (const slice of slices) {
+        const col = makeColumn(date, slice, dateTrips, true, false);
+        prevEconomy = col.fuelEconomy;
+        isFirst = false;
+        columns.push(col);
+      }
+    } else {
+      const col = makeColumn(date, dateTrips, dateTrips, true, true);
+      prevEconomy = col.fuelEconomy;
+      isFirst = false;
+      columns.push(col);
+    }
+  }
+
+  columns.forEach((c, i) => {
+    c.dayIndex = i + 1;
+  });
+  return columns;
 }

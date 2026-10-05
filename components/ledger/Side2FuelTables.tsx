@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import type { LedgerDay, LedgerSummary } from '@/lib/ledgerCalculations';
+import type { LedgerDay, LedgerSummary, LedgerCycleColumn } from '@/lib/ledgerCalculations';
 import { roundToOneDecimal } from '@/lib/tripCalculations';
 import type { PageGap, FuelGap } from '@/lib/continuityAlerts';
 import { getFuelLocksForPage } from '@/lib/fuelEconomyLockStore';
@@ -25,6 +25,29 @@ interface Props {
 function formatAuditDate(iso: string): string {
   const [y, m, d] = iso.split('-');
   return `${d}-${m}-${y}`;
+}
+
+// Issue #11: per-cycle columns share LedgerDay fields; split slices add a
+// unique key, a trip range, and split/collapse flags. Plain day rows
+// (legacy callers) render exactly as before.
+function asCycleCol(d: LedgerDay): Partial<LedgerCycleColumn> {
+  return d as Partial<LedgerCycleColumn>;
+}
+
+function colKey(d: LedgerDay): string {
+  return asCycleCol(d).key ?? d.date;
+}
+
+function colTripRange(d: LedgerDay): string | null {
+  return asCycleCol(d).tripRange ?? null;
+}
+
+function colLabel(d: LedgerDay): string {
+  return asCycleCol(d).columnLabel ?? formatAuditDate(d.date);
+}
+
+function isCollapsedCol(d: LedgerDay): boolean {
+  return !!asCycleCol(d).isCollapsed;
 }
 
 export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCapacity, rawEconomies, rawInTanks, onEconomyChange, onInTankChange, pageGaps, dayGroupFuelGaps, trips = [] }: Props) {
@@ -51,6 +74,14 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
 
   // Compute day-group-level fuel gaps (Day N closing balance vs Day N+1 position)
   const dayGroupFuelGapDates = new Set(dayGroupFuelGaps?.map((g) => g.date) ?? []);
+
+  // Legacy per-date lock slots stay date-indexed: on a split page the
+  // second slice of a date shares that date's lock state instead of
+  // reading the next date's slot by column position.
+  const distinctDatesInOrder: string[] = [];
+  for (const d of ledgerDays) {
+    if (!distinctDatesInOrder.includes(d.date)) distinctDatesInOrder.push(d.date);
+  }
 
   return (
     <div className="flex flex-col bg-paper-ledger p-2 md:p-3 rounded shadow-sm print:shadow-none print:border print:border-rule-line gap-3">
@@ -79,8 +110,9 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-surface-container-high text-on-surface">
                 <th className="py-2 px-3 text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high sticky left-0 z-20 min-w-[140px]">Metric</th>
                 {ledgerDays.map((d) => (
-                  <th key={d.date} className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]">
+                  <th key={colKey(d)} className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]" title={colLabel(d)}>
                     DAY {d.dayIndex}
+                    {colTripRange(d) && <div className="text-[9px] font-bold text-telemetry-cyan">{colTripRange(d)}</div>}
                   </th>
                 ))}
                 <th className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]">Total</th>
@@ -90,7 +122,10 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Date</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{formatAuditDate(d.date)}</td>
+                  <td key={colKey(d)} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant" title={colLabel(d)}>
+                    <div>{formatAuditDate(d.date)}</div>
+                    {colTripRange(d) && <div className="text-[9px] font-bold text-telemetry-cyan">{colTripRange(d)}</div>}
+                  </td>
                 ))}
                 <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px] tracking-widest">—</td>
               </tr>
@@ -98,28 +133,28 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">DAY</td>
                 {ledgerDays.map((d) => {
                   const ddd = new Date(d.date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short' });
-                  return <td key={d.date} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{ddd}</td>;
+                  return <td key={colKey(d)} className="py-2.5 px-3 text-center border border-rule-line text-[11px] font-semibold tracking-widest text-on-surface-variant">{ddd}</td>;
                 })}
                 <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px] tracking-widest">—</td>
               </tr>
               <tr className="bg-paper-ledger">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">Start KM</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${currentPageKmGap ? 'bg-red-100' : ''}`} title={currentPageKmGap?.message}>{d.startKm.toLocaleString()}</td>
+                  <td key={colKey(d)} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${currentPageKmGap ? 'bg-red-100' : ''}`} title={currentPageKmGap?.message ?? colLabel(d)}>{d.startKm.toLocaleString()}</td>
                 ))}
                 <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px]">—</td>
               </tr>
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">End KM</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2.5 px-3 text-right font-mono text-sm border border-rule-line">{d.endKm.toLocaleString()}</td>
+                  <td key={colKey(d)} className="py-2.5 px-3 text-right font-mono text-sm border border-rule-line">{d.endKm.toLocaleString()}</td>
                 ))}
                 <td className="py-2.5 px-3 text-right font-mono text-sm border border-rule-line-strong bg-surface-container-low">{(ledgerDays[ledgerDays.length - 1]?.endKm ?? 0).toLocaleString()}</td>
               </tr>
               <tr className="bg-paper-ledger">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">Daily Dist (KM)</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2.5 px-3 text-right font-mono text-sm font-bold border border-rule-line">{d.distance.toLocaleString()}</td>
+                  <td key={colKey(d)} className="py-2.5 px-3 text-right font-mono text-sm font-bold border border-rule-line">{d.distance.toLocaleString()}</td>
                 ))}
                 <td className="py-2.5 px-3 text-right font-mono text-sm font-bold text-primary border border-rule-line-strong bg-surface-container-low">{summary.totalDistance.toLocaleString()} KM</td>
               </tr>
@@ -127,14 +162,24 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Fuel Economy (km/L)</td>
                 {ledgerDays.map((d, idx) => {
                   let isLocked = false;
-                  try { const locks = getFuelLocksForPage(`page-${pageNumber}`); isLocked = !!locks[idx]; } catch {}
+                  try {
+                    const locks = getFuelLocksForPage(`page-${pageNumber}`);
+                    const dateIdx = distinctDatesInOrder.indexOf(d.date);
+                    isLocked = !!(locks[dateIdx >= 0 ? dateIdx : idx]);
+                  } catch {}
                   const blanked = trips ? isDateGapBlanked(d.date, trips) && d.economySource !== 'explicit' && !isLocked : false;
+                  const collapsed = isCollapsedCol(d);
                   return (
-                  <td key={d.date} className="py-2 px-3 text-center border border-rule-line" title={blanked ? 'Economy not calculated — ODO gap' : undefined}>
+                  <td key={colKey(d)} className="py-2 px-3 text-center border border-rule-line" title={blanked ? 'Economy not calculated — ODO gap' : collapsed ? 'Split day collapsed to one column — distance-weighted-average economy' : colLabel(d)}>
                     <div className="flex flex-col items-center gap-1">
                       <span className="text-[11px] font-mono text-on-surface font-bold flex items-center gap-1">
                         {blanked ? '—' : d.fuelEconomy.toFixed(1)} {isLocked && <span className="text-[9px] bg-slate-800 text-white px-1 rounded">🔒</span>}
                       </span>
+                      {collapsed && (
+                        <span className="text-[9px] font-bold tracking-widest uppercase px-1 rounded bg-surface-container-highest text-telemetry-cyan" title="Split day collapsed — averaged economy, exact balances">
+                          ⧉ SPLIT·AVG
+                        </span>
+                      )}
                       <span className={`text-[9px] font-bold tracking-widest uppercase px-1 rounded ${d.economySource === 'explicit' ? 'bg-surface-container-highest text-telemetry-cyan' : 'text-on-surface-variant'}`}>
                         {isLocked ? 'Locked' : d.economySource === 'explicit' ? 'Adjusted' : d.economySource === 'inherited' ? '(Inh.)' : '(Def.)'}
                       </span>
@@ -162,8 +207,9 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-surface-container-high text-on-surface">
                 <th className="py-2 px-3 text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high sticky left-0 z-20 min-w-[140px]">Metric</th>
                 {ledgerDays.map((d) => (
-                  <th key={d.date} className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]">
+                  <th key={colKey(d)} className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]" title={colLabel(d)}>
                     Day {d.dayIndex}
+                    {colTripRange(d) && <div className="text-[9px] font-bold text-telemetry-cyan">{colTripRange(d)}</div>}
                   </th>
                 ))}
                 <th className="py-2 px-3 text-center text-[11px] font-semibold tracking-widest uppercase border border-rule-line-strong bg-surface-container-high min-w-[90px]">Total</th>
@@ -175,7 +221,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 {ledgerDays.map((d) => {
                   const hasFuelGap = currentPageFuelGap || dayGroupFuelGapDates.has(d.date);
                   return (
-                    <td key={d.date} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${hasFuelGap ? 'bg-amber-100' : 'text-on-surface-variant'}`} title={currentPageFuelGap?.message ?? (hasFuelGap ? `Day ${d.dayIndex} fuel position gap` : undefined)}>{d.fuelPosition.toFixed(1)}</td>
+                    <td key={colKey(d)} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${hasFuelGap ? 'bg-amber-100' : 'text-on-surface-variant'}`} title={currentPageFuelGap?.message ?? (hasFuelGap ? `Day ${d.dayIndex} fuel position gap` : colLabel(d))}>{d.fuelPosition.toFixed(1)}</td>
                   );
                 })}
                 <td className="py-2.5 px-3 text-center border border-rule-line-strong bg-surface-container-low text-[11px]">—</td>
@@ -183,7 +229,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-paper-ledger">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">In-Tank (L)</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2 px-3 text-center border border-rule-line">
+                  <td key={colKey(d)} className="py-2 px-3 text-center border border-rule-line">
                     <span className="block text-[11px] font-mono text-on-surface-variant font-bold">{d.inTank.toFixed(1)}</span>
                   </td>
                 ))}
@@ -192,7 +238,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Pumped (L)</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${d.drawn > 0 ? 'text-trip-official font-bold' : 'text-on-surface-variant'}`}>
+                  <td key={colKey(d)} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line ${d.drawn > 0 ? 'text-trip-official font-bold' : 'text-on-surface-variant'}`}>
                     <span className="inline-flex items-center justify-end gap-1 w-full">
                       <span>{d.drawn > 0 ? `+${d.drawn.toFixed(1)}` : '0.0'}</span>
                       {d.isFullTank && d.drawn > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title="Full Tank">★ FULL</span>}
@@ -204,7 +250,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-paper-ledger">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-ledger z-10">Order No / Date</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2.5 px-3 text-center text-[11px] font-semibold tracking-widest border border-rule-line">
+                  <td key={colKey(d)} className="py-2.5 px-3 text-center text-[11px] font-semibold tracking-widest border border-rule-line">
                     {d.drawn > 0 ? (
                       <span className="text-on-surface">{d.fuelOrderNo || '-'} {d.fuelOrderDate ? `(${d.fuelOrderDate.slice(5).replace('-','/')})` : ''}</span>
                     ) : (
@@ -217,7 +263,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
               <tr className="bg-paper-sheet">
                 <td className="py-2.5 px-3 font-semibold border border-rule-line-strong sticky left-0 bg-paper-sheet z-10">Consumed (L)</td>
                 {ledgerDays.map((d) => (
-                  <td key={d.date} className="py-2.5 px-3 text-right font-mono text-sm font-semibold border border-rule-line">{d.consumed.toFixed(1)}</td>
+                  <td key={colKey(d)} className="py-2.5 px-3 text-right font-mono text-sm font-semibold border border-rule-line">{d.consumed.toFixed(1)}</td>
                 ))}
                 <td className="py-2.5 px-3 text-right font-mono text-sm font-bold text-error border border-rule-line-strong bg-surface-container-low">{summary.totalConsumed.toFixed(1)}</td>
               </tr>
@@ -226,7 +272,7 @@ export function Side2FuelTables({ pageNumber, ledgerDays, summary, vehicleTankCa
                 {ledgerDays.map((d, idx) => {
                   const hasFuelGap = dayGroupFuelGapDates.has(d.date);
                   return (
-                    <td key={d.date} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line-strong ${hasFuelGap ? 'bg-amber-100' : idx === ledgerDays.length - 1 ? 'text-telemetry-cyan' : d.drawn > 0 ? 'text-trip-official' : 'text-on-surface'}`} title={hasFuelGap ? `Closing Balance does not match next Day Position` : undefined}>
+                    <td key={colKey(d)} className={`py-2.5 px-3 text-right font-mono text-sm border border-rule-line-strong ${hasFuelGap ? 'bg-amber-100' : idx === ledgerDays.length - 1 ? 'text-telemetry-cyan' : d.drawn > 0 ? 'text-trip-official' : 'text-on-surface'}`} title={hasFuelGap ? `Closing Balance does not match next Day Position` : colLabel(d)}>
                       {d.balance.toFixed(1)} L
                     </td>
                   );

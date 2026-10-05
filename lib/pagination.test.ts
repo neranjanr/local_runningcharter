@@ -14,6 +14,8 @@ import {
   assignPageForBackdatedTrip,
   calculateConsumed,
   calculateBalance,
+  countLedgerColumnSlots,
+  validatePaginationConstraints,
   type PageAssignment,
 } from './pagination';
 import type { BookPage, Trip } from '@/types';
@@ -351,8 +353,7 @@ describe('assignPageForNewTrip integration', () => {
   });
 });
 
-describe('assignPageForBackdatedTrip', () => {
-  const page1 = makePage({ id: 'p1', page_number: 1, month: '2024-09', start_km: 100, end_km: 240 });
+describe('assignPageForBackdatedTrip', () => {  const page1 = makePage({ id: 'p1', page_number: 1, month: '2024-09', start_km: 100, end_km: 240 });
   const page2 = makePage({ id: 'p2', page_number: 2, month: '2024-10', start_km: 240, end_km: 400 });
   const sepTrips = [
     makeTrip({ date: '2024-09-21', page_id: 'p1', day_index: 1, trip_index: 1, start_km: 100, end_km: 150 }),
@@ -414,5 +415,69 @@ describe('assignPageForBackdatedTrip', () => {
     if (!('allowed' in result)) throw new Error('expected blocked assignment');
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe('MAX_TRIPS_PER_DAY');
+  });
+});
+
+describe('ledger columns consume day-slots (issue #11)', () => {
+  function pumped(over: Partial<Trip> & { date: string; page_id: string }): Trip {
+    return makeTrip({ ...over, fuel_pumped_amount: 20, pump_timing: 'END' });
+  }
+
+  it('counts one slot per date, two for a split large day over 40 km', () => {
+    const trips = [
+      makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10 }),
+      pumped({ date: '2024-10-22', page_id: 'p1', trip_index: 1, trip_distance: 30, start_km: 10, end_km: 40, id: 'x1' }),
+      makeTrip({ date: '2024-10-22', page_id: 'p1', trip_index: 2, trip_distance: 30, start_km: 40, end_km: 70, id: 'x2' }),
+    ];
+    // 2024-10-22 totals 60 km with a mid-day pump -> 2 slots; total 3
+    expect(countLedgerColumnSlots(trips)).toBe(3);
+  });
+
+  it('a split small day (40 km or less) still consumes a single slot', () => {
+    const trips = [
+      pumped({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 's1' }),
+      makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 2, trip_distance: 10, fuel_pumped_amount: 10, pump_timing: 'START', id: 's2' }),
+      makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 3, trip_distance: 10, id: 's3' }),
+    ];
+    expect(countLedgerColumnSlots(trips)).toBe(1);
+  });
+
+  it('flags MAX_DAYS when columns exceed 4 even with 4 distinct dates', () => {
+    const page = makePage({ id: 'p1', page_number: 1, month: '2024-10' });
+    const trips = [
+      makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a1' }),
+      makeTrip({ date: '2024-10-22', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a2' }),
+      makeTrip({ date: '2024-10-23', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a3' }),
+      pumped({ date: '2024-10-24', page_id: 'p1', trip_index: 1, trip_distance: 30, start_km: 30, end_km: 60, id: 'b1' }),
+      makeTrip({ date: '2024-10-24', page_id: 'p1', trip_index: 2, trip_distance: 30, start_km: 60, end_km: 90, id: 'b2' }),
+      makeTrip({ date: '2024-10-24', page_id: 'p1', trip_index: 3, trip_distance: 30, start_km: 90, end_km: 120, id: 'b3' }),
+    ];
+    const violations = validatePaginationConstraints([page], trips);
+    expect(violations.length).toBe(1);
+    expect(violations[0].violation).toContain('MAX_DAYS');
+  });
+
+  it('requires a new page when day-slots (not just dates) are full', () => {
+    const page = makePage({ id: 'p1', page_number: 1, month: '2024-10' });
+    const trips = [
+      makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a1' }),
+      makeTrip({ date: '2024-10-22', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a2' }),
+      makeTrip({ date: '2024-10-23', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a3' }),
+      pumped({ date: '2024-10-24', page_id: 'p1', trip_index: 1, trip_distance: 30, start_km: 30, end_km: 60, id: 'b1' }),
+      makeTrip({ date: '2024-10-24', page_id: 'p1', trip_index: 2, trip_distance: 30, start_km: 60, end_km: 90, id: 'b2' }),
+      makeTrip({ date: '2024-10-24', page_id: 'p1', trip_index: 3, trip_distance: 30, start_km: 90, end_km: 120, id: 'b3' }),
+    ];
+    // 3 small dates + 1 split large date = 5 slots -> a 5th date needs a new page
+    const result = validateTripForPage(trips, page, '2024-10-25');
+    expect(result.requiresNewPage).toBe(true);
+    expect(result.reason).toBe('MAX_DAYS');
+  });
+
+  it('month rollover still forces a new page regardless of slots', () => {
+    const page = makePage({ id: 'p1', page_number: 1, month: '2024-10' });
+    const trips = [makeTrip({ date: '2024-10-31', page_id: 'p1', id: 'm1' })];
+    const result = validateTripForPage(trips, page, '2024-11-01');
+    expect(result.requiresNewPage).toBe(true);
+    expect(result.reason).toBe('MONTH_ROLLOVER');
   });
 });
