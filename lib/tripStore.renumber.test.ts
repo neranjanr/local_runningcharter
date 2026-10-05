@@ -13,7 +13,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
   });
 
   it('book starts 2026-01-01 Page 1 at 50000/10L, add 2025 trips as Pages 1-2, old Page renumbered, dates unchanged', async () => {
-    // Initial book 2026
+    // Initial book 2026 (100 km consumes ~9.5 L at 10.5 km/L, so pump 10 L to stay above the 1 L feasibility floor)
     await saveTrip({
       date: '2026-01-01',
       start_time: '08:00',
@@ -23,7 +23,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
       trip_distance: 100,
       trip_type: 'Official',
       places_visited: '2026 Trip',
-      fuel_pumped_amount: 0,
+      fuel_pumped_amount: 10,
     });
 
     let pages = await getPages();
@@ -67,7 +67,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
   });
 
   it('Book Opening re-editable recalculates fuel balances forward from earliest Page', async () => {
-    // Create two pages via chronological insertion
+    // Create two pages via chronological insertion (pumped fuel keeps each leg above the 1 L floor)
     await saveTrip({
       date: '2026-01-01',
       start_time: '08:00',
@@ -77,6 +77,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
       trip_distance: 100,
       trip_type: 'Official',
       places_visited: '2026',
+      fuel_pumped_amount: 10,
     });
     await saveTrip({
       date: '2025-01-01',
@@ -156,6 +157,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
   });
 
   it('continuity invariants hold after renumber (Page N End KM = Page N+1 Start KM)', async () => {
+    // Long legs pump fuel so running balances stay inside the [1, cap+1] feasibility window
     await saveTrip({
       date: '2026-01-10',
       start_time: '08:00',
@@ -165,6 +167,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
       trip_distance: 100,
       trip_type: 'Official',
       places_visited: '2026',
+      fuel_pumped_amount: 10,
     });
     await saveTrip({
       date: '2025-01-01',
@@ -175,6 +178,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
       trip_distance: 500,
       trip_type: 'Official',
       places_visited: '2025-01-01',
+      fuel_pumped_amount: 50,
     });
     await saveTrip({
       date: '2025-01-02',
@@ -185,6 +189,7 @@ describe('tripStore chronological renumber integration (Issue 02)', () => {
       trip_distance: 500,
       trip_type: 'Official',
       places_visited: '2025-01-02',
+      fuel_pumped_amount: 50,
     });
 
     const pages = await getPages();
