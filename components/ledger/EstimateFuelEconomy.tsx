@@ -5,6 +5,7 @@ import type { BookPage, Trip, Vehicle } from '@/types';
 import { estimateFuelEconomies, type SegmentEstimate } from '@/lib/estimateFuelEconomy';
 import { getFuelEconomiesForPage, saveFuelEconomiesForPage } from '@/lib/fuelEconomyStore';
 import { saveTripEconomyOverride } from '@/lib/tripEconomyStore';
+import { getAllFuelDayOwnership, setFuelDayOwnership } from '@/lib/fuelDayOwnershipStore';
 import { getDistinctDates } from '@/lib/pagination';
 import { getLockedDates, setLocksForDateRange, getFuelLocksForPage } from '@/lib/fuelEconomyLockStore';
 
@@ -14,7 +15,7 @@ function formatDdMmYyyy(iso: string): string {
 }
 
 function suggestionTitle(seg: SegmentEstimate): string | undefined {
-  if (seg.isPending) return 'Pending — no trips in this cycle yet';
+  if (seg.isPending) return 'Open segment — no closing fuel yet';
   if (seg.isGapSpan) return 'Economy not calculated — ODO gap';
   return undefined;
 }
@@ -73,7 +74,8 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     const lockedSet = (() => { try { return getLockedDates(); } catch { return new Set<string>(); } })();
     const lockedMap = buildLockedMap();
     const prevEconomies = buildAppliedSeed();
-    const est = estimateFuelEconomies({ trips, pages, vehicle, tankCapacityOverride: effTank, prevEconomies, lockedDatesSet: lockedSet, lockedEconomyMap: lockedMap });
+    const ownership = (() => { try { return getAllFuelDayOwnership(); } catch { return {}; } })();
+    const est = estimateFuelEconomies({ trips, pages, vehicle, tankCapacityOverride: effTank, prevEconomies, lockedDatesSet: lockedSet, lockedEconomyMap: lockedMap, ownership });
     setEstimates(est);
   };
 
@@ -83,6 +85,22 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
     setApplyMsg(null);
     setOpen(true);
   };
+
+  const handleFlipOwnership = (seg: SegmentEstimate) => {
+    if (isSegmentLocked(seg) || seg.isPending) return;
+    if (zeroDistanceDates.has(seg.fuelDate)) return;
+    const flipped = seg.ownership === 'previous' ? 'next' : 'previous';
+    try { setFuelDayOwnership(seg.fuelDate, flipped); } catch {}
+    runEstimate();
+    setApplyMsg(`Fuel day ${formatDdMmYyyy(seg.fuelDate)} now joins ${flipped} — review the suggestions, then Apply`);
+  };
+
+  // Zero-distance fuel days auto-join previous with no operator choice.
+  const zeroDistanceDates = (() => {
+    const sums = new Map<string, number>();
+    for (const t of trips) sums.set(t.date, (sums.get(t.date) ?? 0) + Math.round(t.trip_distance));
+    return new Set(Array.from(sums.entries()).filter(([, d]) => d === 0).map(([date]) => date));
+  })();
 
   const isSegmentLocked = (seg: SegmentEstimate) => {
     const allDates = Array.from(new Set(trips.map(t => t.date))).sort();
@@ -219,11 +237,11 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
               <div className="flex-1">
                 <h3 className="text-sm font-bold text-on-surface">Estimated Fuel Economies — per Fuel-In Segment</h3>
                 <p className="text-xs text-on-surface-variant">
-                  Two suggestions per segment: <span className="font-semibold text-sky-700">Normal</span> keeps balances in [1, {effTank.toFixed(1)}]L (closest to previous economy, small steps); <span className="font-semibold text-emerald-700">Strict Full-Tank</span> also balances the tank near full ([{strictMin.toFixed(1)}, {effTank.toFixed(1)}]L) after a ★ Full Tank pump. Pick either column and Apply.
+                  One economy per day: each segment is closed by a fuel-in date whose fuel is the denominator. The fuel day joins the side with the smaller adjacent-economy gap (shown under Fuel-Day Join — flip it to pin the other side). <span className="font-semibold text-sky-700">Normal</span> keeps balances in [1, {effTank.toFixed(1)}]L (closest to previous economy, small steps); <span className="font-semibold text-emerald-700">Strict Full-Tank</span> also balances the tank near full ([{strictMin.toFixed(1)}, {effTank.toFixed(1)}]L) after a ★ Full Tank pump. Pick either column and Apply.
                 </p>
                 <p className="text-[11px] text-on-surface-variant mt-0.5">
-                  Distance badges: <span className="inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[9px] font-bold">N× &gt;40</span> counts trips over 40 km, <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[9px] font-bold">N× ≥100</span> counts trips 100 km or longer — long runs usually give better economy.
-                  An <span className="font-semibold">⏳ PENDING</span> row is an empty next cycle (e.g. END pump on the final trip) with nothing to estimate; <span className="font-semibold">⚠ LOW-CONF</span> marks a single-trip START cycle — a thin calibration.
+                  Distance badges: <span className="inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[9px] font-bold">N× &gt;40</span> counts trips over 40 km, <span className="inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold">N× ≥100</span> counts trips 100 km or longer — long runs usually give better economy.
+                  An <span className="font-semibold">⏳ PENDING</span> row is the open tail after the last fuel-in (no closing fuel yet) — it inherits and carries no suggestion. Pump Timing is display-only and no longer splits days.
                 </p>
               </div>
               <button onClick={() => setOpen(false)} className="text-on-surface-variant hover:text-on-surface text-lg leading-none shrink-0">✕</button>
@@ -245,7 +263,8 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                       <th className="py-2 px-2 border-r border-rule-line">From</th>
                       <th className="py-2 px-2 border-r border-rule-line">To</th>
                       <th className="py-2 px-2 text-center border-r border-rule-line" title="Source pump flagged Full Tank">Full?</th>
-                      <th className="py-2 px-2 text-center border-r border-rule-line" title="Pump Timing START vs END">Timing</th>
+                      <th className="py-2 px-2 text-center border-r border-rule-line" title="Pump Timing START vs END (display only — ignored by day-atom economy)">Timing</th>
+                      <th className="py-2 px-2 text-center border-r border-rule-line" title="Which segment's economy the closing fuel day shares — the join with the smaller adjacent gap wins">Fuel-Day Join</th>
                       <th className="py-2 px-2 text-right border-r border-rule-line">Distance</th>
                       <th className="py-2 px-2 text-right border-r border-rule-line">Fuel Fed</th>
                       <th className="py-2 px-2 text-right border-r border-rule-line">Prev</th>
@@ -266,19 +285,37 @@ export function EstimateFuelEconomy({ trips, pages, vehicle, onApplied }: Props)
                         <td className="py-2 px-2 text-center"><input type="checkbox" checked={selected.has(idx)} onChange={()=>toggleSelect(idx)} /></td>
                         <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">
                           {formatDdMmYyyy(e.fromDate)}
-                          {e.isPending && <span className="ml-1 inline-flex items-center px-1 py-0.5 rounded bg-slate-200 border border-slate-300 text-slate-600 text-[9px] font-bold tracking-widest leading-none" title="Empty next cycle — no trips to estimate yet">⏳ PENDING</span>}
+                          {e.isPending && <span className="ml-1 inline-flex items-center px-1 py-0.5 rounded bg-slate-200 border border-slate-300 text-slate-600 text-[9px] font-bold tracking-widest leading-none" title="Open tail after the last fuel-in — inherits, nothing to estimate">⏳ PENDING</span>}
                         </td>
                         <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">{formatDdMmYyyy(e.toDate)}</td>
                         <td className="py-2 px-2 text-center">
                           {e.isFullTank ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[10px] font-bold" title="Full Tank pump">★ FULL</span> : <span className="text-on-surface-variant text-xs">—</span>}
                         </td>
                         <td className="py-2 px-2 text-center">
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold ${e.pumpTiming==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={e.pumpTiming==='START' ? 'Fueled at Start (distance charged to next economy, fuel before consume)' : 'Fueled at End (distance charged to previous economy)'}>{e.pumpTiming}</span>
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold ${e.pumpTiming==='START' ? 'bg-sky-100 border-sky-300 text-sky-700' : 'bg-slate-100 border-slate-300 text-slate-600'}`} title={e.pumpTiming==='START' ? 'Fueled at Start (display only — ignored by day-atom economy)' : 'Fueled at End (display only — ignored by day-atom economy)'}>{e.pumpTiming}</span>
+                        </td>
+                        <td className="py-2 px-2 text-center">
+                          {e.isPending ? (
+                            <span className="text-on-surface-variant text-xs">—</span>
+                          ) : (
+                            <span className="inline-flex flex-col items-center gap-1">
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold ${e.ownership==='previous' ? 'bg-indigo-100 border-indigo-300 text-indigo-700' : 'bg-teal-100 border-teal-300 text-teal-700'}`} title={e.gapChosen !== null ? `Adjacent-economy gap ${e.gapChosen.toFixed(1)} vs ${e.gapOther !== null ? e.gapOther.toFixed(1) : '—'} — smaller wins` : 'Auto previous (no comparison: first/locked/zero-distance fuel day)'}>
+                                {e.ownership === 'previous' ? '← prev' : 'next →'}
+                              </span>
+                              {e.gapChosen !== null && (
+                                <span className="text-[9px] font-mono text-on-surface-variant">gap {e.gapChosen.toFixed(1)}{e.gapOther !== null ? ` vs ${e.gapOther.toFixed(1)}` : ''}</span>
+                              )}
+                              {zeroDistanceDates.has(e.fuelDate) ? (
+                                <span className="text-[9px] text-on-surface-variant" title="Zero-distance fuel day — auto-joins previous, no choice">auto</span>
+                              ) : (
+                                <button onClick={() => handleFlipOwnership(e)} disabled={locked} className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${locked ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-white border border-slate-300 hover:bg-slate-50'}`} title={locked ? 'Locked — unlock to flip' : `Pin ${e.ownership === 'previous' ? 'next' : 'previous'} join and re-estimate`}>Flip</button>
+                              )}
+                            </span>
+                          )}
                         </td>
                         <td className="py-2 px-2 text-right font-mono text-xs">
                           <span className="inline-flex items-center justify-end gap-1 w-full flex-wrap">
                             <span>{e.distance} KM</span>
-                            {e.isLowConfidence && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-violet-100 border border-violet-300 text-violet-700 text-[8px] font-bold tracking-widest leading-none" title="Single-trip START cycle — thin calibration, treat with skepticism">⚠ LOW-CONF</span>}
                             {e.longTripCount > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-700 text-[8px] font-bold tracking-widest leading-none" title={`${e.longTripCount} trip(s) over 40 km (longest ${e.maxTripDistance} km)`}>{e.longTripCount}× &gt;40</span>}
                             {e.veryLongTripCount > 0 && <span className="shrink-0 inline-flex items-center px-1 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-700 text-[8px] font-bold tracking-widest leading-none" title={`${e.veryLongTripCount} trip(s) 100 km or longer (longest ${e.maxTripDistance} km) — long runs usually show better economy`}>{e.veryLongTripCount}× ≥100</span>}
                           </span>

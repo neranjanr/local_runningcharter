@@ -1,25 +1,45 @@
 /**
- * Trip-delimited Fuel-In cycle slicing shared by the ledger engine and
- * pagination (Spec #6, Issues #8/#11, ADR-0035).
+ * Day-atom Fuel-In cycle slicing (ADR-0036).
  *
- * Lives in its own leaf module (imports only `Trip` + rounding) so both
- * `ledgerCalculations.ts` and `pagination.ts` can use it without an
- * import cycle: a START pump opens the next Fuel-In Segment at the pumped
- * Trip itself at any distance, an END pump keeps the pumped Trip in the
- * previous one, and every pumped Trip is a boundary with no collapsing.
- * A date totaling over 40 km renders one Side 2 column per segment slice
- * (a Split Day Column); 40 km or less collapses to one column.
+ * Boundaries fall on DATE boundaries only: a fuel-in Date closes its
+ * segment by default (previous-join), or joins the next segment when its
+ * Fuel-Day Ownership is `next`. Pump Timing is ignored for economy
+ * (deprecated — the parser still accepts and stores it). One Date never
+ * splits, so Side 2 renders one ledger column and one trend stem per Date.
+ *
+ * Leaf module: imports only `Trip` + rounding.
  */
 import type { Trip } from '@/types';
-import { roundToIntegerKm } from './tripCalculations';
+import { roundToOneDecimal } from './tripCalculations';
 
-/** Date totals above this render one Side 2 column per segment slice. */
+/**
+ * Deprecated split threshold, kept for import compat.
+ * Day-atom ledgers always render one column per Date.
+ */
 export const SPLIT_DAY_THRESHOLD_KM = 40;
 
+/** Which segment's economy a fuel-in Date shares. Default `previous`. */
+export type FuelDayOwnership = 'previous' | 'next';
+
+/** Ownership overrides keyed by fuel-in Date. Absent means `previous`. */
+export type FuelDayOwnershipInput =
+  | Map<string, FuelDayOwnership>
+  | Record<string, FuelDayOwnership>
+  | undefined
+  | null;
+
+export function ownershipOfDate(input: FuelDayOwnershipInput, date: string): FuelDayOwnership {
+  if (!input) return 'previous';
+  if (input instanceof Map) return input.get(date) ?? 'previous';
+  return (input as Record<string, FuelDayOwnership>)[date] ?? 'previous';
+}
+
+/** Display-only pump predicates (economy no longer branches on these). */
 export function isStartPumpTrip(t: Trip): boolean {
   return t.pump_timing === 'START' && (t.fuel_pumped_amount ?? 0) > 0;
 }
 
+/** Display-only pump predicates (economy no longer branches on these). */
 export function isEndPumpTrip(t: Trip): boolean {
   return (t.pump_timing ?? 'END') === 'END' && (t.fuel_pumped_amount ?? 0) > 0;
 }
@@ -32,70 +52,69 @@ export function sortTripsForCycles(trips: Trip[]): Trip[] {
   });
 }
 
+/** Per-date pumped-fuel sums (1-decimal) for a trip set. */
+export function dateFuelSums(trips: Trip[]): Map<string, number> {
+  const sums = new Map<string, number>();
+  for (const t of trips) {
+    const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
+    if (pumped > 0) sums.set(t.date, roundToOneDecimal((sums.get(t.date) ?? 0) + pumped));
+  }
+  return sums;
+}
+
+/** Sorted fuel-in Dates (drawn fuel > 0) for a trip set. */
+export function fuelInDates(trips: Trip[]): string[] {
+  return Array.from(dateFuelSums(trips).keys()).sort();
+}
+
 /**
- * Trip-delimited Fuel-In Segments (cycles) in chronological order.
- * Boundaries are exactly the pumped Trips with no collapsing: a START
- * pump opens the next segment at the pumped Trip, an END pump closes the
- * previous segment after the pumped Trip. One date can hold several
- * segments.
+ * Day-atom Fuel-In Segments (cycles) in chronological order.
+ * Each segment is a run of whole Dates: a fuel-in Date closes the current
+ * segment unless its ownership is `next`, in which case that Date's Trips
+ * join the following segment. Dates after the last fuel-in form the final
+ * (open) segment.
  */
-export function buildTripCycles(trips: Trip[]): Trip[][] {
+export function buildTripCycles(trips: Trip[], ownership?: FuelDayOwnershipInput): Trip[][] {
   const sorted = sortTripsForCycles(trips);
-  const cycles: Trip[][] = [];
-  let current: Trip[] = [];
+  const byDate = new Map<string, Trip[]>();
   for (const t of sorted) {
-    if (isStartPumpTrip(t) && current.length > 0) {
-      cycles.push(current);
-      current = [t];
-    } else {
-      current.push(t);
-    }
-    if (isEndPumpTrip(t)) {
-      cycles.push(current);
-      current = [];
-    }
+    if (!byDate.has(t.date)) byDate.set(t.date, []);
+    byDate.get(t.date)!.push(t);
   }
-  if (current.length > 0) cycles.push(current);
-  return cycles;
-}
-
-/** One date's intersection with each segment, in chronological order. */
-export function cycleSlicesForDate(dateTrips: Trip[], cycles: Trip[][]): Trip[][] {
-  const ids = new Set(dateTrips.map((t) => t.id));
-  const slices: Trip[][] = [];
-  for (const cycle of cycles) {
-    const slice = cycle.filter((t) => ids.has(t.id));
-    if (slice.length > 0) slices.push(slice);
+  const dates = Array.from(byDate.keys()).sort();
+  if (dates.length === 0) return [];
+  const drawn = dateFuelSums(sorted);
+  const segOf = new Map<string, number>();
+  let seg = 0;
+  for (const d of dates) {
+    segOf.set(d, seg);
+    if ((drawn.get(d) ?? 0) > 0 && ownershipOfDate(ownership, d) !== 'next') seg++;
   }
-  // Defensive: every date trip belongs to exactly one segment, so slices
-  // cover the date. If cycles were built from a different trip set, fall
-  // back to a single slice holding all date trips in order.
-  const covered = new Set(slices.flat().map((t) => t.id));
-  if (covered.size !== dateTrips.length) return [sortTripsForCycles(dateTrips)];
-  return slices;
+  const buckets = new Map<number, Trip[]>();
+  for (const d of dates) {
+    const s = segOf.get(d)!;
+    if (!buckets.has(s)) buckets.set(s, []);
+    buckets.get(s)!.push(...byDate.get(d)!);
+  }
+  return Array.from(buckets.keys())
+    .sort((a, b) => a - b)
+    .map((k) => buckets.get(k)!);
 }
 
 /**
- * Number of Side 2 day-slots a trip set consumes: one per date, except a
- * date totaling over 40 km consumes one slot per segment slice. Pure from
- * trips (distances + pump boundaries) — no economy input needed — so
- * pagination can count slots before any estimation runs.
+ * Day-atom: one Date is always a single slice. The `cycles` argument is
+ * accepted for caller compat and ignored.
+ */
+export function cycleSlicesForDate(dateTrips: Trip[], _cycles?: Trip[][]): Trip[][] {
+  return [sortTripsForCycles(dateTrips)];
+}
+
+/**
+ * Day-atom: one ledger column slot per distinct Date. Pure from trip
+ * dates — no economy input needed — so pagination can count slots before
+ * any estimation runs.
  */
 export function countLedgerColumnSlots(trips: Trip[]): number {
   if (trips.length === 0) return 0;
-  const sorted = sortTripsForCycles(trips);
-  const cycles = buildTripCycles(sorted);
-  const dates = Array.from(new Set(sorted.map((t) => t.date))).sort();
-  let slots = 0;
-  for (const date of dates) {
-    const dateTrips = sorted.filter((t) => t.date === date);
-    const totalDist = roundToIntegerKm(
-      dateTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0),
-    );
-    const slices = cycleSlicesForDate(dateTrips, cycles);
-    if (slices.length <= 1) slots += 1;
-    else if (totalDist > SPLIT_DAY_THRESHOLD_KM) slots += slices.length;
-    else slots += 1;
-  }
-  return slots;
+  return new Set(trips.map((t) => t.date)).size;
 }

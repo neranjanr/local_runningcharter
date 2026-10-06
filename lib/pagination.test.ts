@@ -418,22 +418,22 @@ describe('assignPageForBackdatedTrip', () => {  const page1 = makePage({ id: 'p1
   });
 });
 
-describe('ledger columns consume day-slots (issue #11)', () => {
+describe('ledger columns consume day-slots (day-atom)', () => {
   function pumped(over: Partial<Trip> & { date: string; page_id: string }): Trip {
     return makeTrip({ ...over, fuel_pumped_amount: 20, pump_timing: 'END' });
   }
 
-  it('counts one slot per date, two for a split large day over 40 km', () => {
+  it('counts one slot per date — a mid-day pump never splits the day', () => {
     const trips = [
       makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10 }),
       pumped({ date: '2024-10-22', page_id: 'p1', trip_index: 1, trip_distance: 30, start_km: 10, end_km: 40, id: 'x1' }),
       makeTrip({ date: '2024-10-22', page_id: 'p1', trip_index: 2, trip_distance: 30, start_km: 40, end_km: 70, id: 'x2' }),
     ];
-    // 2024-10-22 totals 60 km with a mid-day pump -> 2 slots; total 3
-    expect(countLedgerColumnSlots(trips)).toBe(3);
+    // 2024-10-22 totals 60 km with a mid-day pump -> still 1 slot; total 2
+    expect(countLedgerColumnSlots(trips)).toBe(2);
   });
 
-  it('a split small day (40 km or less) still consumes a single slot', () => {
+  it('a pumped small day still consumes a single slot', () => {
     const trips = [
       pumped({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 's1' }),
       makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 2, trip_distance: 10, fuel_pumped_amount: 10, pump_timing: 'START', id: 's2' }),
@@ -442,15 +442,14 @@ describe('ledger columns consume day-slots (issue #11)', () => {
     expect(countLedgerColumnSlots(trips)).toBe(1);
   });
 
-  it('flags MAX_DAYS when columns exceed 4 even with 4 distinct dates', () => {
+  it('flags MAX_DAYS when distinct dates exceed 4', () => {
     const page = makePage({ id: 'p1', page_number: 1, month: '2024-10' });
     const trips = [
       makeTrip({ date: '2024-10-21', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a1' }),
       makeTrip({ date: '2024-10-22', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a2' }),
       makeTrip({ date: '2024-10-23', page_id: 'p1', trip_index: 1, trip_distance: 10, id: 'a3' }),
       pumped({ date: '2024-10-24', page_id: 'p1', trip_index: 1, trip_distance: 30, start_km: 30, end_km: 60, id: 'b1' }),
-      makeTrip({ date: '2024-10-24', page_id: 'p1', trip_index: 2, trip_distance: 30, start_km: 60, end_km: 90, id: 'b2' }),
-      makeTrip({ date: '2024-10-24', page_id: 'p1', trip_index: 3, trip_distance: 30, start_km: 90, end_km: 120, id: 'b3' }),
+      makeTrip({ date: '2024-10-25', page_id: 'p1', trip_index: 1, trip_distance: 10, start_km: 60, end_km: 70, id: 'b2' }),
     ];
     const violations = validatePaginationConstraints([page], trips);
     expect(violations.length).toBe(1);

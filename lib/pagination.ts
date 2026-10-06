@@ -409,7 +409,7 @@ export function validatePaginationConstraints(pages: BookPage[], trips: Trip[]):
     const distinct = getDistinctDates(pageTrips);
     const slots = countSlots(pageTrips);
     if (slots > MAX_DAYS_PER_PAGE) {
-      violations.push({ pageId: page.id, pageNumber: page.page_number, violation: `MAX_DAYS exceeded: ${slots} day-slots > ${MAX_DAYS_PER_PAGE} (${distinct.length} dates, split large days consume extra slots)` });
+      violations.push({ pageId: page.id, pageNumber: page.page_number, violation: `MAX_DAYS exceeded: ${slots} day-slots > ${MAX_DAYS_PER_PAGE} (${distinct.length} dates)` });
     }
     for (const d of distinct) {
       const cnt = countTripsForDate(pageTrips, d);

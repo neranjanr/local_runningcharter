@@ -142,12 +142,11 @@ export function resolveTripEconomies(
 }
 
 /**
- * Write an economy value to a whole trip-delimited Fuel-In cycle (Issue #8).
- * Editing one Trip writes its entire cycle so manual corrections stay
- * consistent; clearing (null) deletes the override on every Trip of the
- * cycle so they inherit again. Cycle membership follows the same
- * START/END boundary rule as the ledger engine (no distance guard, no
- * collapsing). Returns the affected trip ids.
+ * Write an economy value to a whole day-atom Fuel-In Segment (ADR-0036).
+ * Editing one Trip writes its entire date-delimited segment (whole Dates,
+ * Pump Timing ignored) so manual corrections stay consistent; clearing
+ * (null) deletes the override on every Trip of the segment so they
+ * inherit again. Returns the affected trip ids.
  */
 export function saveTripCycleOverride(
   trips: Trip[],

@@ -1,0 +1,7 @@
+# Day-atom fuel economy with fuel-day ownership
+
+The physical book carries a single fuel economy value per day, so the trip-delimited model (ADR-0035) with mid-day Pump Timing splits and 40 km split-day columns mis-mirrors the paper original. We return to one economy per Date: a Fuel-In Segment is a run of Dates closed by a fuel-in Date, and each fuel-in Date joins previous or next — picked greedily left-to-right by the smaller adjacent-economy gap `|left-right|` at 1 decimal (gap 0 wins, tie joins previous, zero-distance auto-joins previous) to minimise variation — because distance per day is immutable and only the economy label moves.
+
+Considered Options: keep trip-delimited cycles (rejected: contradicts the book, one Date cannot hold two economies); global `2^N` ownership optimisation (rejected: unpredictable, greedy pairwise matches the Jan 1-11 book workflow and stays explainable).
+
+Consequences: Pump Timing stays parsed/stored for import compat but is ignored by economy; Split Day Column is deleted (one ledger column and one trend stem per Date); Adjusted/Locked overrides move from per-Trip to per-Day Group with ownership stored per fuel-in Date; the estimator shows both joins per fuel-in Date with Apply per day and Apply All Minimal; existing trip-split values merge to one economy (default previous-join) on the next Estimate run without silently rewriting locked book values. Supersedes ADR-0035; partly supersedes ADR-0030 (pump timing).

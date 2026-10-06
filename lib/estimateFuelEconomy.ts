@@ -1,12 +1,16 @@
 /**
- * Estimated Fuel Economy per Fuel-In Segment
- * Feasibility-first estimator: keeps balance in [1, tankCapacity] at every intermediate Day Group.
- * Pump Timing migration, physics-first Full->Full, small-variation lenient, strict full-tank,
- * and dual Normal + Strict suggestions for the estimation popup.
+ * Estimated Fuel Economy per Fuel-In Segment (day-atom, ADR-0036).
+ * One economy per Date: a segment is a run of Dates closed by a fuel-in
+ * Date, whose fuel is the segment's denominator (backward attribution).
+ * Each fuel-in Date joins previous or next via greedy minimal-gap
+ * ownership; feasibility keeps day-close balances in [1, tankCapacity].
+ * Pump Timing is ignored (display only).
  */
 import { roundToOneDecimal, roundToIntegerKm } from './tripCalculations';
 import { detectTripGaps } from './continuityAlerts';
 import type { BookPage, Trip, Vehicle } from '@/types';
+import type { FuelDayOwnership, FuelDayOwnershipInput } from './tripCycleSlots';
+import { ownershipOfDate } from './tripCycleSlots';
 
 export interface FuelInSegmentInput {
   fromDate: string;
@@ -23,13 +27,22 @@ export interface SegmentEstimate {
   fuelFed: number;
   orderNo: string;
   orderDate: string;
+  /** Closing fuel-in Date: this segment's fuel denominator (backward attribution). */
+  fuelDate: string;
+  /** Resolved Fuel-Day Ownership of the closing fuel Date. */
+  ownership: FuelDayOwnership;
+  /** Adjacent-economy gap that won the greedy choice (1-decimal), if compared. */
+  gapChosen: number | null;
+  /** The rejected join's gap, if compared. */
+  gapOther: number | null;
   isFullTank: boolean;
+  /** Stored pump timing of the closing fuel Date (display only, ignored). */
   pumpTiming: 'START' | 'END';
-  /** Trip ids in this trip-delimited cycle (Issue #8) — apply writes them all. */
+  /** Trip ids sharing this segment's economy (whole Dates) — apply writes them all. */
   tripIds: string[];
-  /** Empty next cycle (e.g. END pump on the final trip): pending, nothing to estimate (Issue #9). */
+  /** Open tail after the last fuel-in (no closing fuel yet): pending, nothing to estimate. */
   isPending: boolean;
-  /** Single-trip cycle opened by a START pump: thin calibration, treat with skepticism (Issue #9). */
+  /** Retired with trip-delimited cycles (START no longer splits); always false. */
   isLowConfidence: boolean;
   prevEconomy: number | null;
   /** Normal (lenient) suggestion — balances in [1, tankCapacity]. */
@@ -60,7 +73,15 @@ interface PassSegment {
   fuelFed: number;
   orderNo: string;
   orderDate: string;
+  fuelDate: string;
+  ownership: FuelDayOwnership;
+  gapChosen: number | null;
+  gapOther: number | null;
   isFullTank: boolean;
+  /** Full flag of the previous fuel-in Date (segment opening anchor). */
+  openIsFull: boolean;
+  /** Full flag of this segment's closing fuel Date. */
+  closeIsFull: boolean;
   pumpTiming: 'START' | 'END';
   prevEconomy: number | null;
   suggested: number | null;
@@ -137,6 +158,9 @@ export function isDateGapBlanked(date: string, trips: Trip[]): boolean {
 }
 
 export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<string, number> }): FuelInSegmentInput[] {
+  // Day-atom backward ranges under default previous-join ownership: each
+  // segment runs from the day after the previous fuel-in to its closing
+  // fuel-in Date (whose fuel is the denominator).
   const { trips } = params;
   const dateMap = new Map<string, { distance: number; drawn: number; orderNo: string }>();
   for (const t of trips) {
@@ -152,17 +176,155 @@ export function buildFuelInSegments(params: { trips: Trip[]; inTankMap?: Map<str
   if (fuelInDates.length === 0) return [];
   const segments: FuelInSegmentInput[] = [];
   for (let i = 0; i < fuelInDates.length; i++) {
-    const from = fuelInDates[i]; const nextFuel = fuelInDates[i + 1];
-    const toIdx = nextFuel ? sortedDates.indexOf(nextFuel) - 1 : sortedDates.length - 1;
-    const fromIdx = sortedDates.indexOf(from);
-    const sliceDates = sortedDates.slice(fromIdx, toIdx + 1);
+    const closing = fuelInDates[i];
+    const from = i === 0 ? sortedDates[0] : sortedDates[sortedDates.indexOf(fuelInDates[i - 1]) + 1];
+    const sliceDates = sortedDates.slice(sortedDates.indexOf(from), sortedDates.indexOf(closing) + 1);
     const distance = roundToIntegerKm(sliceDates.reduce((s, d) => s + (dateMap.get(d)?.distance ?? 0), 0));
-    const fuelFed = roundToOneDecimal(dateMap.get(from)?.drawn ?? 0);
-    const orderNo = dateMap.get(from)?.orderNo ?? '';
-    const toDate = sliceDates[sliceDates.length - 1];
-    segments.push({ fromDate: from, toDate, distance, fuelFed, orderNo });
+    const fuelFed = roundToOneDecimal(dateMap.get(closing)?.drawn ?? 0);
+    segments.push({ fromDate: from, toDate: closing, distance, fuelFed, orderNo: dateMap.get(closing)?.orderNo ?? '' });
   }
   return segments;
+}
+
+/** Greedy minimal-gap choice recorded per fuel-in Date. */
+export interface OwnershipChoice {
+  ownership: FuelDayOwnership;
+  gapChosen: number | null;
+  gapOther: number | null;
+}
+
+/**
+ * Resolve Fuel-Day Ownership greedily left-to-right (ADR-0036 Q6).
+ *
+ * Each fuel-in Date's distance joins previous (its fuel closes a segment
+ * ending on that Date) or next (its distance moves to the following
+ * segment while its fuel still closes its own). Segment economy is
+ * `totalDist / closingFuel` at 1 decimal; the join with the smaller
+ * adjacent gap `|left-right|` wins, ties join previous, gap 0 is perfect.
+ * Zero-distance fuel days auto-join previous; locked fuel days and the
+ * last fuel-in keep their pinned (or default previous) ownership without
+ * comparison. A `next` join that would leave its own segment dateless is
+ * forced back to previous so every fuel keeps a denominator.
+ */
+export function resolveFuelDayOwnership(params: {
+  dates: string[];
+  dateDistance: Map<string, number>;
+  dateFuel: Map<string, number>;
+  fuelDates: string[];
+  pinned?: FuelDayOwnershipInput;
+  lockedDates?: Set<string>;
+}): Map<string, OwnershipChoice> {
+  const { dates, dateDistance, dateFuel, fuelDates, pinned, lockedDates } = params;
+  const out = new Map<string, OwnershipChoice>();
+  if (dates.length === 0 || fuelDates.length === 0) return out;
+  const idxOf = new Map(dates.map((d, i) => [d, i]));
+  const prefix: number[] = [];
+  dates.forEach((d, i) => {
+    prefix.push((i > 0 ? prefix[i - 1] : 0) + (dateDistance.get(d) ?? 0));
+  });
+  const rangeDist = (a: string, b: string): number => {
+    const ia = idxOf.get(a) ?? 0;
+    const ib = idxOf.get(b) ?? -1;
+    if (ia > ib) return 0;
+    return prefix[ib] - (ia > 0 ? prefix[ia - 1] : 0);
+  };
+  const dateBefore = (d: string): string | null => {
+    const i = idxOf.get(d) ?? 0;
+    return i > 0 ? dates[i - 1] : null;
+  };
+  const dateAfter = (d: string): string | null => {
+    const i = idxOf.get(d) ?? dates.length - 1;
+    return i < dates.length - 1 ? dates[i + 1] : null;
+  };
+  const econ1 = (dist: number, fuel: number): number | null => {
+    if (!(fuel > 0)) return null;
+    return roundToOneDecimal(dist / fuel);
+  };
+  const isExplicitPin = (d: string): boolean => {
+    if (!pinned) return false;
+    if (pinned instanceof Map) return pinned.has(d);
+    return Object.prototype.hasOwnProperty.call(pinned, d);
+  };
+  const startOf = (i: number): string => {
+    if (i === 0) return dates[0];
+    const prev = fuelDates[i - 1];
+    if (out.get(prev)?.ownership === 'next') return prev;
+    return dateAfter(prev) ?? prev;
+  };
+
+  const n = fuelDates.length;
+  for (let i = 0; i < n; i++) {
+    const di = fuelDates[i];
+    const fuel = dateFuel.get(di) ?? 0;
+    const isLast = i === n - 1;
+    const distDi = dateDistance.get(di) ?? 0;
+    const pin: FuelDayOwnership | null = isExplicitPin(di) ? ownershipOfDate(pinned, di) : null;
+
+    if (distDi === 0) {
+      // A fuel day with no distance carries no information about either
+      // side: it always joins previous, ignoring any stored pin.
+      out.set(di, { ownership: 'previous', gapChosen: null, gapOther: null });
+      continue;
+    }
+    if (lockedDates?.has(di) || isLast) {
+      let choice: FuelDayOwnership = pin ?? 'previous';
+      const s = startOf(i);
+      if (choice === 'next' && (idxOf.get(s) ?? 0) >= (idxOf.get(di) ?? 0)) choice = 'previous';
+      out.set(di, { ownership: choice, gapChosen: null, gapOther: null });
+      continue;
+    }
+    if (pin !== null) {
+      let choice = pin;
+      const s = startOf(i);
+      if (choice === 'next' && (idxOf.get(s) ?? 0) >= (idxOf.get(di) ?? 0)) choice = 'previous';
+      out.set(di, { ownership: choice, gapChosen: null, gapOther: null });
+      continue;
+    }
+
+    const s = startOf(i);
+    const next = fuelDates[i + 1];
+    const fuelNext = dateFuel.get(next) ?? 0;
+    const afterDi = dateAfter(di);
+    const segREmptyPrev = !afterDi || (idxOf.get(afterDi) ?? 0) > (idxOf.get(next) ?? 0);
+    const eLprev = econ1(rangeDist(s, di), fuel);
+    const eRprev = segREmptyPrev ? null : econ1(rangeDist(afterDi!, next), fuelNext);
+    const beforeDi = dateBefore(di);
+    const segLEmptyNext = !beforeDi || (idxOf.get(s) ?? 0) > (idxOf.get(beforeDi!) ?? 0);
+    const eLnext = segLEmptyNext ? null : econ1(rangeDist(s, beforeDi!), fuel);
+    const eRnext = econ1(rangeDist(di, next), fuelNext);
+    const gapPrev =
+      eLprev !== null && eRprev !== null ? roundToOneDecimal(Math.abs(eLprev - eRprev)) : null;
+    const gapNext =
+      eLnext !== null && eRnext !== null ? roundToOneDecimal(Math.abs(eLnext - eRnext)) : null;
+
+    let choice: FuelDayOwnership = 'previous';
+    let gapChosen: number | null = null;
+    let gapOther: number | null = null;
+    if (gapPrev === null && gapNext === null) {
+      choice = 'previous';
+    } else if (gapNext === null) {
+      choice = 'previous';
+      gapChosen = gapPrev;
+    } else if (gapPrev === null) {
+      choice = 'next';
+      gapChosen = gapNext;
+    } else if (gapNext < gapPrev - 1e-9) {
+      choice = 'next';
+      gapChosen = gapNext;
+      gapOther = gapPrev;
+    } else {
+      choice = 'previous';
+      gapChosen = gapPrev;
+      gapOther = gapNext;
+    }
+    if (choice === 'next' && (idxOf.get(s) ?? 0) >= (idxOf.get(di) ?? 0)) {
+      choice = 'previous';
+      gapChosen = gapPrev;
+      gapOther = null;
+    }
+    out.set(di, { ownership: choice, gapChosen, gapOther });
+  }
+  return out;
 }
 
 function estimatePrevEconomyFallback(): number { return 7.8; }
@@ -183,11 +345,6 @@ function stepCapFor(longTripCount: number, veryLongTripCount: number): { cap: nu
   return { cap: MAX_STEP_BASE, tier: '' };
 }
 
-function isStartMigrated(trip: Trip): boolean {
-  // Spec #6 Issue #8: START applies at any distance — no short-trip downgrade.
-  return (trip.pump_timing === 'START') && (trip.fuel_pumped_amount ?? 0) > 0;
-}
-
 function getSafeWindow(vehicle: Vehicle | null): { low: number; high: number; margin: number } {
   let low = 4, high = 30;
   if (vehicle && vehicle.typical_economy_low != null && vehicle.typical_economy_high != null && vehicle.typical_economy_low > 0 && vehicle.typical_economy_high > vehicle.typical_economy_low) {
@@ -206,6 +363,8 @@ interface PassParams {
   strictFullTank?: boolean;
   lockedDatesSet?: Set<string>;
   lockedEconomyMap?: Map<string, number>;
+  /** Pinned Fuel-Day Ownership per fuel-in Date (operator flips + locks). */
+  ownership?: FuelDayOwnershipInput;
 }
 
 /**
@@ -244,19 +403,17 @@ function runEstimationPass(params: PassParams): PassSegment[] {
   }
   if (prevEconomy === null) prevEconomy = estimatePrevEconomyFallback();
 
-  const dateInTank = new Map<string, number>();
-
+  // Day-atom simulation: chronological END order always — consume each
+  // Trip's distance, then add that Trip's pumped fuel afterwards.
   const simulateMaxViolation = (segmentTrips: Trip[], startPos: number, economy: number): number => {
     let bal = roundToOneDecimal(startPos);
-    const seenDates = new Set<string>();
     let maxViolation = 0;
     for (const t of segmentTrips) {
-      if (!seenDates.has(t.date)) { seenDates.add(t.date); const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0); if (it) bal = roundToOneDecimal(bal + it); }
       const distance = roundToIntegerKm(t.trip_distance);
       const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
-      const migrated = isStartMigrated(t);
-      if (pumped > 0 && migrated) { bal = roundToOneDecimal(bal + pumped); const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); }
-      else { const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); if (pumped > 0) bal = roundToOneDecimal(bal + pumped); }
+      const consumed = roundToOneDecimal(distance / economy);
+      bal = roundToOneDecimal(bal - consumed);
+      if (pumped > 0) bal = roundToOneDecimal(bal + pumped);
       if (bal < minFuel) maxViolation = Math.max(maxViolation, minFuel - bal);
       else if (bal > strictMax) maxViolation = Math.max(maxViolation, bal - strictMax);
     }
@@ -265,59 +422,97 @@ function runEstimationPass(params: PassParams): PassSegment[] {
 
   const simulateFinalBalance = (segmentTrips: Trip[], startPos: number, economy: number): number => {
     let bal = roundToOneDecimal(startPos);
-    const seenDates = new Set<string>();
     for (const t of segmentTrips) {
-      if (!seenDates.has(t.date)) { seenDates.add(t.date); const it = roundToOneDecimal(dateInTank.get(t.date) ?? 0); if (it) bal = roundToOneDecimal(bal + it); }
       const distance = roundToIntegerKm(t.trip_distance);
       const pumped = roundToOneDecimal(t.fuel_pumped_amount ?? 0);
-      const migrated = isStartMigrated(t);
-      if (pumped > 0 && migrated) { bal = roundToOneDecimal(bal + pumped); const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); }
-      else { const consumed = roundToOneDecimal(distance / economy); bal = roundToOneDecimal(bal - consumed); if (pumped > 0) bal = roundToOneDecimal(bal + pumped); }
+      const consumed = roundToOneDecimal(distance / economy);
+      bal = roundToOneDecimal(bal - consumed);
+      if (pumped > 0) bal = roundToOneDecimal(bal + pumped);
     }
     return bal;
   };
 
-  interface BuiltSeg { start: number; end: number; sourceIdx: number; trips: Trip[]; fromDate: string; toDate: string; distance: number; fuelFed: number; isFullTank: boolean; pumpTiming: 'START'|'END'; nextSrcIdx: number | undefined; }
+  interface BuiltSeg { trips: Trip[]; fromDate: string; toDate: string; fuelDate: string; ownership: FuelDayOwnership; gapChosen: number | null; gapOther: number | null; distance: number; fuelFed: number; orderNo: string; isFullTank: boolean; openIsFull: boolean; closeIsFull: boolean; closeFuel: number; closeIncluded: boolean; pumpTiming: 'START'|'END'; }
   const builtSegs: BuiltSeg[] = [];
-  for (let i = 0; i < pumpIndices.length; i++) {
-    const srcIdx = pumpIndices[i];
-    const srcTrip = sortedTrips[srcIdx];
-    const nextIdx = pumpIndices[i + 1];
-    const start = isStartMigrated(srcTrip) ? srcIdx : srcIdx + 1;
-    let end: number;
-    if (nextIdx !== undefined) {
-      const nextTrip = sortedTrips[nextIdx];
-      if (isStartMigrated(nextTrip)) end = nextIdx - 1;
-      else end = nextIdx;
-    } else {
-      end = sortedTrips.length - 1;
-    }
-    if (start > end) {
-      const fuelFed = roundToOneDecimal(srcTrip.fuel_pumped_amount ?? 0);
-      const fromDate = srcTrip.date;
-      builtSegs.push({ start, end: start - 1, sourceIdx: srcIdx, trips: [], fromDate, toDate: fromDate, distance: 0, fuelFed, isFullTank: !!srcTrip.is_full_tank, pumpTiming: (srcTrip.pump_timing ?? 'END') as 'START'|'END', nextSrcIdx: nextIdx });
-      continue;
-    }
-    const segTrips = sortedTrips.slice(start, end + 1);
-    const distance = roundToIntegerKm(segTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
-    const fuelFed = roundToOneDecimal(srcTrip.fuel_pumped_amount ?? 0);
-    // Segment spans consecutive fuel-in dates: from this pump's date to the next pump's date
-    // (inclusive), so exactly one range appears between two consecutive fuel-ins regardless
-    // of pump timing or how many days later the next trip is recorded.
-    const fromDate = srcTrip.date;
-    const toDate = nextIdx !== undefined
-      ? sortedTrips[nextIdx].date
-      : (segTrips.length > 0 ? segTrips[segTrips.length - 1].date : srcTrip.date);
-    builtSegs.push({ start, end, sourceIdx: srcIdx, trips: segTrips, fromDate, toDate, distance, fuelFed, isFullTank: !!srcTrip.is_full_tank, pumpTiming: (srcTrip.pump_timing ?? 'END') as 'START'|'END', nextSrcIdx: nextIdx });
+  // Day-atom aggregation: one row per Date; same-day multiple pumps are summed.
+  const byDate = new Map<string, Trip[]>();
+  for (const t of sortedTrips) {
+    if (!byDate.has(t.date)) byDate.set(t.date, []);
+    byDate.get(t.date)!.push(t);
   }
+  const runDates = Array.from(byDate.keys()).sort();
+  const dateDistance = new Map<string, number>();
+  const dateFuel = new Map<string, number>();
+  const dateOrderNo = new Map<string, string>();
+  const dateIsFull = new Map<string, boolean>();
+  for (const d of runDates) {
+    const dts = byDate.get(d)!;
+    dateDistance.set(d, roundToIntegerKm(dts.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0)));
+    dateFuel.set(d, roundToOneDecimal(dts.reduce((s, t) => s + roundToOneDecimal(t.fuel_pumped_amount ?? 0), 0)));
+    dateOrderNo.set(d, dts.filter(t => t.fuel_order_no?.trim()).map(t => t.fuel_order_no!.trim()).join(', '));
+    dateIsFull.set(d, dts.some(t => !!t.is_full_tank && (t.fuel_pumped_amount ?? 0) > 0));
+  }
+  const runFuelDates = runDates.filter(d => (dateFuel.get(d) ?? 0) > 0);
 
-  // Spec #6 Issue #8: trip-delimited cycles — every pumped Trip is a boundary
-  // with no collapsing, so one date can hold several segments.
-  const firstStart = builtSegs.length > 0 ? builtSegs[0].start : (pumpIndices[0] + 1);
-  const initialTrips = sortedTrips.slice(0, firstStart);
-  if (initialTrips.length > 0) {
-    runningPos = simulateFinalBalance(initialTrips, runningPos, prevEconomy!);
+  const resolvedOwnership = resolveFuelDayOwnership({
+    dates: runDates,
+    dateDistance,
+    dateFuel,
+    fuelDates: runFuelDates,
+    pinned: params.ownership,
+    lockedDates: params.lockedDatesSet,
+  });
+
+  const idxOfDate = new Map(runDates.map((d, i) => [d, i]));
+  // Day-atom segments: seg i is closed by fuel date Di (backward
+  // attribution — Di's fuel is the denominator). Di's own distance joins
+  // previous (in-range) or next (moves to the following segment).
+  for (let i = 0; i < runFuelDates.length; i++) {
+    const fuelDate = runFuelDates[i];
+    const choice = resolvedOwnership.get(fuelDate) ?? { ownership: 'previous' as FuelDayOwnership, gapChosen: null, gapOther: null };
+    const startDate = i === 0
+      ? runDates[0]
+      : (resolvedOwnership.get(runFuelDates[i - 1])?.ownership === 'next'
+        ? runFuelDates[i - 1]
+        : runDates[(idxOfDate.get(runFuelDates[i - 1]) ?? 0) + 1] ?? fuelDate);
+    const endDate = choice.ownership === 'previous'
+      ? fuelDate
+      : runDates[(idxOfDate.get(fuelDate) ?? 0) - 1] ?? startDate;
+    const segDates = runDates.filter(d => d >= startDate && d <= endDate);
+    const segTrips = segDates.flatMap(d => byDate.get(d) ?? []);
+    const distance = roundToIntegerKm(segDates.reduce((s, d) => s + (dateDistance.get(d) ?? 0), 0));
+    const fuelFed = roundToOneDecimal(dateFuel.get(fuelDate) ?? 0);
+    const closingTrips = byDate.get(fuelDate) ?? [];
+    const closingPump = closingTrips.find(t => (t.fuel_pumped_amount ?? 0) > 0);
+    builtSegs.push({
+      trips: segTrips,
+      fromDate: startDate,
+      toDate: endDate,
+      fuelDate,
+      ownership: choice.ownership,
+      gapChosen: choice.gapChosen,
+      gapOther: choice.gapOther,
+      distance,
+      fuelFed,
+      orderNo: dateOrderNo.get(fuelDate) ?? '',
+      isFullTank: dateIsFull.get(fuelDate) ?? false,
+      openIsFull: i > 0 ? (dateIsFull.get(runFuelDates[i - 1]) ?? false) : false,
+      closeIsFull: dateIsFull.get(fuelDate) ?? false,
+      closeFuel: fuelFed,
+      closeIncluded: choice.ownership === 'previous',
+      pumpTiming: ((closingPump?.pump_timing ?? 'END') as 'START' | 'END'),
+    });
   }
+  // Open tail after the last fuel-in: no closing fuel yet.
+  // (A last fuel Date joining `next` moves its Trips into this tail.)
+  const lastFuel = runFuelDates[runFuelDates.length - 1];
+  const tailOwnsLast = resolvedOwnership.get(lastFuel)?.ownership === 'next';
+  const tailStartIdx = lastFuel === undefined
+    ? 0
+    : (idxOfDate.get(lastFuel) ?? runDates.length - 1) + (tailOwnsLast ? 0 : 1);
+  const tailDates = runDates.slice(tailStartIdx);
+  const tailTrips = tailDates.flatMap(d => byDate.get(d) ?? []);
+
   const posBeforeFirstSeg = runningPos;
   const initialPrevEconomy = prevEconomy;
 
@@ -332,22 +527,25 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const fromDate = seg.fromDate;
     const toDate = seg.toDate;
     const prev: number | null = prevEconomy;
-    const srcTrip = sortedTrips[seg.sourceIdx];
     const isFullTank = seg.isFullTank;
     const pumpTiming = seg.pumpTiming;
-    // A Full Tank pump physically fills the tank: anchor the segment's opening balance
-    // to capacity, but let a floated post-pump value in [cap-3, cap+1] carry forward
-    // so adjacent economies can be smoothed (Q6).
-    if (isFullTank) {
+    // A Full Tank pump physically fills the tank: when the previous fuel
+    // was full, anchor the segment's opening balance to capacity, but let
+    // a floated post-pump value in [cap-3, cap+1] carry forward.
+    if (seg.openIsFull) {
       if (runningPos < strictMin || runningPos > strictMax) {
         runningPos = tankCapacity;
       }
     }
     const startPos = runningPos;
-    const nextIsFull = seg.nextSrcIdx !== undefined ? !!sortedTrips[seg.nextSrcIdx].is_full_tank : false;
-    const nextPumpAmount = seg.nextSrcIdx !== undefined ? roundToOneDecimal(sortedTrips[seg.nextSrcIdx].fuel_pumped_amount ?? 0) : 0;
-    const nextPumpIncluded = seg.nextSrcIdx !== undefined && !isStartMigrated(sortedTrips[seg.nextSrcIdx]);
-    const isFullToFull = isFullTank && nextIsFull;
+    // Closing-fuel tolerance: when the closing pump is Full Tank, prefer
+    // the economy leaving the post-pump balance inside [cap-3, cap+1].
+    // The closing fuel is already in endBal when its Date is in-range;
+    // otherwise it lands just after the range.
+    const nextIsFull = seg.closeIsFull;
+    const nextPumpAmount = seg.closeIncluded ? 0 : seg.closeFuel;
+    const nextPumpIncluded = seg.closeIncluded;
+    const isFullToFull = seg.openIsFull && seg.closeIsFull;
     const maxTripDistance = segmentTrips.reduce((m, t) => Math.max(m, roundToIntegerKm(t.trip_distance)), 0);
     const longTripCount = segmentTrips.filter(t => roundToIntegerKm(t.trip_distance) > 40).length;
     const veryLongTripCount = segmentTrips.filter(t => roundToIntegerKm(t.trip_distance) >= 100).length;
@@ -356,16 +554,16 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const blankedDates = getGapBlankedSegments(trips);
     const isGapSpan = segmentTrips.length > 0 && segmentTrips.some(t => blankedDates.has(t.date));
 
-    // Issue #9: an empty trip list is a pending next cycle (e.g. END pump on
-    // the final trip) — nothing to estimate. A single-trip cycle opened by a
-    // START pump is a thin calibration — flag low-confidence, keep the value.
-    const isPending = segmentTrips.length === 0;
-    const isLowConfidence = !isPending && !isGapSpan && segmentTrips.length === 1 && isStartMigrated(srcTrip);
+    // Day-atom: every built segment carries Trips (guaranteed non-empty
+    // date range); only the open tail after the last fuel-in pends.
+    const isPending = false;
+    const isLowConfidence = false;
 
     const push = (suggested: number | null, feasible: boolean, feasibleMin: number | null, feasibleMax: number | null, warning?: string, isGap = false) => {
       results.push({
-        fromDate, toDate, distance: totalDist, fuelFed, orderNo: srcTrip.fuel_order_no ?? '', orderDate: srcTrip.date,
-        isFullTank, pumpTiming, prevEconomy: prev, suggested, feasible, feasibleMin, feasibleMax, warning,
+        fromDate, toDate, distance: totalDist, fuelFed, orderNo: seg.orderNo, orderDate: seg.fuelDate,
+        fuelDate: seg.fuelDate, ownership: seg.ownership, gapChosen: seg.gapChosen, gapOther: seg.gapOther,
+        isFullTank, openIsFull: seg.openIsFull, closeIsFull: seg.closeIsFull, pumpTiming, prevEconomy: prev, suggested, feasible, feasibleMin, feasibleMax, warning,
         isFullToFull, nextIsFull, startPos, trips: segmentTrips, isGapSpan: isGap, maxTripDistance, longTripCount, veryLongTripCount,
         isPending, isLowConfidence,
       });
@@ -373,12 +571,6 @@ function runEstimationPass(params: PassParams): PassSegment[] {
 
     if (isGapSpan) {
       push(null, false, null, null, 'Economy not calculated — ODO gap', true);
-      prevEconomy = prev;
-      continue;
-    }
-
-    if (isPending) {
-      push(null, false, null, null, 'Pending — no trips in this cycle yet');
       prevEconomy = prev;
       continue;
     }
@@ -400,7 +592,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
 
     if (totalDist === 0) {
       const v = roundToOneDecimal(prev!);
-      push(v, true, 0.1, 50, segmentTrips.length === 0 ? '0 km — no trips after this pump (adjacent)' : '0 km — no distance in segment');
+      push(v, true, 0.1, 50, '0 km — no distance in segment');
       prevEconomy = v;
       continue;
     }
@@ -418,8 +610,9 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     const feasibleMax = feasibleEs.length > 0 ? feasibleEs[feasibleEs.length - 1] : null;
 
     if (isFullToFull) {
-      // Physics-first: total distance / total fuel between consecutive Full Tanks.
-      const totalFuelInSeg = roundToOneDecimal(segmentTrips.reduce((s, t) => s + roundToOneDecimal(t.fuel_pumped_amount ?? 0), 0));
+      // Physics-first (backward): distance since the previous Full Tank /
+      // the closing Full Tank fuel, which restores the tank to full.
+      const totalFuelInSeg = seg.closeFuel > 0 ? seg.closeFuel : fuelFed;
       let rawEcon: number | null = null;
       if (totalFuelInSeg > 0) rawEcon = totalDist / totalFuelInSeg;
       else if (fuelFed > 0) rawEcon = totalDist / fuelFed;
@@ -600,7 +793,7 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     let pos = posBeforeFirstSeg;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
-      if (r.isFullTank) pos = tankCapacity;
+      if (r.openIsFull) pos = tankCapacity;
       if (r.trips.length > 0 && r.suggested !== null) {
         const v = simulateMaxViolation(r.trips, pos, r.suggested);
         if (v >= 1e-9) {
@@ -623,6 +816,47 @@ function runEstimationPass(params: PassParams): PassSegment[] {
     }
   }
 
+  // Open tail after the last fuel-in: no closing fuel yet, so nothing to
+  // estimate — it inherits. Listed as pending so the operator sees it.
+  if (tailTrips.length > 0) {
+    const tailFrom = tailDates[0];
+    const tailTo = tailDates[tailDates.length - 1];
+    const tailDist = roundToIntegerKm(tailTrips.reduce((s, t) => s + roundToIntegerKm(t.trip_distance), 0));
+    const maxTail = tailTrips.reduce((m, t) => Math.max(m, roundToIntegerKm(t.trip_distance)), 0);
+    results.push({
+      fromDate: tailFrom,
+      toDate: tailTo,
+      distance: tailDist,
+      fuelFed: 0,
+      orderNo: '',
+      orderDate: tailFrom,
+      fuelDate: tailFrom,
+      ownership: 'previous',
+      gapChosen: null,
+      gapOther: null,
+      isFullTank: false,
+      openIsFull: false,
+      closeIsFull: false,
+      pumpTiming: 'END',
+      prevEconomy: chainPrev,
+      suggested: null,
+      feasible: false,
+      feasibleMin: null,
+      feasibleMax: null,
+      warning: 'Pending — open segment, no closing fuel yet',
+      isFullToFull: false,
+      nextIsFull: false,
+      startPos: runningPos,
+      trips: tailTrips,
+      isGapSpan: false,
+      maxTripDistance: maxTail,
+      longTripCount: tailTrips.filter(t => roundToIntegerKm(t.trip_distance) > 40).length,
+      veryLongTripCount: tailTrips.filter(t => roundToIntegerKm(t.trip_distance) >= 100).length,
+      isPending: true,
+      isLowConfidence: false,
+    });
+  }
+
   return results;
 }
 
@@ -640,6 +874,7 @@ export function estimateFuelEconomies(params: {
   strictFullTank?: boolean;
   lockedDatesSet?: Set<string>;
   lockedEconomyMap?: Map<string, number>;
+  ownership?: FuelDayOwnershipInput;
 }): SegmentEstimate[] {
   const normal = runEstimationPass({ ...params, strictFullTank: false });
   const strictPass = runEstimationPass({ ...params, strictFullTank: true });
@@ -652,6 +887,10 @@ export function estimateFuelEconomies(params: {
       fuelFed: n.fuelFed,
       orderNo: n.orderNo,
       orderDate: n.orderDate,
+      fuelDate: n.fuelDate,
+      ownership: n.ownership,
+      gapChosen: n.gapChosen,
+      gapOther: n.gapOther,
       isFullTank: n.isFullTank,
       pumpTiming: n.pumpTiming,
       tripIds: n.trips.map((t) => t.id),

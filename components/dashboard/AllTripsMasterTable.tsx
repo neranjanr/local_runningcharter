@@ -693,8 +693,8 @@ export function AllTripsMasterTable({ trips, pages, title = 'All Trips Master Ta
         while (arr.length < dayIndex) arr.push(null);
         arr[dayIndex - 1] = Math.round(num * 10) / 10;
         saveFuelEconomiesForPage(pageId, arr);
-        // Issue #8: mirror the edit onto the whole trip-delimited cycle so a
-        // same-date split stays consistent (per-day store retired in #12).
+        // Day-atom (ADR-0036): mirror the edit onto the whole date-delimited
+        // segment so the fuel-in Date keeps a single economy.
         try {
           saveTripCycleOverride(trips, tripId, Math.round(num * 10) / 10);
         } catch {}

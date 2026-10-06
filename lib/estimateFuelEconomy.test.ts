@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateFuelEconomies } from './estimateFuelEconomy';
+import { estimateFuelEconomies, resolveFuelDayOwnership } from './estimateFuelEconomy';
 import type { BookPage, Trip, Vehicle } from '@/types';
 
 const vehicle: Vehicle = {
@@ -25,6 +25,10 @@ const page: BookPage = {
   end_fuel_balance: 10,
 };
 
+// Low opening balance so early pumps fit the tank headroom (physically
+// consistent books: pumped fuel must fit after consumption).
+const page10: BookPage = { ...page, start_fuel_balance: 10 };
+
 function trip(over: Partial<Trip> & { id: string; date: string }): Trip {
   return {
     id: over.id,
@@ -47,73 +51,98 @@ function trip(over: Partial<Trip> & { id: string; date: string }): Trip {
   };
 }
 
-describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () => {
-  it('Full -> Full physics uses totalDist/totalFuel (not a drifted balance)', () => {
+describe('estimateFuelEconomies — day-atom backward segments (ADR-0036)', () => {
+  it('Full -> Full physics uses totalDist/closingFuel on the closing segment', () => {
     // Feb 20 full (69 L) -> Mar 11 full (63 L); 455 km driven between pumps.
+    // Backward: seg0 is just Feb 20 (closed by its own fuel), seg1 carries
+    // Feb 25 + Mar 11 and its Full->Full economy is 455 / 63 ≈ 7.2.
     const trips: Trip[] = [
-      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 69, is_full_tank: true }),
-      trip({ id: 't2', date: '2024-02-25', start_km: 100, end_km: 500, trip_distance: 400, trip_index: 2 }),
-      trip({ id: 't3', date: '2024-03-11', start_km: 500, end_km: 555, trip_distance: 55, fuel_pumped_amount: 63, is_full_tank: true, trip_index: 3 }),
+      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 69, is_full_tank: true }),
+      trip({ id: 't2', date: '2024-02-25', start_km: 50, end_km: 450, trip_distance: 400, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-03-11', start_km: 450, end_km: 505, trip_distance: 55, fuel_pumped_amount: 63, is_full_tank: true, trip_index: 3 }),
     ];
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    // First segment is Feb20 -> Mar11 (includes Mar11 pump trip): 455 km / 63 L ≈ 7.2
-    const seg = est[0];
-    expect(seg).toBeDefined();
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    expect(est.length).toBe(2);
+    const seg0 = est[0];
+    expect(seg0.fromDate).toBe('2024-02-20');
+    expect(seg0.toDate).toBe('2024-02-20');
+    expect(seg0.fuelDate).toBe('2024-02-20');
+    expect(seg0.ownership).toBe('previous');
+    expect(seg0.distance).toBe(50);
+    expect(seg0.suggested).toBeCloseTo(7.8, 1);
+    expect(seg0.feasible).toBe(true);
+    const seg = est[1];
+    expect(seg.fromDate).toBe('2024-02-25');
+    expect(seg.toDate).toBe('2024-03-11');
+    expect(seg.fuelDate).toBe('2024-03-11');
     expect(seg.distance).toBe(455);
     expect(seg.isFullTank).toBe(true);
-    expect(seg.suggested).toBeCloseTo(7.2, 1);
+    // Strict is physics-first and unsmoothed: exactly the Full->Full ratio.
     expect(seg.suggestedStrict).toBeCloseTo(7.2, 1);
+    // Normal smooths toward the previous economy but stays feasible and sane.
+    expect(seg.suggested).toBeGreaterThan(7.0);
+    expect(seg.suggested).toBeLessThan(7.6);
     expect(seg.feasible).toBe(true);
     // Must not fall back to an absurd high economy
     expect(seg.suggested).toBeLessThan(12);
   });
 
-  it('anchors running balance to tankCapacity after a Full Tank pump', () => {
-    // If the opening balance were not anchored, 494 km at ~7 km/L would drain 70 L
-    // from a low balance and be flagged infeasible. Anchoring to 75 L keeps it feasible.
+  it('anchors running balance to tankCapacity when the previous fuel was full', () => {
+    // Same trips against a full opening: seg0 overflows the cap and is
+    // flagged, but seg1 still calibrates via the full-tank opening anchor
+    // (the previous pump restores the tank to full).
     const trips: Trip[] = [
-      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 69, is_full_tank: true }),
-      trip({ id: 't2', date: '2024-02-25', start_km: 100, end_km: 500, trip_distance: 400, trip_index: 2 }),
-      trip({ id: 't3', date: '2024-03-11', start_km: 500, end_km: 594, trip_distance: 94, fuel_pumped_amount: 63, is_full_tank: true, trip_index: 3 }),
+      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 69, is_full_tank: true }),
+      trip({ id: 't2', date: '2024-02-25', start_km: 50, end_km: 450, trip_distance: 400, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-03-11', start_km: 450, end_km: 505, trip_distance: 55, fuel_pumped_amount: 63, is_full_tank: true, trip_index: 3 }),
     ];
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    expect(est[0].feasible).toBe(true);
-    expect(est[0].suggested).toBeCloseTo(494 / 63, 0);
+    // The opening segment overflows the cap and is flagged, but the closing
+    // Full->Full segment still calibrates: the previous full pump anchors
+    // the opening balance back to tank capacity. Strict shows the raw physics.
+    expect(est[1].feasible).toBe(true);
+    expect(est[1].suggestedStrict).toBeCloseTo(455 / 63, 1);
   });
 
-  it('returns both Normal and Strict suggestions for every segment', () => {
+  it('returns both Normal and Strict suggestions for every fuel-closed segment', () => {
     const trips: Trip[] = [
-      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 69, is_full_tank: true }),
-      trip({ id: 't2', date: '2024-02-25', start_km: 100, end_km: 500, trip_distance: 400, trip_index: 2 }),
-      trip({ id: 't3', date: '2024-03-11', start_km: 500, end_km: 555, trip_distance: 55, fuel_pumped_amount: 63, is_full_tank: true, trip_index: 3 }),
-      trip({ id: 't4', date: '2024-03-20', start_km: 555, end_km: 800, trip_distance: 245, trip_index: 4 }),
+      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 69, is_full_tank: true }),
+      trip({ id: 't2', date: '2024-02-25', start_km: 50, end_km: 450, trip_distance: 400, trip_index: 2 }),
+      trip({ id: 't3', date: '2024-03-11', start_km: 450, end_km: 505, trip_distance: 55, fuel_pumped_amount: 63, is_full_tank: true, trip_index: 3 }),
+      trip({ id: 't4', date: '2024-03-20', start_km: 505, end_km: 750, trip_distance: 245, trip_index: 4 }),
     ];
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    expect(est.length).toBeGreaterThan(0);
-    for (const seg of est) {
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    const closed = est.filter(s => !s.isPending);
+    expect(closed.length).toBe(2);
+    for (const seg of closed) {
       expect(typeof seg.suggested).toBe('number');
       expect(typeof seg.suggestedStrict).toBe('number');
       expect(seg.suggested).toBeGreaterThan(0);
       expect(seg.suggestedStrict).toBeGreaterThan(0);
     }
+    // The open tail inherits: pending with no suggestion.
+    const tail = est[est.length - 1];
+    expect(tail.isPending).toBe(true);
+    expect(tail.suggested).toBeNull();
+    expect(tail.suggestedStrict).toBeNull();
   });
 
   it('when no Full Tank is marked, Strict equals Normal', () => {
     const trips: Trip[] = [
-      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40 }),
+      trip({ id: 't1', date: '2024-02-20', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 13 }),
       trip({ id: 't2', date: '2024-02-25', start_km: 100, end_km: 400, trip_distance: 300, trip_index: 2 }),
-      trip({ id: 't3', date: '2024-03-11', start_km: 400, end_km: 550, trip_distance: 150, fuel_pumped_amount: 35, trip_index: 3 }),
+      trip({ id: 't3', date: '2024-03-11', start_km: 400, end_km: 550, trip_distance: 150, fuel_pumped_amount: 58, trip_index: 3 }),
     ];
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    expect(est.length).toBeGreaterThan(0);
+    expect(est.length).toBe(2);
     for (const seg of est) {
       expect(seg.suggestedStrict!).toBeCloseTo(seg.suggested!, 5);
     }
   });
 
-  it('shows exactly one range per consecutive fuel-in, from pump date to next pump date', () => {
-    // Pump on 03-03 with no trips until 12-03, next pump on 15-03 marked START.
-    // The first segment must read 03-03 -> 15-03 (not 12-03 -> 14-03).
+  it('ranges run backward: day after previous fuel-in through the closing fuel-in', () => {
+    // Pump on 03-03, run on 03-12, pump on 03-15 (START timing is ignored),
+    // run on 03-20. Segments close on their fuel date; the tail pends.
     const trips: Trip[] = [
       trip({ id: 't1', date: '2024-03-03', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 56 }),
       trip({ id: 't2', date: '2024-03-12', start_km: 50, end_km: 100, trip_distance: 50, trip_index: 2 }),
@@ -121,18 +150,22 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       trip({ id: 't4', date: '2024-03-20', start_km: 140, end_km: 200, trip_distance: 60, trip_index: 4 }),
     ];
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    // Exactly one segment per fuel-in date (two pumps -> two segments).
-    expect(est.length).toBe(2);
+    // One row per fuel-in date plus the pending tail.
+    expect(est.length).toBe(3);
     expect(est[0].fromDate).toBe('2024-03-03');
-    expect(est[0].toDate).toBe('2024-03-15');
-    expect(est[1].fromDate).toBe('2024-03-15');
-    // Ranges are contiguous and non-overlapping: no range nested inside another.
-    expect(est[0].toDate).toBe(est[1].fromDate);
-    // No stray 12-03 -> 14-03 range.
-    expect(est.some(s => s.fromDate === '2024-03-12')).toBe(false);
+    expect(est[0].toDate).toBe('2024-03-03');
+    expect(est[0].fuelDate).toBe('2024-03-03');
+    expect(est[1].fromDate).toBe('2024-03-12');
+    expect(est[1].toDate).toBe('2024-03-15');
+    expect(est[1].fuelDate).toBe('2024-03-15');
+    expect(est[2].isPending).toBe(true);
+    // Ranges are contiguous and non-overlapping over the fuel-closed rows.
+    expect(est[0].toDate < est[1].fromDate).toBe(true);
+    // No stray ranges starting mid-segment.
+    expect(est.some(s => s.fromDate === '2024-03-12' && s.isPending)).toBe(false);
   });
 
-  it('opens separate cycles for same-day multiple pumps (no collapsing, issue #8)', () => {
+  it('same-day multiple pumps collapse to one date with summed fuel', () => {
     const trips: Trip[] = [
       trip({ id: 't1', date: '2024-03-03', start_km: 0, end_km: 50, trip_distance: 50, fuel_pumped_amount: 30, trip_index: 1 }),
       trip({ id: 't2', date: '2024-03-03', start_km: 50, end_km: 120, trip_distance: 70, fuel_pumped_amount: 26, trip_index: 2 }),
@@ -140,13 +173,15 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       trip({ id: 't4', date: '2024-03-20', start_km: 200, end_km: 260, trip_distance: 60, trip_index: 4 }),
     ];
     const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    // Three pumps -> three trip-delimited cycles; same-day pumps stay separate.
+    // Two fuel-in dates + tail: the shared date is a single row.
     expect(est.length).toBe(3);
     expect(est[0].fromDate).toBe('2024-03-03');
-    expect(est[0].fuelFed).toBeCloseTo(30, 1);
-    expect(est[1].fromDate).toBe('2024-03-03');
-    expect(est[1].fuelFed).toBeCloseTo(26, 1);
-    expect(est[2].fromDate).toBe('2024-03-15');
+    expect(est[0].toDate).toBe('2024-03-03');
+    expect(est[0].distance).toBe(120);
+    expect(est[0].fuelFed).toBeCloseTo(56, 1);
+    expect(est[0].tripIds.sort()).toEqual(['t1', 't2']);
+    expect(est[1].fromDate).toBe('2024-03-15');
+    expect(est[2].isPending).toBe(true);
   });
 
   // A segment that drains the tank forces a feasibility floor well above the 7.8 seed,
@@ -165,59 +200,60 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
   }
 
   it('keeps the 1.5 km/L cap when the segment has no long trips', () => {
-    // 20 x 35 km: floor ~9.4, so a 1.6 step is needed and the base cap bites at 9.3.
+    // 20 x 35 km on 04-05 + 30 km on 04-10: floor ~9.6, so a 1.8 step is
+    // needed and the base cap bites at 9.3 on the closing segment.
     const trips = forcedJumpScenario(Array(20).fill(35));
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
     expect(est.length).toBe(2);
-    const seg0 = est[0];
-    expect(seg0.longTripCount).toBe(0);
-    expect(seg0.veryLongTripCount).toBe(0);
-    expect(seg0.suggested).toBeCloseTo(9.3, 5);
-    expect(seg0.feasible).toBe(false);
-    expect(seg0.warning ?? '').toContain('capped');
-    expect(seg0.warning ?? '').not.toContain('km trips');
+    const seg1 = est[1];
+    expect(seg1.longTripCount).toBe(0);
+    expect(seg1.veryLongTripCount).toBe(0);
+    expect(seg1.suggested).toBeCloseTo(9.3, 5);
+    expect(seg1.feasible).toBe(false);
+    expect(seg1.warning ?? '').toContain('capped');
+    expect(seg1.warning ?? '').not.toContain('km trips');
   });
 
   it('widens the Normal cap to 2.5 km/L for >40 km trips', () => {
-    // 14 x 50 km: floor 9.6, a 1.8 step the base cap would block but 2.5 allows.
+    // 14 x 50 km: floor reachable within the widened cap.
     const trips = forcedJumpScenario(Array(14).fill(50));
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    const seg0 = est[0];
-    expect(seg0.longTripCount).toBe(14);
-    expect(seg0.veryLongTripCount).toBe(0);
-    expect(seg0.suggested).toBeCloseTo(9.6, 5);
-    expect(seg0.feasible).toBe(true);
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    const seg1 = est[1];
+    expect(seg1.longTripCount).toBe(14);
+    expect(seg1.veryLongTripCount).toBe(0);
+    expect(seg1.suggested).toBeCloseTo(9.8, 5);
+    expect(seg1.feasible).toBe(true);
   });
 
   it('widens the Normal cap to 3.0 km/L for 100 km+ trips (highest tier wins)', () => {
-    // One 777 km trip (>=100): floor 10.5, a 2.7 step that only the 3.0 tier can take.
+    // One 777 km trip (>=100): the 3.0 tier takes the step.
     const trips = forcedJumpScenario([777]);
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    const seg0 = est[0];
-    expect(seg0.veryLongTripCount).toBe(1);
-    expect(seg0.suggested).toBeCloseTo(10.5, 5);
-    expect(seg0.feasible).toBe(true);
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    const seg1 = est[1];
+    expect(seg1.veryLongTripCount).toBe(1);
+    expect(seg1.suggested).toBeCloseTo(10.7, 5);
+    expect(seg1.feasible).toBe(true);
   });
 
   it('treats a >40-only segment as the lower tier even with the same distance', () => {
-    // Same 777 km, but as 50 km hops: >40 tier caps at 2.5 -> 10.3, below the 10.6 floor.
+    // Same ~807 km, but as 50 km hops: >40 tier caps at 2.5 -> 10.3.
     const trips = forcedJumpScenario([...Array(15).fill(50), 27]);
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    const seg0 = est[0];
-    expect(seg0.longTripCount).toBe(15);
-    expect(seg0.veryLongTripCount).toBe(0);
-    expect(seg0.suggested).toBeCloseTo(10.3, 5);
-    expect(seg0.feasible).toBe(false);
-    expect(seg0.warning ?? '').toContain('>40 km trips');
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    const seg1 = est[1];
+    expect(seg1.longTripCount).toBe(15);
+    expect(seg1.veryLongTripCount).toBe(0);
+    expect(seg1.suggested).toBeCloseTo(10.3, 5);
+    expect(seg1.feasible).toBe(false);
+    expect(seg1.warning ?? '').toContain('>40 km trips');
   });
 
   it('keeps Strict feasibility-first beyond the widened Normal cap', () => {
     const trips = forcedJumpScenario(Array(20).fill(35));
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    const seg0 = est[0];
-    expect(seg0.suggested).toBeCloseTo(9.3, 5);
-    expect(seg0.suggestedStrict).toBeCloseTo(9.4, 5);
-    expect(seg0.suggestedStrict!).toBeGreaterThan(seg0.suggested!);
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    const seg1 = est[1];
+    expect(seg1.suggested).toBeCloseTo(9.3, 5);
+    expect(seg1.suggestedStrict).toBeCloseTo(9.6, 5);
+    expect(seg1.suggestedStrict!).toBeGreaterThan(seg1.suggested!);
   });
 
   it('reports the longest trip per segment for large-distance badges', () => {
@@ -227,15 +263,16 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       trip({ id: 't3', date: '2024-03-11', start_km: 80, end_km: 230, trip_distance: 150, fuel_pumped_amount: 35, trip_index: 3 }),
       trip({ id: 't4', date: '2024-03-20', start_km: 230, end_km: 260, trip_distance: 30, trip_index: 4 }),
     ];
-    const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-    // Segment 0 (20-02 -> 11-03) includes the 50 km and 150 km trips.
-    expect(est[0].maxTripDistance).toBe(150);
-    expect(est[0].longTripCount).toBe(2);
-    expect(est[0].veryLongTripCount).toBe(1);
-    // Segment 1 (11-03 -> end) includes only the 30 km trip.
-    expect(est[1].maxTripDistance).toBe(30);
-    expect(est[1].longTripCount).toBe(0);
-    expect(est[1].veryLongTripCount).toBe(0);
+    const est = estimateFuelEconomies({ trips, pages: [page10], vehicle, tankCapacityOverride: 75 });
+    // Segment 0 is just 20-02 (30 km); segment 1 carries the 50 + 150 km trips.
+    expect(est[0].maxTripDistance).toBe(30);
+    expect(est[0].longTripCount).toBe(0);
+    expect(est[1].maxTripDistance).toBe(150);
+    expect(est[1].longTripCount).toBe(2);
+    expect(est[1].veryLongTripCount).toBe(1);
+    // Tail (20-03) carries only the 30 km trip and pends.
+    expect(est[2].isPending).toBe(true);
+    expect(est[2].maxTripDistance).toBe(30);
   });
 
   it('detects ODO gaps and returns null suggestions (em-dash span) for gap-blanked segments', () => {
@@ -257,7 +294,7 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
   });
 
   describe('Issue 3 — Raw Anchored Averages & Full-Tank Segmenting Engine', () => {
-    it('correctly bounds segments by Full Tank trips within islands and computes Raw economy (Di / Fi)', () => {
+    it('bounds backward segments on fuel dates and computes Full->Full as Di / closingFi', () => {
       const trips: Trip[] = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, is_full_tank: true, trip_index: 1 }),
         trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 300, trip_distance: 200, trip_index: 2 }),
@@ -265,9 +302,12 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
       expect(est.length).toBe(2);
-      expect(est[0].distance).toBe(300);
-      expect(est[0].isFullTank).toBe(true);
-      expect(est[0].suggested).toBeCloseTo(300 / 25, 1);
+      expect(est[1].distance).toBe(300);
+      expect(est[1].isFullTank).toBe(true);
+      // Strict is physics-first: exactly the Full->Full ratio. Normal stays
+      // feasible but smooths toward the previous economy.
+      expect(est[1].suggestedStrict).toBeCloseTo(300 / 25, 1);
+      expect(est[1].feasible).toBe(true);
     });
 
     it('ensures locked economies take precedence over raw and estimated calculations', () => {
@@ -293,84 +333,150 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
     });
   });
 
-  describe('Issue 9 — trip-delimited suggestion segments (pending / low-confidence / cycle-apply)', () => {
-    it('END pump on the final trip renders its empty next cycle as pending with no suggestion', () => {
+  describe('day-atom suggestion rows (pending tail, timing ignored)', () => {
+    it('fuel on the final date leaves no pending tail', () => {
       const trips: Trip[] = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
         trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 300, trip_distance: 200, trip_index: 2 }),
         trip({ id: 't3', date: '2024-03-10', start_km: 300, end_km: 400, trip_distance: 100, fuel_pumped_amount: 25, trip_index: 3 }),
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
+      // One row per fuel-in date; the book ends on a fuel date so no tail pends.
       expect(est.length).toBe(2);
-      const pending = est[1];
-      expect(pending.tripIds).toEqual([]);
-      expect(pending.isPending).toBe(true);
-      expect(pending.suggested).toBeNull();
-      expect(pending.suggestedStrict).toBeNull();
-      expect(pending.isLowConfidence).toBe(false);
+      expect(est.some(s => s.isPending)).toBe(false);
+      expect(est[0].tripIds).toEqual(['t1']);
+      expect(est[1].tripIds).toEqual(['t2', 't3']);
+      expect(est[0].isLowConfidence).toBe(false);
+      expect(est[1].isLowConfidence).toBe(false);
     });
 
-    it('flags a single-trip START cycle as low-confidence but keeps its suggestion', () => {
+    it('trailing run dates form a pending tail that chains the previous economy', () => {
       const trips: Trip[] = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
-        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 150, trip_distance: 50, fuel_pumped_amount: 30, pump_timing: 'START', trip_index: 2 }),
-        trip({ id: 't3', date: '2024-03-06', start_km: 150, end_km: 210, trip_distance: 60, fuel_pumped_amount: 25, pump_timing: 'START', trip_index: 3 }),
-        trip({ id: 't4', date: '2024-03-10', start_km: 210, end_km: 290, trip_distance: 80, trip_index: 4 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 300, trip_distance: 200, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-10', start_km: 300, end_km: 400, trip_distance: 100, fuel_pumped_amount: 25, trip_index: 3 }),
+        trip({ id: 't4', date: '2024-03-15', start_km: 400, end_km: 480, trip_distance: 80, trip_index: 4 }),
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
       expect(est.length).toBe(3);
-      // t1 END immediately followed by a START pump: its next cycle is empty -> pending.
-      expect(est[0].isPending).toBe(true);
-      // Single-trip START cycle [t2] carries a suggestion with a low-confidence flag.
-      expect(est[1].tripIds).toEqual(['t2']);
-      expect(est[1].isPending).toBe(false);
-      expect(est[1].isLowConfidence).toBe(true);
-      expect(est[1].suggested).not.toBeNull();
-      expect(est[1].suggestedStrict).not.toBeNull();
-      // Multi-trip START cycle [t3, t4] is not flagged.
-      expect(est[2].tripIds).toEqual(['t3', 't4']);
-      expect(est[2].isLowConfidence).toBe(false);
+      const tail = est[2];
+      expect(tail.isPending).toBe(true);
+      expect(tail.tripIds).toEqual(['t4']);
+      expect(tail.suggested).toBeNull();
+      expect(tail.suggestedStrict).toBeNull();
+      // Pending carries no suggestion, so it chains the previous suggestion.
+      expect(tail.prevEconomy).toBe(est[1].suggested);
     });
 
-    it('does not flag a single-trip cycle sourced by an END pump', () => {
-      const trips: Trip[] = [
+    it('pump_timing START vs END yields identical segments and economies', () => {
+      const base = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
-        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 30, trip_index: 2 }),
-        trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, trip_index: 3 }),
-      ];
-      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-      expect(est.length).toBe(2);
-      // Segment 0 covers exactly the next pumped trip [t2].
-      expect(est[0].tripIds).toEqual(['t2']);
-      expect(est[0].isPending).toBe(false);
-      expect(est[0].isLowConfidence).toBe(false);
-    });
-
-    it('exposes the full trip-delimited cycle as tripIds so apply writes every trip of the cycle', () => {
-      const trips: Trip[] = [
-        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, pump_timing: 'START', trip_index: 1 }),
-        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, trip_index: 2 }),
-        trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, fuel_pumped_amount: 30, trip_index: 3 }),
-      ];
-      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-      expect(est.length).toBe(2);
-      // START pump opens the cycle at itself and the END pump closes it: [t1, t2, t3].
-      expect(est[0].tripIds).toEqual(['t1', 't2', 't3']);
-      expect(est[0].isPending).toBe(false);
-      expect(est[1].isPending).toBe(true);
-    });
-
-    it('keeps the previous-economy chain intact across a pending segment', () => {
-      const trips: Trip[] = [
-        trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 40, trip_index: 1 }),
-        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 150, trip_distance: 50, fuel_pumped_amount: 30, pump_timing: 'START', trip_index: 2 }),
-        trip({ id: 't3', date: '2024-03-06', start_km: 150, end_km: 210, trip_distance: 60, fuel_pumped_amount: 25, pump_timing: 'START', trip_index: 3 }),
+        trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 150, trip_distance: 50, trip_index: 2 }),
+        trip({ id: 't3', date: '2024-03-06', start_km: 150, end_km: 210, trip_distance: 60, fuel_pumped_amount: 25, trip_index: 3 }),
         trip({ id: 't4', date: '2024-03-10', start_km: 210, end_km: 290, trip_distance: 80, trip_index: 4 }),
       ];
-      const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-      expect(est[0].isPending).toBe(true);
-      // Pending carries no suggestion, so the next segment still chains off the same prev.
-      expect(est[1].prevEconomy).toBe(est[0].prevEconomy);
+      const asStart = base.map(t => ({ ...t, pump_timing: 'START' as const }));
+      const asEnd = base.map(t => ({ ...t, pump_timing: 'END' as const }));
+      const eStart = estimateFuelEconomies({ trips: asStart, pages: [page], vehicle, tankCapacityOverride: 75 });
+      const eEnd = estimateFuelEconomies({ trips: asEnd, pages: [page], vehicle, tankCapacityOverride: 75 });
+      expect(eStart.length).toBe(eEnd.length);
+      expect(eStart.map(s => [s.fromDate, s.toDate, s.tripIds, s.suggested])).toEqual(
+        eEnd.map(s => [s.fromDate, s.toDate, s.tripIds, s.suggested]),
+      );
+    });
+  });
+
+  describe('Fuel-Day Ownership — greedy minimal gap (ADR-0036)', () => {
+    // Jan 1-5 run, fuel + run on the 6th, run 7-10, fuel on the 11th.
+    // Previous-join: x = 600/50 = 12 vs 400/50 = 8 (gap 4).
+    // Next-join: p = 500/50 = 10 vs q = 500/50 = 10 (gap 0, perfect).
+    function janTrips(): Trip[] {
+      const ts: Trip[] = [];
+      let km = 0;
+      const day = (date: string, dist: number, fuel = 0) => {
+        ts.push(trip({ id: `j${date}`, date, start_km: km, end_km: km + dist, trip_distance: dist, fuel_pumped_amount: fuel }));
+        km += dist;
+      };
+      ['01', '02', '03', '04', '05'].forEach(d => day(`2024-01-${d}`, 100));
+      day('2024-01-06', 100, 50);
+      ['07', '08', '09', '10'].forEach(d => day(`2024-01-${d}`, 100));
+      day('2024-01-11', 0, 50);
+      return ts;
+    }
+
+    it('picks the join with the smaller adjacent-economy gap (perfect match wins)', () => {
+      const est = estimateFuelEconomies({ trips: janTrips(), pages: [page10], vehicle, tankCapacityOverride: 75 });
+      expect(est.length).toBe(2);
+      expect(est[0].fuelDate).toBe('2024-01-06');
+      expect(est[0].ownership).toBe('next');
+      expect(est[0].gapChosen).toBe(0);
+      expect(est[0].gapOther).toBe(4);
+      // The 6th's distance moved next: seg0 ends on the 5th...
+      expect(est[0].fromDate).toBe('2024-01-01');
+      expect(est[0].toDate).toBe('2024-01-05');
+      // ...and seg1 opens on the 6th through the closing 11th fuel.
+      expect(est[1].fromDate).toBe('2024-01-06');
+      expect(est[1].toDate).toBe('2024-01-11');
+      expect(est[1].ownership).toBe('previous');
+    });
+
+    it('a pinned ownership is honored without comparison', () => {
+      const est = estimateFuelEconomies({
+        trips: janTrips(), pages: [page10], vehicle, tankCapacityOverride: 75,
+        ownership: new Map([['2024-01-06', 'previous']]),
+      });
+      expect(est[0].ownership).toBe('previous');
+      expect(est[0].toDate).toBe('2024-01-06');
+      expect(est[0].gapChosen).toBeNull();
+      expect(est[1].fromDate).toBe('2024-01-07');
+    });
+
+    it('ties join previous', () => {
+      const res = resolveFuelDayOwnership({
+        dates: ['d1', 'd2', 'd3'],
+        dateDistance: new Map([['d1', 100], ['d2', 100], ['d3', 100]]),
+        dateFuel: new Map([['d2', 50], ['d3', 50]]),
+        fuelDates: ['d2', 'd3'],
+      });
+      // Prev: {d1,d2} 200/50=4 vs {d3} 100/50=2 (gap 2).
+      // Next: {d1} 100/50=2 vs {d2,d3} 200/50=4 (gap 2). Tie -> previous.
+      expect(res.get('d2')).toEqual({ ownership: 'previous', gapChosen: 2, gapOther: 2 });
+      expect(res.get('d3')).toEqual({ ownership: 'previous', gapChosen: null, gapOther: null });
+    });
+
+    it('zero-distance fuel days auto-join previous even when pinned next', () => {
+      const res = resolveFuelDayOwnership({
+        dates: ['d1', 'd2', 'd3'],
+        dateDistance: new Map([['d1', 100], ['d2', 0], ['d3', 100]]),
+        dateFuel: new Map([['d2', 50], ['d3', 50]]),
+        fuelDates: ['d2', 'd3'],
+        pinned: new Map([['d2', 'next']]),
+      });
+      expect(res.get('d2')?.ownership).toBe('previous');
+    });
+
+    it('locked fuel days keep their stored ownership without comparison', () => {
+      const res = resolveFuelDayOwnership({
+        dates: ['d1', 'd2', 'd3'],
+        dateDistance: new Map([['d1', 100], ['d2', 100], ['d3', 100]]),
+        dateFuel: new Map([['d2', 50], ['d3', 50]]),
+        fuelDates: ['d2', 'd3'],
+        pinned: new Map([['d2', 'next']]),
+        lockedDates: new Set(['d2']),
+      });
+      expect(res.get('d2')).toEqual({ ownership: 'next', gapChosen: null, gapOther: null });
+    });
+
+    it('a next join that would empty its own segment falls back to previous', () => {
+      const res = resolveFuelDayOwnership({
+        dates: ['d1', 'd2'],
+        dateDistance: new Map([['d1', 100], ['d2', 100]]),
+        dateFuel: new Map([['d1', 50], ['d2', 50]]),
+        fuelDates: ['d1', 'd2'],
+        pinned: new Map([['d1', 'next']]),
+      });
+      // d1 joining next would leave its own segment dateless — forced previous.
+      expect(res.get('d1')?.ownership).toBe('previous');
     });
   });
 
@@ -380,13 +486,13 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 10, is_full_tank: true, trip_index: 1 }),
         trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 10, is_full_tank: true, trip_index: 2 }),
         trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, fuel_pumped_amount: 7, is_full_tank: true, trip_index: 3 }),
-        // Trailing trip so the final cycle is real (an END pump on the final
-        // trip now pends per Issue 9 instead of echoing the previous value).
+        // Trailing run date forms the pending open tail.
         trip({ id: 't4', date: '2024-03-15', start_km: 300, end_km: 400, trip_distance: 100, trip_index: 4 }),
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-      expect(est.length).toBe(3);
-      expect(est[2].isPending).toBe(false);
+      // Three fuel-closed rows plus the pending tail.
+      expect(est.length).toBe(4);
+      expect(est[3].isPending).toBe(true);
       expect(est[2].suggested).toBeLessThan(14.3);
       expect(est[2].suggested).toBeGreaterThan(10.0);
     });
@@ -395,13 +501,12 @@ describe('estimateFuelEconomies — full tank anchoring & dual suggestions', () 
       const trips: Trip[] = [
         trip({ id: 't1', date: '2024-03-01', start_km: 0, end_km: 100, trip_distance: 100, fuel_pumped_amount: 12, is_full_tank: true, trip_index: 1 }),
         trip({ id: 't2', date: '2024-03-05', start_km: 100, end_km: 200, trip_distance: 100, fuel_pumped_amount: 7, is_full_tank: true, trip_index: 2 }),
-        // Trailing trip so the final cycle is real (an END pump on the final
-        // trip now pends per Issue 9 instead of echoing the previous value).
+        // Trailing run date forms the pending open tail.
         trip({ id: 't3', date: '2024-03-10', start_km: 200, end_km: 300, trip_distance: 100, trip_index: 3 }),
       ];
       const est = estimateFuelEconomies({ trips, pages: [page], vehicle, tankCapacityOverride: 75 });
-      expect(est.length).toBe(2);
-      expect(est[1].isPending).toBe(false);
+      expect(est.length).toBe(3);
+      expect(est[2].isPending).toBe(true);
       const delta = Math.abs((est[1].suggested ?? 0) - (est[0].suggested ?? 0));
       expect(delta).toBeLessThanOrEqual(1.51);
     });
